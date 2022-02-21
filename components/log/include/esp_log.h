@@ -274,8 +274,9 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define LOG_RESET_COLOR
 #endif //CONFIG_LOG_COLORS
 
-#define LOG_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%u) %s: " format LOG_RESET_COLOR "\n"
-#define LOG_SYSTEM_TIME_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%s) %s: " format LOG_RESET_COLOR "\n"
+#define LOG_FORMAT_NOCOLOR(letter, format)     #letter " (%u) %s: " format "\n"
+#define LOG_FORMAT(letter, format)             LOG_COLOR_##letter #letter " (%u) %s: " format LOG_RESET_COLOR "\n"
+#define LOG_SYSTEM_TIME_FORMAT(letter, format) LOG_COLOR_##letter #letter " (%s) %s: " format LOG_RESET_COLOR "\n"
 
 /** @endcond */
 
@@ -290,10 +291,25 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 /// macro to output logs in startup code at ``ESP_LOG_VERBOSE`` level.  @see ``ESP_EARLY_LOGE``,``ESP_LOGE``, ``printf``
 #define ESP_EARLY_LOGV( tag, format, ... ) ESP_LOG_EARLY_IMPL(tag, format, ESP_LOG_VERBOSE, V, ##__VA_ARGS__)
 
-#define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...) do {                             \
-        if (LOG_LOCAL_LEVEL >= log_level) {                                                              \
-            esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
-        }} while(0)
+void log_CrashLog(bool panic, const char* format, ...);
+void panic_print_str(const char* str);  // KKK
+
+#ifdef BOOTLOADER_BUILD
+  #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                            \
+    do {                                                                                             \
+      if (LOG_LOCAL_LEVEL >= log_level) {                                                            \
+        esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+      }                                                                                              \
+    } while (0)
+#else
+  #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                                        \
+    do {                                                                                                         \
+      if (LOG_LOCAL_LEVEL >= log_level) {                                                                        \
+        esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__);             \
+        log_CrashLog(true, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+      }                                                                                                          \
+    } while (0)
+#endif
 
 #ifndef BOOTLOADER_BUILD
 #define ESP_LOGE( tag, format, ... ) ESP_LOG_LEVEL_LOCAL(ESP_LOG_ERROR,   tag, format, ##__VA_ARGS__)
@@ -381,10 +397,23 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 /** @cond */
 #define _ESP_LOG_DRAM_LOG_FORMAT(letter, format)  DRAM_STR(#letter " %s: " format "\n")
 
-#define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                       \
-        if (LOG_LOCAL_LEVEL >= log_level) {                                                       \
-            esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
-        }} while(0)
+#ifdef BOOTLOADER_BUILD
+  #define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...)                      \
+    do {                                                                                      \
+      if (LOG_LOCAL_LEVEL >= log_level) {                                                     \
+        esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
+      }                                                                                       \
+    } while (0)
+#else
+  #define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...)                          \
+    do {                                                                                          \
+      if (LOG_LOCAL_LEVEL >= log_level) {                                                         \
+        esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);     \
+        log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
+      }                                                                                           \
+    } while (0)
+#endif
+
 /** @endcond */
 
 #ifdef __cplusplus
