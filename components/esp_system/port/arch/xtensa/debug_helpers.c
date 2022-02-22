@@ -54,6 +54,8 @@ static void IRAM_ATTR print_str(const char* str, bool panic)
     }
 }
 
+extern void log_CrashLog(bool panic, const char *format, ...);
+
 esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrace_frame_t* frame, bool panic)
 {
     //Check arguments
@@ -67,6 +69,11 @@ esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrac
 
     print_str("\r\n\r\nBacktrace:", panic);
     print_entry(esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp, panic);
+    log_CrashLog(true,
+                 "Backtrace [BT-0|depth=0 => panic location!]: PC(call)=0x%08X, SP(stack)=0x%08X (please refer to original ELF file "
+                 "to locate this "
+                 "exact call instruction address)\n",
+                 esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
 
     //Check if first frame is valid
     bool corrupted = !(esp_stack_ptr_is_sane(stk_frame.sp) &&
@@ -75,11 +82,18 @@ esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrac
                         (stk_frame.exc_frame && ((XtExcFrame *)stk_frame.exc_frame)->exccause == EXCCAUSE_INSTR_PROHIBITED)));
 
     uint32_t i = (depth <= 0) ? INT32_MAX : depth;
+    int t = 1;
     while (i-- > 0 && stk_frame.next_pc != 0 && !corrupted) {
         if (!esp_backtrace_get_next_frame(&stk_frame)) {    //Get previous stack frame
             corrupted = true;
         }
         print_entry(esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp, panic);
+        print_str(" ", panic);
+        log_CrashLog(true,
+                     "Backtrace [BT-%d|depth=+%d]: PC(call)=0x%08X, SP(stack)=0x%08X (please refer to original ELF file to locate this "
+                     "exact call instruction address)\n",
+                     t, t, esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
+        ++t;
     }
 
     //Print backtrace termination marker
