@@ -290,6 +290,7 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define LOG_RESET_COLOR
 #endif //CONFIG_LOG_COLORS
 
+#define LOG_FORMAT_NOCOLOR(letter, format)     #letter " (%u) %s: " format "\n"
 #define LOG_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%u) %s: " format LOG_RESET_COLOR "\n"
 #define LOG_SYSTEM_TIME_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%s) %s: " format LOG_RESET_COLOR "\n"
 
@@ -335,10 +336,25 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_default_level >= (log_level))
 #endif
 
-#define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...) do {                             \
-        if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                         \
+void log_CrashLog(bool panic, const char* format, ...);
+void panic_print_str(const char* str);  // KKK
+
+#ifdef BOOTLOADER_BUILD
+  #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                            \
+    do {                                                                                             \
+      if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                            \
+        esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+      }                                                                                              \
+    } while (0)
+#else
+  #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                                        \
+    do {                                                                                                         \
+        if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                              \
             esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
-        }} while(0)
+        log_CrashLog(true, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+      }                                                                                                          \
+    } while (0)
+#endif
 
 #ifndef BOOTLOADER_BUILD
 #if defined(__cplusplus) && (__cplusplus >  201703L)
@@ -489,11 +505,17 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                                  \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                             \
             esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag __VA_OPT__(,) __VA_ARGS__); \
+            #ifdef BOOTLOADER_BUILD                                                                          \
+            log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);        \
+            #endif                                                                                           \
         }} while(0)
 #else // !(defined(__cplusplus) && (__cplusplus >  201703L))
-#define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                       \
-        if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                  \
-            esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
+#define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                                  \
+        if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                             \
+            esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);            \
+            #ifdef BOOTLOADER_BUILD                                                                          \
+            log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);        \
+            #endif                                                                                           \
         }} while(0)
 #endif // !(defined(__cplusplus) && (__cplusplus >  201703L))
 /** @endcond */
