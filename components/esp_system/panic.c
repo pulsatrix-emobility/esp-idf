@@ -68,6 +68,8 @@ static char *s_panic_abort_details = NULL;
 
 static wdt_hal_context_t rtc_wdt_ctx = {.inst = WDT_RWDT, .rwdt_dev = &RTCCNTL};
 
+void log_CrashLog(bool panic, const char *format, ...);
+bool store_CrashLog(int core);
 #if !CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT
 
 #if CONFIG_ESP_CONSOLE_UART
@@ -209,6 +211,7 @@ static inline void disable_all_wdts(void)
 static void print_abort_details(const void *f)
 {
     panic_print_str(s_panic_abort_details);
+  log_CrashLog(true, "Abort() function called within the program, with these details: %S\n", s_panic_abort_details);
 }
 
 // Control arrives from chip-specific panic handler, environment prepared for
@@ -216,6 +219,8 @@ static void print_abort_details(const void *f)
 // already been done, and panic_info_t has been filled.
 void esp_panic_handler(panic_info_t *info)
 {
+    panic_print_str("Entering 'esp_panic_handler'\n");
+    
     // The port-level panic handler has already called this, but call it again
     // to reset the TG0WDT period
     esp_panic_handler_reconfigure_wdts();
@@ -257,10 +262,12 @@ void esp_panic_handler(panic_info_t *info)
         panic_print_str(" panic'ed (");
         panic_print_str(info->reason);
         panic_print_str("). ");
+        log_CrashLog(true, "Guru Meditation Error: Core %d panic'ed (%s).\n", info->core, info->reason);
     }
 
     if (info->description) {
         panic_print_str(info->description);
+        log_CrashLog(true, "%s\n", info->description);
     }
 
     panic_print_str("\r\n");
@@ -374,7 +381,18 @@ void esp_panic_handler(panic_info_t *info)
         }
     }
 
-    panic_print_str("Rebooting...\r\n");
+    panic_print_str("\r\nPanic handler almost finished...\r\n\r\n");
+
+    // Store CrashLog messages into CrashLog FLASH partition for later inspection through MQTT
+    panic_print_str("CRASHLOG: storing all last/above messages into CrashLog FLASH partition before rebooting...\n");
+    if (store_CrashLog(info->core)) {
+      panic_print_str("CRASHLOG: stored all last/above messages into CrashLog FLASH partition successfully.\n");
+    } else {
+      panic_print_str("CRASHLOG: storing all last/above messages into CrashLog FLASH partition failed!!!\n");
+    }
+
+    // Finally, reboot now...
+    panic_print_str("\r\nRebooting...\r\n\r\n\r\n\r\n");
     panic_restart();
 #else
     disable_all_wdts();
