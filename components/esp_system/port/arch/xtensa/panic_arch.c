@@ -11,23 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "freertos/xtensa_context.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
 #include "esp_debug_helpers.h"
 
 #include "esp_private/panic_internal.h"
 #include "esp_private/panic_reason.h"
-#include "soc/soc.h"
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/xtensa_context.h"
 #include "sdkconfig.h"
+#include "soc/soc.h"
 
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/cache_err_int.h"
 #else
+  #include "soc/cache_memory.h"
 #include "soc/extmem_reg.h"
-#include "soc/cache_memory.h"
 #include "soc/rtc_cntl_reg.h"
 #if CONFIG_IDF_TARGET_ESP32S2
 #include "esp32s2/cache_err_int.h"
@@ -42,16 +40,16 @@
 #endif
 #endif // CONFIG_IDF_TARGET_ESP32
 
-void panic_print_registers(const void *f, int core)
-{
+void log_CrashLog(bool panic, const char *format, ...);
+
+void panic_print_registers(const void *f, int core) {
     XtExcFrame *frame = (XtExcFrame *) f;
     int *regs = (int *)frame;
 
-    const char *sdesc[] = {
-        "PC      ", "PS      ", "A0      ", "A1      ", "A2      ", "A3      ", "A4      ", "A5      ",
-        "A6      ", "A7      ", "A8      ", "A9      ", "A10     ", "A11     ", "A12     ", "A13     ",
-        "A14     ", "A15     ", "SAR     ", "EXCCAUSE", "EXCVADDR", "LBEG    ", "LEND    ", "LCOUNT  "
-    };
+  const char *sdesc[] = {"PC        ", "PS(State) ", "A0(Return)", "A1(Stack) ", "A2        ", "A3        ",
+                         "A4        ", "A5        ", "A6        ", "A7        ", "A8        ", "A9        ",
+                         "A10       ", "A11       ", "A12       ", "A13       ", "A14       ", "A15       ",
+                         "SAR       ", "EXCCAUSE  ", "EXCVADDR  ", "LBEG      ", "LEND      ", "LCOUNT    "};
 
     /* only dump registers for 'real' crashes, if crashing via abort()
        the register window is no longer useful.
@@ -72,11 +70,19 @@ void panic_print_registers(const void *f, int core)
         }
     }
 
+  log_CrashLog(true,
+               "Register Dump from Core %d (1/2): PC=0x%08X, PS=0x%08X, SAR=0x%02X, EXCCAUSE=0x%08X, EXCVADDR=0x%08X, LBEG=0x%08X, "
+               "LEND=0x%08X, LCOUNT=0x%08X\n",
+               core, regs[1], regs[2], regs[19], regs[20], regs[21], regs[22], regs[23], regs[24]);
+  log_CrashLog(true,
+               "Register Dump from Core %d (2/2): A0=0x%08X, A1(SP)=0x%08X, A2=0x%08X, A3=0x%08X, A4=0x%08X, A5=0x%08X, A6=0x%08X, "
+               "A7=0x%08X, A8=0x%08X, A9=0x%08X, A10=0x%08X, A11=0x%08X, A12=0x%08X, A13=0x%08X, A14=0x%08X, A15=0x%08X\n",
+               core, regs[3], regs[4], regs[5], regs[6], regs[7], regs[8], regs[9], regs[10], regs[11], regs[12], regs[13],
+               regs[14], regs[15], regs[16], regs[17], regs[18]);
     // If the core which triggers the interrupt watchpoint was in ISR context, dump the epc registers.
     if (xPortInterruptedFromISRContext()
 #if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
-            && ((core == 0 && frame->exccause == PANIC_RSN_INTWDT_CPU0) ||
-                (core == 1 && frame->exccause == PANIC_RSN_INTWDT_CPU1))
+      && ((core == 0 && frame->exccause == PANIC_RSN_INTWDT_CPU0) || (core == 1 && frame->exccause == PANIC_RSN_INTWDT_CPU1))
 #endif //!CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
         ) {
 
@@ -102,11 +108,12 @@ void panic_print_registers(const void *f, int core)
         __asm__("rsr.epc4 %0" : "=a"(__value));
         panic_print_str("  EPC4    : 0x");
         panic_print_hex(__value);
+
+    log_CrashLog(true, "Interrupt Context on Core %d: This Core was running in ISR context when the panic occurred.\n", core);
     }
 }
 
-static void print_illegal_instruction_details(const void *f)
-{
+static void print_illegal_instruction_details(const void *f) {
     XtExcFrame *frame  = (XtExcFrame *) f;
     /* Print out memory around the instruction word */
     uint32_t epc = frame->pc;
@@ -127,11 +134,11 @@ static void print_illegal_instruction_details(const void *f)
     panic_print_hex(*(pepc + 1));
     panic_print_str(" ");
     panic_print_hex(*(pepc + 2));
+
+  log_CrashLog(true, "Illegal OpCode with Memory Dump at 0x%X: %X %X %X\n", epc, pepc, *(pepc + 1), *(pepc + 2));
 }
 
-
-static void print_debug_exception_details(const void *f)
-{
+static void print_debug_exception_details(const void *f) {
     int debug_rsn;
     asm("rsr.debugcause %0":"=r"(debug_rsn));
     panic_print_str("Debug exception reason: ");
@@ -178,8 +185,7 @@ static void print_debug_exception_details(const void *f)
 }
 
 #if CONFIG_IDF_TARGET_ESP32S2
-static inline void print_cache_err_details(const void *f)
-{
+static inline void print_cache_err_details(const void *f) {
     uint32_t vaddr = 0, size = 0;
     uint32_t status[2];
     status[0] = REG_READ(EXTMEM_CACHE_DBG_STATUS0_REG);
@@ -266,8 +272,7 @@ static inline void print_cache_err_details(const void *f)
 }
 
 #if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
-static inline void print_memprot_err_details(const void *f)
-{
+static inline void print_memprot_err_details(const void *f) {
     uint32_t *fault_addr;
     uint32_t op_type, op_subtype;
     mem_type_prot_t mem_type = esp_memprot_get_active_intr_memtype();
@@ -286,8 +291,7 @@ static inline void print_memprot_err_details(const void *f)
 #endif
 
 #elif CONFIG_IDF_TARGET_ESP32S3
-static inline void print_cache_err_details(const void* f)
-{
+static inline void print_cache_err_details(const void *f) {
     uint32_t vaddr = 0, size = 0;
     uint32_t status;
     status = REG_READ(EXTMEM_CACHE_ILG_INT_ST_REG);
@@ -354,22 +358,48 @@ static inline void print_cache_err_details(const void* f)
 }
 #endif
 
-
-void panic_arch_fill_info(void *f, panic_info_t *info)
-{
+void panic_arch_fill_info(void *f, panic_info_t *info) {
     XtExcFrame *frame = (XtExcFrame*) f;
-    static const char *reason[] = {
-        "IllegalInstruction", "Syscall", "InstructionFetchError", "LoadStoreError",
-        "Level1Interrupt", "Alloca", "IntegerDivideByZero", "PCValue",
-        "Privileged", "LoadStoreAlignment", "res", "res",
-        "InstrPDAddrError", "LoadStorePIFDataError", "InstrPIFAddrError", "LoadStorePIFAddrError",
-        "InstTLBMiss", "InstTLBMultiHit", "InstFetchPrivilege", "res",
-        "InstrFetchProhibited", "res", "res", "res",
-        "LoadStoreTLBMiss", "LoadStoreTLBMultihit", "LoadStorePrivilege", "res",
-        "LoadProhibited", "StoreProhibited", "res", "res",
-        "Cp0Dis", "Cp1Dis", "Cp2Dis", "Cp3Dis",
-        "Cp4Dis", "Cp5Dis", "Cp6Dis", "Cp7Dis"
-    };
+  static const char *reason[] = {"IllegalInstruction",
+                                 "Syscall",
+                                 "InstructionFetchError",
+                                 "LoadStoreError",
+                                 "Level1Interrupt",
+                                 "Alloca",
+                                 "IntegerDivideByZero",
+                                 "PCValue",
+                                 "Privileged",
+                                 "LoadStoreAlignment",
+                                 "res",
+                                 "res",
+                                 "InstrPDAddrError",
+                                 "LoadStorePIFDataError",
+                                 "InstrPIFAddrError",
+                                 "LoadStorePIFAddrError",
+                                 "InstTLBMiss",
+                                 "InstTLBMultiHit",
+                                 "InstFetchPrivilege",
+                                 "res",
+                                 "InstrFetchProhibited",
+                                 "res",
+                                 "res",
+                                 "res",
+                                 "LoadStoreTLBMiss",
+                                 "LoadStoreTLBMultihit",
+                                 "LoadStorePrivilege",
+                                 "res",
+                                 "LoadProhibited",
+                                 "StoreProhibited",
+                                 "res",
+                                 "res",
+                                 "Cp0Dis",
+                                 "Cp1Dis",
+                                 "Cp2Dis",
+                                 "Cp3Dis",
+                                 "Cp4Dis",
+                                 "Cp5Dis",
+                                 "Cp6Dis",
+                                 "Cp7Dis"};
 
     if (frame->exccause < (sizeof(reason) / sizeof(char *))) {
         info->reason = (reason[frame->exccause]);
@@ -377,7 +407,10 @@ void panic_arch_fill_info(void *f, panic_info_t *info)
         info->reason = "Unknown";
     }
 
-    info->description = "Exception was unhandled.";
+  if (info->core == 0)
+    info->description = "Core 0: Exception was unhandled.";
+  else
+    info->description = "Core 1: Exception was unhandled.";
 
     if (frame->exccause == EXCCAUSE_ILLEGAL) {
         info->details = print_illegal_instruction_details;
@@ -386,8 +419,7 @@ void panic_arch_fill_info(void *f, panic_info_t *info)
     info->addr = ((void *) ((XtExcFrame *) frame)->pc);
 }
 
-void panic_soc_fill_info(void *f, panic_info_t *info)
-{
+void panic_soc_fill_info(void *f, panic_info_t *info) {
     // [refactor-todo] this should be in the common port panic_handler.c, once
     // these special exceptions are supported in there.
     XtExcFrame *frame = (XtExcFrame*) f;
@@ -399,7 +431,8 @@ void panic_soc_fill_info(void *f, panic_info_t *info)
         info->exception = PANIC_EXCEPTION_IWDT;
     } else if (frame->exccause == PANIC_RSN_CACHEERR) {
         info->core =  esp_cache_err_get_cpuid();
-    } else {}
+  } else {
+  }
 
     //Please keep in sync with PANIC_RSN_* defines
     static const char *pseudo_reason[] = {
@@ -444,31 +477,26 @@ void panic_soc_fill_info(void *f, panic_info_t *info)
 #endif
 }
 
-static void print_backtrace_entry(uint32_t pc, uint32_t sp)
-{
+static void print_backtrace_entry(uint32_t pc, uint32_t sp) {
     panic_print_str("0x");
     panic_print_hex(pc);
     panic_print_str(":0x");
     panic_print_hex(sp);
 }
 
-uint32_t panic_get_address(const void* f)
-{
+uint32_t panic_get_address(const void *f) {
     return ((XtExcFrame*)f)->pc;
 }
 
-uint32_t panic_get_cause(const void* f)
-{
+uint32_t panic_get_cause(const void *f) {
     return ((XtExcFrame*)f)->exccause;
 }
 
-void panic_set_address(void *f, uint32_t addr)
-{
+void panic_set_address(void *f, uint32_t addr) {
     ((XtExcFrame*)f)->pc = addr;
 }
 
-void panic_print_backtrace(const void *f, int core)
-{
+void panic_print_backtrace(const void *f, int core) {
     // [refactor-todo] once debug helpers have support for both xtensa and riscv, move to
     // common panic_handler.c
     XtExcFrame *frame = (XtExcFrame *) f;
@@ -477,20 +505,30 @@ void panic_print_backtrace(const void *f, int core)
     esp_backtrace_frame_t stk_frame = {.pc = frame->pc, .sp = frame->a1, .next_pc = frame->a0};
     panic_print_str("\r\nBacktrace:");
     print_backtrace_entry(esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
+  log_CrashLog(true,
+               "Backtrace [BT-0|depth=0 => panic location!]: PC(call)=0x%08X, SP(stack)=0x%08X (please refer to original ELF file "
+               "to locate this "
+               "exact call instruction address)\n",
+               esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
 
     //Check if first frame is valid
-    bool corrupted = !(esp_stack_ptr_is_sane(stk_frame.sp) &&
-                       (esp_ptr_executable((void *)esp_cpu_process_stack_pc(stk_frame.pc)) ||
+  bool corrupted = !(esp_stack_ptr_is_sane(stk_frame.sp) && (esp_ptr_executable((void *) esp_cpu_process_stack_pc(stk_frame.pc)) ||
                         /* Ignore the first corrupted PC in case of InstrFetchProhibited */
                         frame->exccause == EXCCAUSE_INSTR_PROHIBITED));
 
     uint32_t i = ((depth <= 0) ? INT32_MAX : depth) - 1;    //Account for stack frame that's already printed
+  int t = 1;
     while (i-- > 0 && stk_frame.next_pc != 0 && !corrupted) {
         if (!esp_backtrace_get_next_frame(&stk_frame)) {    //Get next stack frame
             corrupted = true;
         }
         panic_print_str(" ");
         print_backtrace_entry(esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
+    log_CrashLog(true,
+                 "Backtrace [BT-%d|depth=+%d]: PC(call)=0x%08X, SP(stack)=0x%08X (please refer to original ELF file to locate this "
+                 "exact call instruction address)\n",
+                 t, t, esp_cpu_process_stack_pc(stk_frame.pc), stk_frame.sp);
+    ++t;
     }
 
     //Print backtrace termination marker
