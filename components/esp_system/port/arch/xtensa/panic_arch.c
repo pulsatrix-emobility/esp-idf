@@ -406,10 +406,11 @@ void panic_arch_fill_info(void *f, panic_info_t *info) {
     info->reason = "Unknown";
   }
 
-  if (info->core == 0)
+  if (info->core == 0) {
     info->description = "Core 0: Exception was unhandled.";
-  else
+  } else {
     info->description = "Core 1: Exception was unhandled.";
+  }
 
   if (frame->exccause == EXCCAUSE_ILLEGAL) {
     info->details = print_illegal_instruction_details;
