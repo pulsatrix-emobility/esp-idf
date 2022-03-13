@@ -336,7 +336,8 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_default_level >= (log_level))
 #endif
 
-void log_CrashLog(bool panic, const char* format, ...);
+void log_CrashLog(bool panic, const char *format, ...) __attribute__((weak));
+
 void panic_print_str(const char* str);  // KKK
 
 #ifdef BOOTLOADER_BUILD

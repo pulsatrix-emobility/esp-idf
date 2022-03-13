@@ -68,8 +68,11 @@ static char *s_panic_abort_details = NULL;
 
 static wdt_hal_context_t rtc_wdt_ctx = {.inst = WDT_RWDT, .rwdt_dev = &RTCCNTL};
 
-void log_CrashLog(bool panic, const char *format, ...);
-bool store_CrashLog(int core);
+void log_CrashLog(bool panic, const char *format, ...) __attribute__((weak));
+void log_CrashLog(bool panic, const char *format, ...) {}
+void store_CrashLog(void) __attribute__((weak));
+void store_CrashLog(void) {}
+
 #if !CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT
 
 #if CONFIG_ESP_CONSOLE_UART
@@ -384,12 +387,7 @@ void esp_panic_handler(panic_info_t *info)
     panic_print_str("\r\nPanic handler almost finished...\r\n\r\n");
 
     // Store CrashLog messages into CrashLog FLASH partition for later inspection through MQTT
-    panic_print_str("CRASHLOG: storing all last/above messages into CrashLog FLASH partition before rebooting...\n");
-    if (store_CrashLog(info->core)) {
-      panic_print_str("CRASHLOG: stored all last/above messages into CrashLog FLASH partition successfully.\n");
-    } else {
-      panic_print_str("CRASHLOG: storing all last/above messages into CrashLog FLASH partition failed!!!\n");
-    }
+    store_CrashLog();
 
     // Finally, reboot now...
     panic_print_str("\r\nRebooting...\r\n\r\n\r\n\r\n");

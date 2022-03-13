@@ -62,7 +62,7 @@ static void IRAM_ATTR print_str(const char* str, bool panic)
     }
 }
 
-void log_CrashLog(bool panic, const char *format, ...);
+void log_CrashLog(bool panic, const char *format, ...) __attribute__((weak));
 
 esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrace_frame_t* frame, bool panic)
 {
