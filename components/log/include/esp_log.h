@@ -338,7 +338,7 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 
 void log_CrashLog(bool panic, const char *format, ...) __attribute__((weak));
 
-void panic_print_str(const char* str);  // KKK
+void panic_print_str(const char* str);
 
 #ifdef BOOTLOADER_BUILD
   #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                            \
