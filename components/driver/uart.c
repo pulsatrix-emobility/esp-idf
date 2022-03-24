@@ -25,10 +25,6 @@
 #include "sdkconfig.h"
 #include "esp_rom_gpio.h"
 
-//KKK
-#include "esp_err.h"
-#include "esp_log.h"
-
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/clk.h"
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -614,18 +610,10 @@ esp_err_t uart_isr_free(uart_port_t uart_num)
     return ret;
 }
 
-static bool uart_try_set_iomux_pin(uart_port_t uart_num, int io_num, uint32_t idx)
+static void uart_set_iomux_pin(uart_port_t uart_num, int io_num, uint32_t idx)
 {
     /* Store a pointer to the default pin, to optimize access to its fields. */
     const uart_periph_sig_t *upin = &uart_periph_signal[uart_num].pins[idx];
-
-    /* In theory, if default_gpio is -1, iomux_func should also be -1, but
-     * let's be safe and test both. */
-    //KKK - when default GPIO and desired GPIO are coincidentally the same, this code doesn't work => so, always force executing all of it herein!
-    //if (upin->iomux_func == -1 || upin->default_gpio == -1 || upin->default_gpio != io_num) {
-    //    return false;
-    //}
-    //return false;
 
     /* Assign the correct funct to the GPIO. */
     assert (upin->iomux_func != -1);
@@ -636,8 +624,6 @@ static bool uart_try_set_iomux_pin(uart_port_t uart_num, int io_num, uint32_t id
     if (upin->input) {
         gpio_iomux_in(io_num, upin->signal);
     }
-    //KKK return true;
-    return false;
 }
 
 //internal signal can be output to multiple GPIO pads
@@ -653,26 +639,30 @@ esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int r
     ESP_RETURN_ON_FALSE((cts_io_num < 0 || (GPIO_IS_VALID_GPIO(cts_io_num))), ESP_FAIL, UART_TAG, "cts_io_num error");
 
     /* In the following statements, if the io_num is negative, no need to configure anything. */
-    if (tx_io_num >= 0 && !uart_try_set_iomux_pin(uart_num, tx_io_num, SOC_UART_TX_PIN_IDX)) {
+    if (tx_io_num >= 0) {
+        uart_set_iomux_pin(uart_num, tx_io_num, SOC_UART_TX_PIN_IDX);
         gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[tx_io_num], PIN_FUNC_GPIO);
         gpio_set_level(tx_io_num, 0);
         esp_rom_gpio_connect_out_signal(tx_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_TX_PIN_IDX), 0, 0);
     }
 
-    if (rx_io_num >= 0 && !uart_try_set_iomux_pin(uart_num, rx_io_num, SOC_UART_RX_PIN_IDX)) {
+    if (rx_io_num >= 0) {
+        uart_set_iomux_pin(uart_num, rx_io_num, SOC_UART_RX_PIN_IDX);
         gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[rx_io_num], PIN_FUNC_GPIO);
         gpio_set_pull_mode(rx_io_num, GPIO_PULLUP_ONLY);
         gpio_set_direction(rx_io_num, GPIO_MODE_INPUT);
         esp_rom_gpio_connect_in_signal(rx_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_RX_PIN_IDX), 0);
     }
 
-    if (rts_io_num >= 0 && !uart_try_set_iomux_pin(uart_num, rts_io_num, SOC_UART_RTS_PIN_IDX)) {
+    if (rts_io_num >= 0) {
+        uart_set_iomux_pin(uart_num, rts_io_num, SOC_UART_RTS_PIN_IDX);
         gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[rts_io_num], PIN_FUNC_GPIO);
         gpio_set_direction(rts_io_num, GPIO_MODE_OUTPUT);
         esp_rom_gpio_connect_out_signal(rts_io_num, UART_PERIPH_SIGNAL(uart_num, SOC_UART_RTS_PIN_IDX), 0, 0);
     }
 
-    if (cts_io_num >= 0  && !uart_try_set_iomux_pin(uart_num, cts_io_num, SOC_UART_CTS_PIN_IDX)) {
+    if (cts_io_num >= 0) {
+        uart_set_iomux_pin(uart_num, cts_io_num, SOC_UART_CTS_PIN_IDX);
         gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[cts_io_num], PIN_FUNC_GPIO);
         gpio_set_pull_mode(cts_io_num, GPIO_PULLUP_ONLY);
         gpio_set_direction(cts_io_num, GPIO_MODE_INPUT);
