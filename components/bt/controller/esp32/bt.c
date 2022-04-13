@@ -1575,29 +1575,35 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
 
     //if all the bt available memory was already released, cannot initialize bluetooth controller
     if (btdm_dram_available_region[0].mode == ESP_BT_MODE_IDLE) {
-        return ESP_ERR_INVALID_STATE;
+ESP_LOGE(BTDM_LOG_TAG, "Invalid state: bt dram");
+      return ESP_ERR_INVALID_STATE;
     }
 
     osi_funcs_p = (struct osi_funcs_t *)malloc_internal_wrapper(sizeof(struct osi_funcs_t));
     if (osi_funcs_p == NULL) {
+ESP_LOGE(BTDM_LOG_TAG, "no mem");
         return ESP_ERR_NO_MEM;
     }
 
     memcpy(osi_funcs_p, &osi_funcs_ro, sizeof(struct osi_funcs_t));
     if (btdm_osi_funcs_register(osi_funcs_p) != 0) {
+ESP_LOGE(BTDM_LOG_TAG, "Invalid arg: funcs register");
         return ESP_ERR_INVALID_ARG;
     }
 
     if (btdm_controller_status != ESP_BT_CONTROLLER_STATUS_IDLE) {
+ESP_LOGE(BTDM_LOG_TAG, "Invalid state: %d", btdm_controller_status);
         return ESP_ERR_INVALID_STATE;
     }
 
     if (cfg == NULL) {
+ESP_LOGE(BTDM_LOG_TAG, "Invalid arg: cgf null");
         return ESP_ERR_INVALID_ARG;
     }
 
     if (cfg->controller_task_prio != ESP_TASK_BT_CONTROLLER_PRIO
             || cfg->controller_task_stack_size < ESP_TASK_BT_CONTROLLER_STACK) {
+ESP_LOGE(BTDM_LOG_TAG, "Invalid arg: prio/stack");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1623,6 +1629,7 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
 
     s_wakeup_req_sem = semphr_create_wrapper(1, 0);
     if (s_wakeup_req_sem == NULL) {
+ESP_LOGE(BTDM_LOG_TAG, "No mem");
         err = ESP_ERR_NO_MEM;
         goto error;
     }
