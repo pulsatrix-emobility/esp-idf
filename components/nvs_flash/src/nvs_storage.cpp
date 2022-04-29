@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "nvs_storage.hpp"
+#include "esp_log.h"
 
 #ifndef ESP_PLATFORM
 // We need NO_DEBUG_STORAGE here since the integration tests on the host add some debug code.
@@ -155,8 +156,11 @@ bool Storage::isValid() const
 
 esp_err_t Storage::findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item, uint8_t chunkIdx, VerOffset chunkStart)
 {
+ESP_LOGI("foo", "findItem: %p, mPageManager=%p, begin=%p", this, &mPageManager, &*std::begin(mPageManager));
     for (auto it = std::begin(mPageManager); it != std::end(mPageManager); ++it) {
         size_t itemIndex = 0;
+if((int) &*it < 0x3f000000||(int) &*it >= 0x40000000)
+ESP_LOGI("foo", "  calling findItem: %p", &*it);
         auto err = it->findItem(nsIndex, datatype, key, itemIndex, item, chunkIdx, chunkStart);
         if (err == ESP_OK) {
             page = it;
@@ -531,6 +535,7 @@ esp_err_t Storage::readItem(uint8_t nsIndex, ItemType datatype, const char* key,
     if (mState != StorageState::ACTIVE) {
         return ESP_ERR_NVS_NOT_INITIALIZED;
     }
+ESP_LOGD("foo", "readItem %p", this);
 
     Item item;
     Page* findPage = nullptr;

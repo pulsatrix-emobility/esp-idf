@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "nvs_page.hpp"
+#include "esp_log.h"
 #include <esp_rom_crc.h>
 #include <cstdio>
 #include <cstring>
@@ -810,6 +811,8 @@ esp_err_t Page::readEntry(size_t index, Item& dst) const
 
 esp_err_t Page::findItem(uint8_t nsIndex, ItemType datatype, const char* key, size_t &itemIndex, Item& item, uint8_t chunkIdx, VerOffset chunkStart)
 {
+if((int) this < 0x3f000000||(int) this >= 0x40000000)
+ESP_LOGI("foo", "findItem: this=%p, key=%p", this, key);
     if (mState == PageState::CORRUPT || mState == PageState::INVALID || mState == PageState::UNINITIALIZED) {
         return ESP_ERR_NVS_NOT_FOUND;
     }

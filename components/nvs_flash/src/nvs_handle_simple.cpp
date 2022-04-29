@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include "nvs_handle.hpp"
 #include "nvs_partition_manager.hpp"
+#include "esp_log.h"
 
 namespace nvs {
 
@@ -32,6 +33,7 @@ esp_err_t NVSHandleSimple::set_typed_item(ItemType datatype, const char *key, co
 esp_err_t NVSHandleSimple::get_typed_item(ItemType datatype, const char *key, void* data, size_t dataSize)
 {
     if (!valid) return ESP_ERR_NVS_INVALID_HANDLE;
+ESP_LOGD("foo", "get_typed_item: %p", this);
 
     return mStoragePtr->readItem(mNsIndex, datatype, key, data, dataSize);
 }
