@@ -25,6 +25,8 @@
 #endif
 #endif // !ESP_PLATFORM
 
+extern volatile bool debug_intrusive_list;
+
 namespace nvs
 {
 
@@ -156,17 +158,28 @@ bool Storage::isValid() const
 
 esp_err_t Storage::findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item, uint8_t chunkIdx, VerOffset chunkStart)
 {
-ESP_LOGI("foo", "findItem: %p, mPageManager=%p, begin=%p", this, &mPageManager, &*std::begin(mPageManager));
+if(debug_intrusive_list) {
+auto &foo = *std::begin(mPageManager);
+ESP_LOGI("foo", "Storage::findItem: %s | %p, this=%p, mPageManager=%p, begin=%p, begin.mNext=%p", key, &key, this, &mPageManager, &foo, foo.mNext);
+}
     for (auto it = std::begin(mPageManager); it != std::end(mPageManager); ++it) {
         size_t itemIndex = 0;
-if((int) &*it < 0x3f000000||(int) &*it >= 0x40000000)
-ESP_LOGI("foo", "  calling findItem: %p", &*it);
+if(debug_intrusive_list) {
+ESP_LOGI("foo", "  calling findItem: it=%p, begin=%p", &*it, &*std::begin(mPageManager));
+}
+
         auto err = it->findItem(nsIndex, datatype, key, itemIndex, item, chunkIdx, chunkStart);
         if (err == ESP_OK) {
             page = it;
+if(debug_intrusive_list) {
+ESP_LOGI("foo", "Storage::findItem: found");
+}
             return ESP_OK;
         }
     }
+if(debug_intrusive_list) {
+ESP_LOGI("foo", "Storage::findItem: not found");
+}
     return ESP_ERR_NVS_NOT_FOUND;
 }
 

@@ -17,17 +17,21 @@
 #include <cassert>
 #include <unordered_map>
 
+#include "esp_log.h"
+
 template <typename T>
 class intrusive_list;
 
 template <typename T>
 class intrusive_list_node
 {
-protected:
+public:
     friend class intrusive_list<T>;
     T* mPrev = nullptr;
     T* mNext = nullptr;
 };
+
+extern volatile bool debug_intrusive_list;
 
 template <typename T>
 class intrusive_list
@@ -36,19 +40,23 @@ class intrusive_list
     static_assert(std::is_base_of<TNode, T>::value, "");
 
 public:
-
     class iterator : public std::iterator<std::forward_iterator_tag, T>
     {
     public:
 
         iterator() : mPos(nullptr) {}
 
-        iterator(T* pos) : mPos(pos) {}
+        iterator(T* pos) : mPos(pos) {
+if(debug_intrusive_list)
+ESP_LOGI("foo", "  iterator: mPos=%p", mPos);
+}
 
         iterator operator++(int)
         {
             auto result = *this;
             mPos = mPos->mNext;
+if(debug_intrusive_list)
+  ESP_LOGI("foo", "  iterator++: mPos=%p, mNext=%p", mPos, mPos->mNext);
             return result;
         }
 
@@ -56,18 +64,24 @@ public:
         {
             auto result = *this;
             mPos = mPos->mPrev;
+if(debug_intrusive_list)
+ESP_LOGI("foo", "  iterator--: mPos=%p", mPos);
             return result;
         }
 
         iterator& operator++()
         {
-            mPos = mPos->mNext;
+if(debug_intrusive_list)
+            ESP_LOGI("foo", "  iterator++: mPos=%p, mNext=%p", mPos, mPos->mNext);
+          mPos = mPos->mNext;
             return *this;
         }
 
         iterator& operator--()
         {
             mPos = mPos->mPrev;
+if(debug_intrusive_list)
+ESP_LOGI("foo", "  iterator--: mPos=%p", mPos);
             return *this;
         }
 
@@ -84,11 +98,15 @@ public:
 
         T& operator*()
         {
+if(debug_intrusive_list)
+ESP_LOGI("foo", "  iterator*: mPos=%p", mPos);
             return *mPos;
         }
 
         const T& operator*() const
         {
+if(debug_intrusive_list)
+ESP_LOGI("foo", "  iterator*: mPos=%p", mPos);
             return *mPos;
         }
 
@@ -202,6 +220,8 @@ public:
             prev->mNext = next;
         } else {
             mFirst = next;
+if((int) mFirst == 0xffffffff)
+ESP_LOGI("foo", "erase: mFirst=%p", mFirst);
         }
         if (next) {
             next->mPrev = prev;
