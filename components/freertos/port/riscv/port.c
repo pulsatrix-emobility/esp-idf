@@ -85,7 +85,6 @@
 #include "riscv/riscv_interrupts.h"
 #include "riscv/interrupt.h"
 #include "esp_private/crosscore_int.h"
-#include "esp_private/pm_trace.h"
 #include "esp_attr.h"
 #include "esp_system.h"
 #include "esp_intr_alloc.h"
@@ -260,27 +259,7 @@ BaseType_t IRAM_ATTR xPortInterruptedFromISRContext(void)
 
 // ---------------------- Spinlocks ------------------------
 
-void vPortCPUInitializeMutex(portMUX_TYPE *mux)
-{
-    (void)mux;     //TODO: IDF-2393
-}
 
-void vPortCPUAcquireMutex(portMUX_TYPE *mux)
-{
-    (void)mux;    //TODO: IDF-2393
-}
-
-bool vPortCPUAcquireMutexTimeout(portMUX_TYPE *mux, int timeout_cycles)
-{
-    (void)mux;      //TODO: IDF-2393
-    (void)timeout_cycles;
-    return true;
-}
-
-void vPortCPUReleaseMutex(portMUX_TYPE *mux)
-{
-    (void)mux;     //TODO: IDF-2393
-}
 
 // ------------------ Critical Sections --------------------
 
