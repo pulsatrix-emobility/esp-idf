@@ -64,7 +64,9 @@ static void heap_caps_alloc_failed(size_t requested_size, uint32_t caps, const c
     }
 
     #ifdef CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS
-    esp_system_abort("Memory allocation failed");
+    char tmp[60];
+    snprintf(tmp, sizeof(tmp), "Memory allocation failed: caps=0x%08x, size=%zu", caps, requested_size);
+    esp_system_abort(tmp);
     #endif
 }
 
@@ -87,7 +89,7 @@ bool heap_caps_match(const heap_t *heap, uint32_t caps)
 /*
 Routine to allocate a bit of memory with certain capabilities. caps is a bitfield of MALLOC_CAP_* bits.
 */
-IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps )
+IRAM_ATTR void *_heap_caps_malloc( size_t size, uint32_t caps, bool noPanic )
 {
     void *ret = NULL;
 
@@ -152,10 +154,15 @@ IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps )
         }
     }
 
-    heap_caps_alloc_failed(size, caps, __func__);
+    if(!noPanic)
+      heap_caps_alloc_failed(size, caps, __func__);
 
     //Nothing usable found.
     return NULL;
+}
+
+IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps ) {
+  return _heap_caps_malloc(size, caps, false);
 }
 
 
@@ -178,9 +185,9 @@ IRAM_ATTR void *heap_caps_malloc_default( size_t size )
     } else {
         void *r;
         if (size <= (size_t)malloc_alwaysinternal_limit) {
-            r=heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL );
+            r=_heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL, true );
         } else {
-            r=heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM );
+            r=_heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM, true );
         }
         if (r==NULL) {
             //try again while being less picky
