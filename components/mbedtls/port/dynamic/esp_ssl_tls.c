@@ -125,8 +125,12 @@ static void ssl_handshake_params_init( mbedtls_ssl_handshake_params *handshake )
 #endif
 }
 
-// missing forward-declaration
-extern void ssl_set_timer( mbedtls_ssl_context *ssl, uint32_t millisecs );
+// this method isn't exported in this version of mbedtls
+static void _ssl_set_timer( mbedtls_ssl_context *ssl, uint32_t millisecs )
+{
+    if( ssl->f_set_timer != NULL )
+      ssl->f_set_timer( ssl->p_timer, millisecs / 4, millisecs );
+}
 
 static int ssl_handshake_init( mbedtls_ssl_context *ssl )
 {
@@ -190,7 +194,7 @@ static int ssl_handshake_init( mbedtls_ssl_context *ssl )
         else
             ssl->handshake->retransmit_state = MBEDTLS_SSL_RETRANS_WAITING;
 
-        ssl_set_timer( ssl, 0 );
+        _ssl_set_timer( ssl, 0 );
     }
 #endif
 
