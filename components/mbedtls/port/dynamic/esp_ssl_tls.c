@@ -125,6 +125,9 @@ static void ssl_handshake_params_init( mbedtls_ssl_handshake_params *handshake )
 #endif
 }
 
+// missing forward-declaration
+extern void ssl_set_timer( mbedtls_ssl_context *ssl, uint32_t millisecs );
+
 static int ssl_handshake_init( mbedtls_ssl_context *ssl )
 {
     /* Clear old handshake information if present */
@@ -176,6 +179,20 @@ static int ssl_handshake_init( mbedtls_ssl_context *ssl )
     mbedtls_ssl_session_init( ssl->session_negotiate );
     ssl_transform_init( ssl->transform_negotiate );
     ssl_handshake_params_init( ssl->handshake );
+
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM )
+    {
+        ssl->handshake->alt_transform_out = ssl->transform_out;
+
+        if( ssl->conf->endpoint == MBEDTLS_SSL_IS_CLIENT )
+            ssl->handshake->retransmit_state = MBEDTLS_SSL_RETRANS_PREPARING;
+        else
+            ssl->handshake->retransmit_state = MBEDTLS_SSL_RETRANS_WAITING;
+
+        ssl_set_timer( ssl, 0 );
+    }
+#endif
 
     return( 0 );
 }

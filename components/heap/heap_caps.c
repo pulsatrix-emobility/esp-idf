@@ -64,8 +64,9 @@ static void heap_caps_alloc_failed(size_t requested_size, uint32_t caps, const c
     }
 
     #ifdef CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS
-    char tmp[60];
-    snprintf(tmp, sizeof(tmp), "Memory allocation failed: caps=0x%08x, size=%zu", caps, requested_size);
+    char tmp[100];
+    snprintf(tmp, sizeof(tmp), "Memory allocation failed: caps=0x%08x, size=%zu, largest free block=%zu", caps, requested_size,
+        heap_caps_get_largest_free_block(caps));
     esp_system_abort(tmp);
     #endif
 }
@@ -228,14 +229,21 @@ IRAM_ATTR void *heap_caps_malloc_prefer( size_t size, size_t num, ... )
     va_list argp;
     va_start( argp, num );
     void *r = NULL;
+    uint32_t lastCaps = 0;
     while (num--) {
         uint32_t caps = va_arg( argp, uint32_t );
-        r = heap_caps_malloc( size, caps );
+        lastCaps = caps;
+        r = _heap_caps_malloc( size, caps, true );
         if (r != NULL) {
             break;
         }
     }
     va_end( argp );
+
+    if(!r) {
+      heap_caps_alloc_failed(size, lastCaps, __func__);
+    }
+
     return r;
 }
 
