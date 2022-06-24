@@ -125,6 +125,13 @@ static void ssl_handshake_params_init( mbedtls_ssl_handshake_params *handshake )
 #endif
 }
 
+// this method isn't exported in this version of mbedtls
+static void _ssl_set_timer( mbedtls_ssl_context *ssl, uint32_t millisecs )
+{
+    if( ssl->f_set_timer != NULL )
+      ssl->f_set_timer( ssl->p_timer, millisecs / 4, millisecs );
+}
+
 static int ssl_handshake_init( mbedtls_ssl_context *ssl )
 {
     /* Clear old handshake information if present */
@@ -176,6 +183,20 @@ static int ssl_handshake_init( mbedtls_ssl_context *ssl )
     mbedtls_ssl_session_init( ssl->session_negotiate );
     ssl_transform_init( ssl->transform_negotiate );
     ssl_handshake_params_init( ssl->handshake );
+
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM )
+    {
+        ssl->handshake->alt_transform_out = ssl->transform_out;
+
+        if( ssl->conf->endpoint == MBEDTLS_SSL_IS_CLIENT )
+            ssl->handshake->retransmit_state = MBEDTLS_SSL_RETRANS_PREPARING;
+        else
+            ssl->handshake->retransmit_state = MBEDTLS_SSL_RETRANS_WAITING;
+
+        _ssl_set_timer( ssl, 0 );
+    }
+#endif
 
     return( 0 );
 }
