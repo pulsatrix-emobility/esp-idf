@@ -43,6 +43,7 @@ import ssl
 import subprocess
 import sys
 import tarfile
+import time
 from collections import OrderedDict, namedtuple
 from ssl import SSLContext  # noqa: F401
 from tarfile import TarFile  # noqa: F401
@@ -95,6 +96,7 @@ PYTHON_PLATFORM = platform.system() + '-' + platform.machine()
 PLATFORM_WIN32 = 'win32'
 PLATFORM_WIN64 = 'win64'
 PLATFORM_MACOS = 'macos'
+PLATFORM_MACOS_ARM64 = 'macos-arm64'
 PLATFORM_LINUX32 = 'linux-i686'
 PLATFORM_LINUX64 = 'linux-amd64'
 PLATFORM_LINUX_ARM32 = 'linux-armel'
@@ -119,8 +121,8 @@ PLATFORM_FROM_NAME = {
     'osx': PLATFORM_MACOS,
     'darwin': PLATFORM_MACOS,
     'Darwin-x86_64': PLATFORM_MACOS,
-    # pretend it is x86_64 until Darwin-arm64 tool builds are available:
-    'Darwin-arm64': PLATFORM_MACOS,
+    PLATFORM_MACOS_ARM64: PLATFORM_MACOS_ARM64,
+    'Darwin-arm64': PLATFORM_MACOS_ARM64,
     # Linux
     PLATFORM_LINUX64: PLATFORM_LINUX64,
     'linux64': PLATFORM_LINUX64,
@@ -372,19 +374,19 @@ def urlretrieve_ctx(url, filename, reporthook=None, data=None, context=None):
 # https://github.com/espressif/esp-idf/issues/4063#issuecomment-531490140
 # https://stackoverflow.com/a/43046729
 def rename_with_retry(path_from, path_to):  # type: (str, str) -> None
-    if sys.platform.startswith('win'):
-        retry_count = 100
-    else:
-        retry_count = 1
-
+    retry_count = 20 if sys.platform.startswith('win') else 1
     for retry in range(retry_count):
         try:
             os.rename(path_from, path_to)
             return
-        except (OSError, WindowsError):       # WindowsError until Python 3.3, then OSError
+        except OSError:
+            msg = f'Rename {path_from} to {path_to} failed'
             if retry == retry_count - 1:
+                fatal(msg + '. Antivirus software might be causing this. Disabling it temporarily could solve the issue.')
                 raise
-            warn('Rename {} to {} failed, retrying...'.format(path_from, path_to))
+            warn(msg + ', retrying...')
+            # Sleep before the next try in order to pass the antivirus check on Windows
+            time.sleep(0.5)
 
 
 def strip_container_dirs(path, levels):  # type: (str, int) -> None
@@ -1415,10 +1417,11 @@ def action_install(args):  # type: ignore
     tools_info = load_tools_info()
     tools_spec = args.tools  # type: ignore
     targets = []  # type: list[str]
+    info('Current system platform: {}'.format(CURRENT_PLATFORM))
     # Installing only single tools, no targets are specified.
     if 'required' in tools_spec:
         targets = clean_targets(args.targets)
-        info('Selected targets are: {}' .format(', '.join(get_user_defined_targets())))
+        info('Selected targets are: {}'.format(', '.join(get_user_defined_targets())))
 
     if not tools_spec or 'required' in tools_spec:
         # Installing tools for all ESP_targets required by the operating system.

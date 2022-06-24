@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <string.h>
 #include "esp_mbedtls_dynamic_impl.h"
@@ -93,18 +85,8 @@ static void init_tx_buffer(mbedtls_ssl_context *ssl, unsigned char *buf)
         int out_msg_off = (int)ssl->out_msg;
 
         ssl->out_buf = buf;
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-        if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM )
-        {
-            ssl->out_ctr = ssl->out_buf +  3;
-            ssl->out_hdr = ssl->out_buf;
-        }
-        else
-#endif
-        {
-            ssl->out_ctr = ssl->out_buf;
-            ssl->out_hdr = ssl->out_buf +  8;
-        }
+        ssl->out_ctr = ssl->out_buf;
+        ssl->out_hdr = ssl->out_buf +  8;
         ssl->out_len = ssl->out_buf + 11;
         ssl->out_iv  = ssl->out_buf + MBEDTLS_SSL_HEADER_LEN;
         ssl->out_msg = ssl->out_buf + out_msg_off;
@@ -139,18 +121,8 @@ static void init_rx_buffer(mbedtls_ssl_context *ssl, unsigned char *buf)
         int in_msg_off = (int)ssl->in_msg;
 
         ssl->in_buf = buf;
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-        if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM )
-        {
-            ssl->in_ctr = ssl->in_buf +  3;
-            ssl->in_hdr = ssl->in_buf;
-        }
-        else
-#endif
-        {
-            ssl->in_ctr = ssl->in_buf;
-            ssl->in_hdr = ssl->in_buf +  8;
-        }
+        ssl->in_ctr = ssl->in_buf;
+        ssl->in_hdr = ssl->in_buf +  8;
         ssl->in_len = ssl->in_buf + 11;
         ssl->in_iv  = ssl->in_buf + MBEDTLS_SSL_HEADER_LEN;
         ssl->in_msg = ssl->in_buf + in_msg_off;
@@ -286,12 +258,12 @@ int esp_mbedtls_add_tx_buffer(mbedtls_ssl_context *ssl, size_t buffer_len)
 
     esp_buf = mbedtls_calloc(1, SSL_BUF_HEAD_OFFSET_SIZE + buffer_len);
     if (!esp_buf) {
-        ESP_LOGE(TAG, "alloc(%d bytes) failed", SSL_BUF_HEAD_OFFSET_SIZE + buffer_len);
+        ESP_LOGE(TAG, "alloc(%zu bytes) failed", SSL_BUF_HEAD_OFFSET_SIZE + buffer_len);
         ret = MBEDTLS_ERR_SSL_ALLOC_FAILED;
         goto exit;
     }
 
-    ESP_LOGV(TAG, "add out buffer %d bytes @ %p", buffer_len, esp_buf->buf);
+    ESP_LOGV(TAG, "add out buffer %zu bytes @ %p", buffer_len, esp_buf->buf);
 
     esp_mbedtls_init_ssl_buf(esp_buf, buffer_len);
     init_tx_buffer(ssl, esp_buf->buf);
@@ -353,7 +325,7 @@ int esp_mbedtls_add_rx_buffer(mbedtls_ssl_context *ssl)
     struct esp_mbedtls_ssl_buf *esp_buf;
     unsigned char cache_buf[16];
     unsigned char msg_head[5];
-    size_t in_msglen, in_left = 0;
+    size_t in_msglen, in_left;
 
     ESP_LOGV(TAG, "--> add rx");
 
@@ -367,36 +339,29 @@ int esp_mbedtls_add_rx_buffer(mbedtls_ssl_context *ssl)
         }
     }
 
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
-        buffer_len = MBEDTLS_SSL_IN_BUFFER_LEN;
-    } else
-#endif
-    {
-        ssl->in_hdr = msg_head;
-        ssl->in_len = msg_head + 3;
+    ssl->in_hdr = msg_head;
+    ssl->in_len = msg_head + 3;
 
-        if ((ret = mbedtls_ssl_fetch_input(ssl, mbedtls_ssl_hdr_len(ssl))) != 0) {
-            if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
-                ESP_LOGD(TAG, "mbedtls_ssl_fetch_input reads data times out");
-            } else if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
-                ESP_LOGD(TAG, "mbedtls_ssl_fetch_input wants to read more data");
-            } else {
-                ESP_LOGE(TAG, "mbedtls_ssl_fetch_input error=%d", -ret);
-            }
-
-            goto exit;
+    if ((ret = mbedtls_ssl_fetch_input(ssl, mbedtls_ssl_in_hdr_len(ssl))) != 0) {
+        if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
+            ESP_LOGD(TAG, "mbedtls_ssl_fetch_input reads data times out");
+        } else if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            ESP_LOGD(TAG, "mbedtls_ssl_fetch_input wants to read more data");
+        } else {
+            ESP_LOGE(TAG, "mbedtls_ssl_fetch_input error=%d", -ret);
         }
 
-        esp_mbedtls_parse_record_header(ssl);
-
-        in_left = ssl->in_left;
-        in_msglen = ssl->in_msglen;
-        buffer_len = tx_buffer_len(ssl, in_msglen);
-
-        ESP_LOGV(TAG, "message length is %d RX buffer length should be %d left is %d",
-                    (int)in_msglen, (int)buffer_len, (int)ssl->in_left);
+        goto exit;
     }
+
+    esp_mbedtls_parse_record_header(ssl);
+
+    in_left = ssl->in_left;
+    in_msglen = ssl->in_msglen;
+    buffer_len = tx_buffer_len(ssl, in_msglen);
+
+    ESP_LOGV(TAG, "message length is %d RX buffer length should be %d left is %d",
+                (int)in_msglen, (int)buffer_len, (int)ssl->in_left);
 
     if (cached) {
         memcpy(cache_buf, ssl->in_buf, 16);
@@ -421,14 +386,9 @@ int esp_mbedtls_add_rx_buffer(mbedtls_ssl_context *ssl)
         memcpy(ssl->in_iv, cache_buf + 8, 8);
     }
 
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-    if( ssl->conf->transport != MBEDTLS_SSL_TRANSPORT_DATAGRAM )
-#endif
-    {
-        memcpy(ssl->in_hdr, msg_head, in_left);
-        ssl->in_left = in_left;
-        ssl->in_msglen = 0;
-    }
+    memcpy(ssl->in_hdr, msg_head, in_left);
+    ssl->in_left = in_left;
+    ssl->in_msglen = 0;
 
 exit:
     ESP_LOGV(TAG, "<-- add rx");
@@ -459,16 +419,6 @@ int esp_mbedtls_free_rx_buffer(mbedtls_ssl_context *ssl)
     if (!ssl->in_msgtype) {
         goto exit;
     }
-
-#if defined(MBEDTLS_SSL_PROTO_DTLS)
-    /* more than one record within datagram */
-    if (ssl->next_record_offset < ssl->in_left) {
-        goto exit;
-    } else {
-        /* update next_record_offset to sync with in_left */
-        ssl->next_record_offset = 0;
-    }
-#endif
 
     memcpy(buf, ssl->in_ctr, 8);
     memcpy(buf + 8, ssl->in_iv, 8);
@@ -573,27 +523,3 @@ void esp_mbedtls_free_cacert(mbedtls_ssl_context *ssl)
     }
 }
 #endif /* CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT */
-
-#ifdef CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT
-void esp_mbedtls_free_peer_cert(mbedtls_ssl_context *ssl)
-{
-    if (ssl->session_negotiate->peer_cert) {
-        mbedtls_x509_crt_free( ssl->session_negotiate->peer_cert );
-        mbedtls_free( ssl->session_negotiate->peer_cert );
-        ssl->session_negotiate->peer_cert = NULL;
-    }
-}
-
-bool esp_mbedtls_ssl_is_rsa(mbedtls_ssl_context *ssl)
-{
-    const mbedtls_ssl_ciphersuite_t *ciphersuite_info =
-        ssl->transform_negotiate->ciphersuite_info;
-
-    if (ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_RSA ||
-        ciphersuite_info->key_exchange == MBEDTLS_KEY_EXCHANGE_RSA_PSK) {
-        return true;
-    } else {
-        return false;
-    }
-}
-#endif

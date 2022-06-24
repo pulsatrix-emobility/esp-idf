@@ -117,10 +117,9 @@ example_test_001D:
 
 example_test_OTA:
   extends: .example_test_esp32_template
-  parallel: 2
   tags:
     - ESP32
-    - Example_WIFI_OTA
+    - EXAMPLE_ETH_OTA
 
 example_test_protocols:
   extends: .example_test_esp32_template
@@ -128,6 +127,13 @@ example_test_protocols:
   tags:
     - ESP32
     - Example_WIFI_Protocols
+
+# This job is only triggered by env var `NIGHTLY_RUN`, please do NOT remove
+example_test_esp32_WIFI_OTA:
+  extends: .example_test_esp32_template
+  tags:
+    - ESP32
+    - Example_WIFI_OTA
 
 example_test_002:
   extends: .example_test_esp32_template
@@ -337,6 +343,12 @@ test_app_test_002:
     - ESP32
     - Example_WIFI
 
+test_app_test_eth:
+  extends: .test_app_esp32_template
+  tags:
+    - ESP32
+    - Example_EthKitV1
+
 test_app_test_003:
   extends: .test_app_esp32_template
   tags:
@@ -521,7 +533,7 @@ UT_006:
 
 UT_007:
   extends: .unit_test_esp32_template
-  parallel: 4
+  parallel: 7
   tags:
     - ESP32_IDF
     - UT_T1_1
@@ -672,7 +684,7 @@ UT_046:
 
 UT_047:
   extends: .unit_test_esp32s2_template
-  parallel: 6
+  parallel: 7
   tags:
     - ESP32S2_IDF
     - UT_T1_1
@@ -691,7 +703,7 @@ UT_S2_SDSPI:
 
 UT_C3:
   extends: .unit_test_esp32c3_template
-  parallel: 34
+  parallel: 35
   tags:
     - ESP32C3_IDF
     - UT_T1_1
@@ -735,7 +747,7 @@ UT_C3_SDSPI:
 
 UT_S3:
   extends: .unit_test_esp32s3_template
-  parallel: 31
+  parallel: 32
   tags:
     - ESP32S3_IDF
     - UT_T1_1
