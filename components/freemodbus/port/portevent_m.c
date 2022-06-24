@@ -269,15 +269,25 @@ void vMBMasterCBRequestSuccess( void ) {
  *
  * @return request error code
  */
+ extern int log_printf(const char *format, ...);
+
 eMBMasterReqErrCode eMBMasterWaitRequestFinish( void ) {
     eMBMasterReqErrCode eErrStatus = MB_MRE_NO_ERR;
     eMBMasterEventType xRecvedEvent;
 
-    EventBits_t uxBits = xEventGroupWaitBits( xEventGroupMasterHdl, // The event group being tested.
-                                                MB_EVENT_REQ_MASK,  // The bits within the event group to wait for.
-                                                pdTRUE,             // Masked bits should be cleared before returning.
-                                                pdFALSE,            // Don't wait for both bits, either bit will do.
-                                                portMAX_DELAY );    // Wait forever for either bit to be set.
+    //KKK
+    log_printf("MODBUS: eMBMasterWaitRequestFinish() called! #1 \n");
+
+    EventBits_t uxBits = xEventGroupWaitBits( xEventGroupMasterHdl,    // The event group being tested.
+                                                MB_EVENT_REQ_MASK,     // The bits within the event group to wait for.
+                                                pdTRUE,                // Masked bits should be cleared before returning.
+                                                pdFALSE,               // Don't wait for both bits, either bit will do.
+                                                pdMS_TO_TICKS(1000));  // Instead of waiting forever, wait only for 1s
+                                                // portMAX_DELAY );    // Wait forever for either bit to be set.
+
+    //KKK
+    log_printf("MODBUS: eMBMasterWaitRequestFinish() called! #2 \n");
+
     xRecvedEvent = (eMBMasterEventType)(uxBits);
     if (xRecvedEvent) {
         ESP_LOGD(MB_PORT_TAG,"%s: returned event = 0x%x", __func__, xRecvedEvent);
