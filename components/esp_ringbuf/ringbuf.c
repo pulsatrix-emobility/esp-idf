@@ -11,6 +11,14 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/ringbuf.h"
+#include "sdkconfig.h"
+
+// If the UART's main RX interrupt lies in IRAM, then some functions (called by that interrupt) herein must also lie in IRAM
+#ifdef CONFIG_UART_ISR_IN_IRAM
+#define FUNCTION_ATTR     IRAM_ATTR
+#else
+#define FUNCTION_ATTR
+#endif
 
 // ------------------------------------------------- Macros and Types --------------------------------------------------
 
@@ -257,7 +265,7 @@ static void prvInitializeNewRingbuffer(size_t xBufferSize,
     portMUX_INITIALIZE(&pxNewRingbuffer->mux);
 }
 
-static size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer)
+static FUNCTION_ATTR size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer)
 {
     size_t xReturn;
     if (pxRingbuffer->uxRingbufferFlags & rbBUFFER_FULL_FLAG) {
@@ -302,7 +310,7 @@ static BaseType_t prvCheckItemFitsDefault( Ringbuffer_t *pxRingbuffer, size_t xI
     }
 }
 
-static BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
+static FUNCTION_ATTR BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
 {
     //Check arguments and buffer state
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
@@ -465,7 +473,7 @@ static void prvCopyItemAllowSplit(Ringbuffer_t *pxRingbuffer, const uint8_t *puc
     pxRingbuffer->pucWrite = pxRingbuffer->pucAcquire;
 }
 
-static void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
+static FUNCTION_ATTR void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
 {
     //Check arguments and buffer state
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
@@ -1046,7 +1054,7 @@ BaseType_t xRingbufferSend(RingbufHandle_t xRingbuffer,
     return prvSendAcquireGeneric(pxRingbuffer, pvItem, NULL, xItemSize, xTicksToWait);
 }
 
-BaseType_t xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
+BaseType_t FUNCTION_ATTR xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
                                   const void *pvItem,
                                   size_t xItemSize,
                                   BaseType_t *pxHigherPriorityTaskWoken)
