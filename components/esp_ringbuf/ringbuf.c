@@ -321,9 +321,21 @@ static BaseType_t prvCheckItemFitsDefault( Ringbuffer_t *pxRingbuffer, size_t xI
     }
 }
 
-static BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
+//KKK
+static IRAM_ATTR BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
 {
     //Check arguments and buffer state
+    //KKK
+
+    int a = 123;
+    int b = 456;
+    int c = a+b;
+
+    if ((int)pxRingbuffer->pucAcquire > c)
+    {
+      c=999;
+    }
+
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
 
     if (pxRingbuffer->pucAcquire == pxRingbuffer->pucFree) {
@@ -481,11 +493,11 @@ static void prvCopyItemAllowSplit(Ringbuffer_t *pxRingbuffer, const uint8_t *puc
     }
 
     //currently the Split mode is not supported, pucWrite tracks the pucAcquire
-    pxRingbuffer->pucWrite = pxRingbuffer->pucAcquire;
+    pxRingbuffer->pucWrite = pxRingbuffer->pucAcquire; //KKK
 }
 
-static void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
-{
+static IRAM_ATTR void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
+{//KKK
     //Check arguments and buffer state
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
 
@@ -918,6 +930,7 @@ RingbufHandle_t xRingbufferCreateNoSplit(size_t xItemSize, size_t xItemNum)
     return xRingbufferCreate((rbALIGN_SIZE(xItemSize) + rbHEADER_SIZE) * xItemNum, RINGBUF_TYPE_NOSPLIT);
 }
 
+//KKK
 #if ( configSUPPORT_STATIC_ALLOCATION == 1 )
 RingbufHandle_t xRingbufferCreateStatic(size_t xBufferSize,
                                         RingbufferType_t xBufferType,
@@ -1078,7 +1091,8 @@ BaseType_t xRingbufferSend(RingbufHandle_t xRingbuffer,
     return xReturn;
 }
 
-BaseType_t xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
+//KKK
+BaseType_t IRAM_ATTR xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
                                   const void *pvItem,
                                   size_t xItemSize,
                                   BaseType_t *pxHigherPriorityTaskWoken)
@@ -1117,6 +1131,10 @@ BaseType_t xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
         //Indicate item was successfully sent
         xSemaphoreGiveFromISR(rbGET_RX_SEM_HANDLE(pxRingbuffer), pxHigherPriorityTaskWoken);
     }
+
+    //KKK
+//return(1);
+
     return xReturn;
 }
 

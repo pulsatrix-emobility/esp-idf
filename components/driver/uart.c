@@ -125,7 +125,6 @@ typedef  struct {
     uint8_t tx_brk_len;                 /*!< TX break signal cycle length/number */
     uint8_t tx_waiting_brk;             /*!< Flag to indicate that TX FIFO is ready to send break signal after FIFO is empty, do not push data into TX FIFO right now.*/
     uart_select_notif_callback_t uart_select_notif_callback; /*!< Notification about select() events */
-    QueueHandle_t event_queue;          /*!< UART event queue handler*/
     RingbufHandle_t rx_ring_buf;        /*!< RX ring buffer handler*/
     RingbufHandle_t tx_ring_buf;        /*!< TX ring buffer handler*/
     SemaphoreHandle_t rx_mux;           /*!< UART RX data mutex*/
@@ -385,27 +384,6 @@ static esp_err_t uart_pattern_link_free(uart_port_t uart_num)
     UART_EXIT_CRITICAL(&(uart_context[uart_num].spinlock));
     free(pdata);
     return ESP_OK;
-}
-
-static esp_err_t IRAM_ATTR uart_pattern_enqueue(uart_port_t uart_num, int pos)
-{
-    esp_err_t ret = ESP_OK;
-    uart_pat_rb_t *p_pos = &p_uart_obj[uart_num]->rx_pattern_pos;
-    int next = p_pos->wr + 1;
-    if (next >= p_pos->len) {
-        next = 0;
-    }
-    if (next == p_pos->rd) {
-#ifndef CONFIG_UART_ISR_IN_IRAM     //Only log if ISR is not in IRAM
-        ESP_EARLY_LOGW(UART_TAG, "Fail to enqueue pattern position, pattern queue is full.");
-#endif
-        ret = ESP_FAIL;
-    } else {
-        p_pos->data[p_pos->wr] = pos;
-        p_pos->wr = next;
-        ret = ESP_OK;
-    }
-    return ret;
 }
 
 static esp_err_t uart_pattern_dequeue(uart_port_t uart_num)
@@ -771,7 +749,7 @@ static int IRAM_ATTR uart_find_pattern_from_last(uint8_t *buf, int length, uint8
 }
 
 //internal isr handler for default driver code.
-static void  uart_rx_intr_handler_default(void *param)  //KKK - IRAM_ATTR
+static void IRAM_ATTR uart_rx_intr_handler_default(void *param)  //KKK - IRAM_ATTR
 {
     uart_obj_t *p_uart = (uart_obj_t *) param;
     uint8_t uart_num = p_uart->uart_num;
@@ -904,6 +882,8 @@ static void  uart_rx_intr_handler_default(void *param)  //KKK - IRAM_ATTR
                 p_uart->rx_stash_len = rx_fifo_len;
                 //If we fail to push data to ring buffer, we will have to stash the data, and send next time.
                 //Mainly for applications that uses flow control or small ring buffer.
+
+                //KKK - é aqui que acede à cache disabled durante o acesso à SPI-FLASH!
                 if (pdFALSE == xRingbufferSendFromISR(p_uart->rx_ring_buf, p_uart->rx_data_buf, p_uart->rx_stash_len, &HPTaskAwoken)) {
                     p_uart->rx_buffer_full_flg = true;
                     UART_ENTER_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
@@ -1332,9 +1312,6 @@ static void uart_free_driver_obj(uart_obj_t *uart_obj)
     if (uart_obj->rx_mux) {
         vSemaphoreDelete(uart_obj->rx_mux);
     }
-    if (uart_obj->event_queue) {
-        vQueueDelete(uart_obj->event_queue);
-    }
     if (uart_obj->rx_ring_buf) {
         vRingbufferDelete(uart_obj->rx_ring_buf);
     }
@@ -1389,13 +1366,6 @@ static uart_obj_t *uart_alloc_driver_obj(int event_queue_size, int tx_buffer_siz
             !uart_obj->tx_mux_struct || !uart_obj->tx_brk_sem_struct || !uart_obj->tx_done_sem_struct ||
             !uart_obj->tx_fifo_sem_struct) {
         goto err;
-    }
-    if (event_queue_size > 0) {
-        uart_obj->event_queue = xQueueCreateStatic(event_queue_size, sizeof(uart_event_t),
-                                uart_obj->event_queue_storage, uart_obj->event_queue_struct);
-        if (!uart_obj->event_queue) {
-            goto err;
-        }
     }
     if (tx_buffer_size > 0) {
         uart_obj->tx_ring_buf = xRingbufferCreateStatic(tx_buffer_size, RINGBUF_TYPE_NOSPLIT,
@@ -1457,7 +1427,7 @@ esp_err_t uart_driver_install(uart_port_t uart_num, int rx_buffer_size, int tx_b
     ESP_RETURN_ON_FALSE((tx_buffer_size > SOC_UART_FIFO_LEN) || (tx_buffer_size == 0), ESP_FAIL, UART_TAG, "uart tx buffer length error");
 
     //KKK - só falta enable disto para que o ESP não disable o INT sempre que acede à SPI-FLASH! (mas crasha a dizer que está a aceder a cache disabled...)
-#ifndef CONFIG_UART_ISR_IN_IRAM
+#ifdef CONFIG_UART_ISR_IN_IRAM
     if ((intr_alloc_flags & ESP_INTR_FLAG_IRAM) == 0) {
         ESP_LOGI(UART_TAG, "ESP_INTR_FLAG_IRAM flag not set while CONFIG_UART_ISR_IN_IRAM is enabled, flag updated");
         intr_alloc_flags |= ESP_INTR_FLAG_IRAM;
@@ -1499,10 +1469,6 @@ esp_err_t uart_driver_install(uart_port_t uart_num, int rx_buffer_size, int tx_b
         p_uart_obj[uart_num]->uart_select_notif_callback = NULL;
         xSemaphoreGive(p_uart_obj[uart_num]->tx_fifo_sem);
         uart_pattern_queue_reset(uart_num, UART_PATTERN_DET_QLEN_DEFAULT);
-        if (uart_queue) {
-            *uart_queue = p_uart_obj[uart_num]->event_queue;
-            ESP_LOGI(UART_TAG, "queue free spaces: %d", uxQueueSpacesAvailable(p_uart_obj[uart_num]->event_queue));
-        }
     } else {
         ESP_LOGE(UART_TAG, "UART driver already installed");
         return ESP_FAIL;
