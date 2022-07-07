@@ -10,6 +10,14 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/ringbuf.h"
+#include "sdkconfig.h"
+
+// If the UART's main RX interrupt lies in IRAM, then some functions (called by that interrupt) herein must also lie in IRAM
+#ifdef CONFIG_UART_ISR_IN_IRAM
+#define FUNCTION_ATTR     IRAM_ATTR
+#else
+#define FUNCTION_ATTR
+#endif
 
 //32-bit alignment macros
 #define rbALIGN_MASK (0x03)
@@ -276,7 +284,7 @@ static void prvInitializeNewRingbuffer(size_t xBufferSize,
     portMUX_INITIALIZE(&pxNewRingbuffer->mux);
 }
 
-static size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer)
+static FUNCTION_ATTR size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer)
 {
     size_t xReturn;
     if (pxRingbuffer->uxRingbufferFlags & rbBUFFER_FULL_FLAG) {
@@ -321,8 +329,7 @@ static BaseType_t prvCheckItemFitsDefault( Ringbuffer_t *pxRingbuffer, size_t xI
     }
 }
 
-//KKK
-static IRAM_ATTR BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
+static FUNCTION_ATTR BaseType_t prvCheckItemFitsByteBuffer( Ringbuffer_t *pxRingbuffer, size_t xItemSize)
 {
     //Check arguments and buffer state
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
@@ -482,11 +489,11 @@ static void prvCopyItemAllowSplit(Ringbuffer_t *pxRingbuffer, const uint8_t *puc
     }
 
     //currently the Split mode is not supported, pucWrite tracks the pucAcquire
-    pxRingbuffer->pucWrite = pxRingbuffer->pucAcquire; //KKK
+    pxRingbuffer->pucWrite = pxRingbuffer->pucAcquire;
 }
 
-static IRAM_ATTR void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
-{//KKK
+static FUNCTION_ATTR void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize)
+{
     //Check arguments and buffer state
     configASSERT(pxRingbuffer->pucAcquire >= pxRingbuffer->pucHead && pxRingbuffer->pucAcquire < pxRingbuffer->pucTail);    //Check acquire pointer is within bounds
 
@@ -1079,8 +1086,7 @@ BaseType_t xRingbufferSend(RingbufHandle_t xRingbuffer,
     return xReturn;
 }
 
-//KKK
-BaseType_t IRAM_ATTR xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
+BaseType_t FUNCTION_ATTR xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
                                   const void *pvItem,
                                   size_t xItemSize,
                                   BaseType_t *pxHigherPriorityTaskWoken)
