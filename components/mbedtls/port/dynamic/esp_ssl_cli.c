@@ -50,6 +50,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_HELLO:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
             }
@@ -57,6 +62,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_CERTIFICATE:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
 
@@ -68,6 +78,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_KEY_EXCHANGE:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 if (!ssl->keep_current_message) {
                     CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
@@ -91,6 +106,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
             if (add) {
                 if (!ssl->keep_current_message) {
                     CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                        CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                    }
+#endif
                 }
             } else {
                 if (!ssl->keep_current_message) {
@@ -102,6 +122,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
             if (add) {
                 if (!ssl->keep_current_message) {
                     CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                    if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                        CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                    }
+#endif
                 }
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
@@ -174,6 +199,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_NEW_SESSION_TICKET:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
             }
@@ -184,6 +214,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_CHANGE_CIPHER_SPEC:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
             }
@@ -191,6 +226,11 @@ static int manage_resource(mbedtls_ssl_context *ssl, bool add)
         case MBEDTLS_SSL_SERVER_FINISHED:
             if (add) {
                 CHECK_OK(esp_mbedtls_add_rx_buffer(ssl));
+#if defined(MBEDTLS_SSL_PROTO_DTLS)
+                if( ssl->conf->transport == MBEDTLS_SSL_TRANSPORT_DATAGRAM ) {
+                    CHECK_OK(esp_mbedtls_add_tx_buffer(ssl, MBEDTLS_SSL_OUT_BUFFER_LEN));
+                }
+#endif
             } else {
                 CHECK_OK(esp_mbedtls_free_rx_buffer(ssl));
             }

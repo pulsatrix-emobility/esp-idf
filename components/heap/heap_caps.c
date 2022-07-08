@@ -64,7 +64,10 @@ static void heap_caps_alloc_failed(size_t requested_size, uint32_t caps, const c
     }
 
     #ifdef CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS
-    esp_system_abort("Memory allocation failed");
+    char tmp[100];
+    snprintf(tmp, sizeof(tmp), "Memory allocation failed: caps=0x%08x, size=%zu, largest free block=%zu", caps, requested_size,
+        heap_caps_get_largest_free_block(caps));
+    esp_system_abort(tmp);
     #endif
 }
 
@@ -87,7 +90,7 @@ bool heap_caps_match(const heap_t *heap, uint32_t caps)
 /*
 Routine to allocate a bit of memory with certain capabilities. caps is a bitfield of MALLOC_CAP_* bits.
 */
-IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps )
+IRAM_ATTR void *_heap_caps_malloc( size_t size, uint32_t caps, bool noPanic )
 {
     void *ret = NULL;
 
@@ -152,10 +155,15 @@ IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps )
         }
     }
 
-    heap_caps_alloc_failed(size, caps, __func__);
+    if(!noPanic)
+      heap_caps_alloc_failed(size, caps, __func__);
 
     //Nothing usable found.
     return NULL;
+}
+
+IRAM_ATTR void *heap_caps_malloc( size_t size, uint32_t caps ) {
+  return _heap_caps_malloc(size, caps, false);
 }
 
 
@@ -178,9 +186,9 @@ IRAM_ATTR void *heap_caps_malloc_default( size_t size )
     } else {
         void *r;
         if (size <= (size_t)malloc_alwaysinternal_limit) {
-            r=heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL );
+            r=_heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL, true );
         } else {
-            r=heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM );
+            r=_heap_caps_malloc( size, MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM, true );
         }
         if (r==NULL) {
             //try again while being less picky
@@ -221,14 +229,21 @@ IRAM_ATTR void *heap_caps_malloc_prefer( size_t size, size_t num, ... )
     va_list argp;
     va_start( argp, num );
     void *r = NULL;
+    uint32_t lastCaps = 0;
     while (num--) {
         uint32_t caps = va_arg( argp, uint32_t );
-        r = heap_caps_malloc( size, caps );
+        lastCaps = caps;
+        r = _heap_caps_malloc( size, caps, true );
         if (r != NULL) {
             break;
         }
     }
     va_end( argp );
+
+    if(!r) {
+      heap_caps_alloc_failed(size, lastCaps, __func__);
+    }
+
     return r;
 }
 
