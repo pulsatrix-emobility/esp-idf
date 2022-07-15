@@ -214,7 +214,7 @@ int __wrap_mbedtls_ssl_read(mbedtls_ssl_context *ssl, unsigned char *buf, size_t
     ESP_LOGD(TAG, "fail, the connection indicated an EOF");
     return 0;
   } else if (ret < 0) {
-    ESP_LOGD(TAG, "fail, error=-0x%x", -ret);
+    ESP_LOGD(TAG, "fail, error=-0x%x", (unsigned int) ret);
     return ret;
   }
   ESP_LOGD(TAG, "end");
