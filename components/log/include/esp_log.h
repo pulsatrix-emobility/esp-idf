@@ -338,7 +338,7 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_default_level >= (log_level))
 #endif
 
-void log_CrashLog(bool panic, const char* format, ...) __attribute__((weak));
+extern void log_CrashLog(bool panic, const char* format, ...);
 void panic_print_str(const char* str);
 
 #ifdef BOOTLOADER_BUILD
@@ -353,7 +353,7 @@ void panic_print_str(const char* str);
     do {                                                                                                         \
       if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                                   \
         esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__);             \
-        log_CrashLog(true, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+        log_CrashLog(false, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
       }                                                                                                          \
     } while (0)
 #endif
@@ -572,7 +572,7 @@ void panic_print_str(const char* str);
       do {                                                                                                  \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                            \
           esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag __VA_OPT__(, ) __VA_ARGS__); \
-          log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, __VA_ARGS__);           \
+          log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, __VA_ARGS__);           \
         }                                                                                                   \
       } while (0)
   #else  // !(defined(__cplusplus) && (__cplusplus >  201703L))
@@ -580,7 +580,7 @@ void panic_print_str(const char* str);
       do {                                                                                          \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                    \
           esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);     \
-          log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
+          log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
         }                                                                                           \
       } while (0)
   #endif  // !(defined(__cplusplus) && (__cplusplus >  201703L))
