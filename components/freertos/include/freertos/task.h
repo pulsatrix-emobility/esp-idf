@@ -1694,6 +1694,27 @@ TickType_t xTaskGetTickCountFromISR( void ) PRIVILEGED_FUNCTION;
  * @cond !DOC_EXCLUDE_HEADER_SECTION
  * task. h
  * @code{c}
+ * void vTaskResetRuntimeStats( void );
+ * @endcode
+ * @endcond
+ *
+ * @reset all tasks' runtime counters to zero.
+ *
+ * This is used whenever the tasks' runtime counters reach their maximum
+ * "uint32_t" count UINT32_MAX, to avoid them overflowing and, thus,
+ * falsifying the runtime measurements/stats
+ *
+ * @cond !DOC_SINGLE_GROUP
+ * \defgroup vTaskResetRuntimeStats vTaskResetRuntimeStats
+ * @endcond
+ * \ingroup TaskUtils
+ */
+void vTaskResetRuntimeStats(void);
+
+/**
+ * @cond !DOC_EXCLUDE_HEADER_SECTION
+ * task. h
+ * @code{c}
  * uint16_t uxTaskGetNumberOfTasks( void );
  * @endcode
  * @endcond

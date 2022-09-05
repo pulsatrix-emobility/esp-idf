@@ -2673,6 +2673,53 @@ TickType_t xTaskGetTickCountFromISR( void )
 }
 /*-----------------------------------------------------------*/
 
+void prvTaskResetRuntimeStatsWithinSingleList(List_t* list)
+{
+    TCB_t* pxNextTCB;
+    TCB_t* pxFirstTCB;
+
+    if( listCURRENT_LIST_LENGTH( list ) > ( UBaseType_t ) 0 )
+    {
+        listGET_OWNER_OF_NEXT_ENTRY( pxFirstTCB, list );
+        pxFirstTCB->ulRunTimeCounter = 0;
+        do
+        {
+            listGET_OWNER_OF_NEXT_ENTRY( pxNextTCB, list );
+            pxNextTCB->ulRunTimeCounter = 0;
+        } while( pxNextTCB != pxFirstTCB );
+    }
+}
+/*-----------------------------------------------------------*/
+
+void vTaskResetRuntimeStats(void)
+{
+    UBaseType_t uxQueue = configMAX_PRIORITIES;
+
+#ifdef ESP_PLATFORM // IDF-3755
+        taskENTER_CRITICAL();
+#else
+        vTaskSuspendAll();
+#endif // ESP_PLATFORM
+
+    do
+    {
+        uxQueue--;
+        prvTaskResetRuntimeStatsWithinSingleList((List_t*)&(pxReadyTasksLists[uxQueue]));
+    } while(uxQueue > (UBaseType_t)tskIDLE_PRIORITY);
+    prvTaskResetRuntimeStatsWithinSingleList(pxDelayedTaskList);
+    prvTaskResetRuntimeStatsWithinSingleList(pxOverflowDelayedTaskList);
+    prvTaskResetRuntimeStatsWithinSingleList(&xSuspendedTaskList);
+    prvTaskResetRuntimeStatsWithinSingleList(&xTasksWaitingTermination);
+
+#ifdef ESP_PLATFORM // IDF-3755
+        taskEXIT_CRITICAL();
+#else
+        ( void ) xTaskResumeAll();
+#endif // ESP_PLATFORM
+
+}
+/*-----------------------------------------------------------*/
+
 UBaseType_t uxTaskGetNumberOfTasks( void )
 {
     /* A critical section is not required because the variables are of type
@@ -4267,6 +4314,8 @@ static void prvCheckTasksWaitingTermination( void )
     #endif /* INCLUDE_vTaskDelete */
 }
 /*-----------------------------------------------------------*/
+
+
 
 #if ( configUSE_TRACE_FACILITY == 1 )
 
