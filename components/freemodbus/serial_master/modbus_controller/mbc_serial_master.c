@@ -310,7 +310,7 @@ static uint8_t mbc_serial_master_get_command(mb_param_type_t param_type, mb_para
     { //
         case MB_PARAM_HOLDING:
             command = (mode == MB_PARAM_WRITE) ?
-                        MB_FUNC_WRITE_MULTIPLE_REGISTERS :
+                        MB_FUNC_WRITE_REGISTER:
                         MB_FUNC_READ_HOLDING_REGISTER;
             break;
         case MB_PARAM_INPUT:
@@ -318,7 +318,7 @@ static uint8_t mbc_serial_master_get_command(mb_param_type_t param_type, mb_para
             break;
         case MB_PARAM_COIL:
             command = (mode == MB_PARAM_WRITE) ?
-                        MB_FUNC_WRITE_MULTIPLE_COILS :
+                        MB_FUNC_WRITE_REGISTER:
                         MB_FUNC_READ_COILS;
             break;
         case MB_PARAM_DISCRETE:

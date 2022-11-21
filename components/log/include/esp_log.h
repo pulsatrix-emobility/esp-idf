@@ -7,21 +7,20 @@
 #ifndef __ESP_LOG_H__
 #define __ESP_LOG_H__
 
-#include <stdarg.h>
 #include <stdint.h>
-
-#include "esp_rom_sys.h"
+#include <stdarg.h>
 #include "sdkconfig.h"
+#include "esp_rom_sys.h"
 #if CONFIG_IDF_TARGET_ESP32
-  #include "esp32/rom/ets_sys.h"  // will be removed in idf v5.0
+#include "esp32/rom/ets_sys.h" // will be removed in idf v5.0
 #elif CONFIG_IDF_TARGET_ESP32S2
-  #include "esp32s2/rom/ets_sys.h"
+#include "esp32s2/rom/ets_sys.h"
 #elif CONFIG_IDF_TARGET_ESP32S3
-  #include "esp32s3/rom/ets_sys.h"
+#include "esp32s3/rom/ets_sys.h"
 #elif CONFIG_IDF_TARGET_ESP32C3
-  #include "esp32c3/rom/ets_sys.h"
+#include "esp32c3/rom/ets_sys.h"
 #elif CONFIG_IDF_TARGET_ESP32H2
-  #include "esp32h2/rom/ets_sys.h"
+#include "esp32h2/rom/ets_sys.h"
 #endif
 
 #ifdef __cplusplus
@@ -33,15 +32,15 @@ extern "C" {
  *
  */
 typedef enum {
-  ESP_LOG_NONE,   /*!< No log output */
-  ESP_LOG_ERROR,  /*!< Critical errors, software module can not recover on its own */
-  ESP_LOG_WARN,   /*!< Error conditions from which recovery measures have been taken */
-  ESP_LOG_INFO,   /*!< Information messages which describe normal flow of events */
-  ESP_LOG_DEBUG,  /*!< Extra information which is not necessary for normal use (values, pointers, sizes, etc). */
-  ESP_LOG_VERBOSE /*!< Bigger chunks of debugging information, or frequent messages which can potentially flood the output. */
+    ESP_LOG_NONE,       /*!< No log output */
+    ESP_LOG_ERROR,      /*!< Critical errors, software module can not recover on its own */
+    ESP_LOG_WARN,       /*!< Error conditions from which recovery measures have been taken */
+    ESP_LOG_INFO,       /*!< Information messages which describe normal flow of events */
+    ESP_LOG_DEBUG,      /*!< Extra information which is not necessary for normal use (values, pointers, sizes, etc). */
+    ESP_LOG_VERBOSE     /*!< Bigger chunks of debugging information, or frequent messages which can potentially flood the output. */
 } esp_log_level_t;
 
-typedef int (*vprintf_like_t)(const char*, va_list);
+typedef int (*vprintf_like_t)(const char *, va_list);
 
 /**
  * @brief Default log level
@@ -145,7 +144,7 @@ uint32_t esp_log_early_timestamp(void);
  *
  * This function or these macros should not be used from an interrupt.
  */
-void esp_log_write(esp_log_level_t level, const char* tag, const char* format, ...) __attribute__((format(printf, 3, 4)));
+void esp_log_write(esp_log_level_t level, const char* tag, const char* format, ...) __attribute__ ((format (printf, 3, 4)));
 
 /**
  * @brief Write message into the log, va_list variant
@@ -161,11 +160,11 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #include "esp_log_internal.h"
 
 #ifndef LOG_LOCAL_LEVEL
-  #ifndef BOOTLOADER_BUILD
-    #define LOG_LOCAL_LEVEL CONFIG_LOG_MAXIMUM_LEVEL
-  #else
-    #define LOG_LOCAL_LEVEL CONFIG_BOOTLOADER_LOG_LEVEL
-  #endif
+#ifndef BOOTLOADER_BUILD
+#define LOG_LOCAL_LEVEL  CONFIG_LOG_MAXIMUM_LEVEL
+#else
+#define LOG_LOCAL_LEVEL  CONFIG_BOOTLOADER_LOG_LEVEL
+#endif
 #endif
 
 /** @endcond */
@@ -179,12 +178,12 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
  * @param  level    level of the log
  *
  */
-#define ESP_LOG_BUFFER_HEX_LEVEL(tag, buffer, buff_len, level)   \
-  do {                                                           \
-    if (LOG_LOCAL_LEVEL >= (level)) {                            \
-      esp_log_buffer_hex_internal(tag, buffer, buff_len, level); \
-    }                                                            \
-  } while (0)
+#define ESP_LOG_BUFFER_HEX_LEVEL( tag, buffer, buff_len, level ) \
+    do {\
+        if ( LOG_LOCAL_LEVEL >= (level) ) { \
+            esp_log_buffer_hex_internal( tag, buffer, buff_len, level ); \
+        } \
+    } while(0)
 
 /**
  * @brief Log a buffer of characters at specified level, separated into 16 bytes each line. Buffer should contain only printable
@@ -263,8 +262,9 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 /** @cond */
 
 // to be back compatible
-#define esp_log_buffer_hex  ESP_LOG_BUFFER_HEX
-#define esp_log_buffer_char ESP_LOG_BUFFER_CHAR
+#define esp_log_buffer_hex      ESP_LOG_BUFFER_HEX
+#define esp_log_buffer_char     ESP_LOG_BUFFER_CHAR
+
 
 #if CONFIG_LOG_COLORS
   #define LOG_COLOR_BLACK  "30"
@@ -331,15 +331,15 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #endif  // !(defined(__cplusplus) && (__cplusplus >  201703L))
 
 #ifdef BOOTLOADER_BUILD
-  #define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level))
+#define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level))
 #else
-  /* For early log, there is no log tag filtering. So we want to log only if both the LOG_LOCAL_LEVEL and the
-     currently configured min log level are higher than the log level */
-  #define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_default_level >= (log_level))
+/* For early log, there is no log tag filtering. So we want to log only if both the LOG_LOCAL_LEVEL and the
+   currently configured min log level are higher than the log level */
+#define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_default_level >= (log_level))
 #endif
 
-void log_CrashLog(bool panic, const char* format, ...);
-void panic_print_str(const char* str);  // KKK
+extern void log_CrashLog(bool panic, const char* format, ...);
+void panic_print_str(const char* str);
 
 #ifdef BOOTLOADER_BUILD
   #define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                            \
@@ -353,7 +353,7 @@ void panic_print_str(const char* str);  // KKK
     do {                                                                                                         \
       if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                                   \
         esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__);             \
-        log_CrashLog(true, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+        log_CrashLog(false, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
       }                                                                                                          \
     } while (0)
 #endif
@@ -374,15 +374,15 @@ void panic_print_str(const char* str);  // KKK
   #endif  // !(defined(__cplusplus) && (__cplusplus >  201703L))
 #else
 
-  /**
-   * Macro to output logs at ESP_LOG_ERROR level.
-   *
-   * @note This macro cannot be used when interrupts are disabled or inside an ISR. @see ``ESP_DRAM_LOGE``.
-   *
-   * @param tag tag of the log, which can be used to change the log level by ``esp_log_level_set`` at runtime.
-   *
-   * @see ``printf``
-   */
+/**
+ * Macro to output logs at ESP_LOG_ERROR level.
+ *
+ * @note This macro cannot be used when interrupts are disabled or inside an ISR. @see ``ESP_DRAM_LOGE``.
+ *
+ * @param tag tag of the log, which can be used to change the log level by ``esp_log_level_set`` at runtime.
+ *
+ * @see ``printf``
+ */
   #if defined(__cplusplus) && (__cplusplus > 201703L)
     #define ESP_LOGE(tag, format, ...) ESP_EARLY_LOGE(tag, format __VA_OPT__(, ) __VA_ARGS__)
                                         /// macro to output logs at ``ESP_LOG_WARN`` level.  @see ``ESP_LOGE``
@@ -548,7 +548,7 @@ void panic_print_str(const char* str);  // KKK
 #endif  // !(defined(__cplusplus) && (__cplusplus >  201703L))
 
 /** @cond */
-#define _ESP_LOG_DRAM_LOG_FORMAT(letter, format) DRAM_STR(#letter " %s: " format "\n")
+#define _ESP_LOG_DRAM_LOG_FORMAT(letter, format)  DRAM_STR(#letter " %s: " format "\n")
 
 #ifdef BOOTLOADER_BUILD
   #if defined(__cplusplus) && (__cplusplus > 201703L)
@@ -572,7 +572,7 @@ void panic_print_str(const char* str);  // KKK
       do {                                                                                                  \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                            \
           esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag __VA_OPT__(, ) __VA_ARGS__); \
-          log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, __VA_ARGS__);           \
+          log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, __VA_ARGS__);           \
         }                                                                                                   \
       } while (0)
   #else  // !(defined(__cplusplus) && (__cplusplus >  201703L))
@@ -580,7 +580,7 @@ void panic_print_str(const char* str);  // KKK
       do {                                                                                          \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                    \
           esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);     \
-          log_CrashLog(true, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
+          log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
         }                                                                                           \
       } while (0)
   #endif  // !(defined(__cplusplus) && (__cplusplus >  201703L))

@@ -31,7 +31,7 @@
 #endif
 #endif // CONFIG_IDF_TARGET_ESP32
 
-void log_CrashLog(bool panic, const char *format, ...);
+extern void log_CrashLog(bool panic, const char *format, ...);
 
 void panic_print_registers(const void *f, int core) {
     XtExcFrame *frame = (XtExcFrame *) f;
