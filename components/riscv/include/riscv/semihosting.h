@@ -10,6 +10,53 @@
 extern "C" {
 #endif
 
+
+/* ESP custom semihosting calls numbers */
+
+/**
+ * @brief Initialize apptrace data at host side
+ *
+ * @param addr    address of apptrace control data block
+ * @return        return 0 on sucess or non-zero error code
+ */
+#define ESP_SEMIHOSTING_SYS_APPTRACE_INIT   0x101
+
+/**
+ * @brief Initialize debug stubs table at host side
+ *
+ * @param addr    address of debug stubs table
+ * @return        return 0 on sucess or non-zero error code
+ */
+#define ESP_SEMIHOSTING_SYS_DBG_STUBS_INIT  0x102
+
+/**
+ * @brief Set/clear breakpoint
+ *
+ * @param set     if true set breakpoint, otherwise clear it
+ * @param id      breakpoint ID
+ * @param addr    address to set breakpoint at. Ignored if `set` is false.
+ * @return        return 0 on sucess or non-zero error code
+ */
+#define ESP_SEMIHOSTING_SYS_BREAKPOINT_SET  0x103
+
+/**
+ * @brief Set/clear watchpoint
+ *
+ * @param set     if true set watchpoint, otherwise clear it
+ * @param id      watchpoint ID
+ * @param addr    address to set watchpoint at. Ignored if `set` is false.
+ * @param size    size of watchpoint. Ignored if `set` is false.
+ * @param flags   watchpoint flags, see description below. Ignored if `set` is false.
+ * @return        return 0 on sucess or non-zero error code
+ */
+#define ESP_SEMIHOSTING_SYS_WATCHPOINT_SET  0x104
+
+/* bit values for `flags` argument of ESP_SEMIHOSTING_SYS_WATCHPOINT_SET call. Can be ORed. */
+/* watch for 'reads' at `addr` */
+#define ESP_SEMIHOSTING_WP_FLG_RD   (1UL << 0)
+/* watch for 'writes' at `addr` */
+#define ESP_SEMIHOSTING_WP_FLG_WR   (1UL << 1)
+
 /**
  * @brief Perform semihosting call
  *
@@ -36,31 +83,6 @@ static inline long semihosting_call_noerrno(long id, long *data)
         ".option pop\n"
         : "+r"(a0) : "r"(a1) : "memory");
     return a0;
-}
-
-/**
- * @brief Perform semihosting call and retrieve errno
- *
- * @param id    semihosting call number
- * @param data  data block to pass to the host; number of items and their
- *              meaning depends on the semihosting call. See the spec for
- *              details.
- * @param[out] out_errno  output, errno value from the host. Only set if
- *                        the return value is negative.
- * @return   return value from the host
- */
-static inline long semihosting_call(long id, long *data, int *out_errno)
-{
-    long ret = semihosting_call_noerrno(id, data);
-    if (ret < 0) {
-        /* Constant also defined in openocd_semihosting.h,
-         * which is common for RISC-V and Xtensa; it is not included here
-         * to avoid a circular dependency.
-         */
-        const int semihosting_sys_errno = 0x13;
-        *out_errno = (int) semihosting_call_noerrno(semihosting_sys_errno, NULL);
-    }
-    return ret;
 }
 
 #ifdef __cplusplus

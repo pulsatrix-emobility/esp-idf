@@ -152,6 +152,7 @@ void rtc_init(rtc_config_t cfg)
 
     REG_WRITE(RTC_CNTL_INT_ENA_REG, 0);
     REG_WRITE(RTC_CNTL_INT_CLR_REG, UINT32_MAX);
+    REGI2C_WRITE_MASK(I2C_ULP, I2C_ULP_IR_FORCE_XPD_CK, 1);
 }
 
 rtc_vddsdio_config_t rtc_vddsdio_get_config(void)
@@ -319,8 +320,8 @@ static void set_rtc_dig_dbias()
     if (chip_version >= 3) {
         dig_dbias = get_dig_dbias_by_efuse(chip_version);
         if (dig_dbias != 0) {
-            if (dig_dbias + 4 > 28) {
-                dig_dbias = 28;
+            if (dig_dbias + 4 > 31) {
+                dig_dbias = 31;
             } else {
                 dig_dbias += 4;
             }

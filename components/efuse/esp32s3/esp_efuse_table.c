@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,7 +9,7 @@
 #include <assert.h>
 #include "esp_efuse_table.h"
 
-// md5_digest_table 9444b887379d924049af42806ca71d45
+// md5_digest_table 5d853dcd3eb114e78147566245552b2d
 // This file was generated from the file esp_efuse_table.csv. DO NOT CHANGE THIS FILE MANUALLY.
 // If you want to change some fields, you need to change esp_efuse_table.csv file
 // then run `efuse_common_table` or `efuse_custom_table` command it will generate this file.
@@ -80,7 +80,7 @@ static const esp_efuse_desc_t WR_DIS_SECURE_BOOT_AGGRESSIVE_REVOKE[] = {
 };
 
 static const esp_efuse_desc_t WR_DIS_GROUP_3[] = {
-    {EFUSE_BLK0, 18, 1}, 	 // Write protection for FLASH_TPUW DIS_DOWNLOAD_MODE DIS_LEGACY_SPI_BOOT UART_PRINT_CHANNEL DIS_USB_DOWNLOAD_MODE ENABLE_SECURITY_DOWNLOAD UART_PRINT_CONTROL PIN_POWER_SELECTION FLASH_TYPE FORCE_SEND_RESUME SECURE_VERSION,
+    {EFUSE_BLK0, 18, 1}, 	 // Write protection for FLASH_TPUW DIS_DOWNLOAD_MODE DIS_DIRECT_BOOT DIS_USB_SERIAL_JTAG_ROM_PRINT DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE ENABLE_SECURITY_DOWNLOAD UART_PRINT_CONTROL PIN_POWER_SELECTION FLASH_TYPE FORCE_SEND_RESUME SECURE_VERSION,
 };
 
 static const esp_efuse_desc_t WR_DIS_BLK1[] = {
@@ -303,20 +303,20 @@ static const esp_efuse_desc_t DIS_DOWNLOAD_MODE[] = {
     {EFUSE_BLK0, 128, 1}, 	 // Disble download mode include boot_mode[3:0] is 0 1 2 3 6 7,
 };
 
-static const esp_efuse_desc_t DIS_LEGACY_SPI_BOOT[] = {
-    {EFUSE_BLK0, 129, 1}, 	 // Disable_Legcy_SPI_boot mode include boot_mode[3:0] is 4,
+static const esp_efuse_desc_t DIS_DIRECT_BOOT[] = {
+    {EFUSE_BLK0, 129, 1}, 	 // Disable direct boot mode,
 };
 
-static const esp_efuse_desc_t UART_PRINT_CHANNEL[] = {
-    {EFUSE_BLK0, 130, 1}, 	 // 0: UART0. 1: UART1,
+static const esp_efuse_desc_t DIS_USB_SERIAL_JTAG_ROM_PRINT[] = {
+    {EFUSE_BLK0, 130, 1}, 	 // Disable usb serial jtag print during rom boot,
 };
 
 static const esp_efuse_desc_t FLASH_ECC_MODE[] = {
     {EFUSE_BLK0, 131, 1}, 	 // Configures the ECC mode for SPI flash. 0:16-byte to 18-byte mode. 1:16-byte to 17-byte mode,
 };
 
-static const esp_efuse_desc_t DIS_USB_DOWNLOAD_MODE[] = {
-    {EFUSE_BLK0, 132, 1}, 	 // Disable download through USB,
+static const esp_efuse_desc_t DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE[] = {
+    {EFUSE_BLK0, 132, 1}, 	 // Set this bit to disable download through USB-Serial-JTAG,
 };
 
 static const esp_efuse_desc_t ENABLE_SECURITY_DOWNLOAD[] = {
@@ -349,6 +349,10 @@ static const esp_efuse_desc_t FORCE_SEND_RESUME[] = {
 
 static const esp_efuse_desc_t SECURE_VERSION[] = {
     {EFUSE_BLK0, 142, 16}, 	 // Secure version for anti-rollback,
+};
+
+static const esp_efuse_desc_t DIS_USB_OTG_DOWNLOAD_MODE[] = {
+    {EFUSE_BLK0, 159, 1}, 	 // Set this bit to disable download through USB-OTG,
 };
 
 static const esp_efuse_desc_t MAC_FACTORY[] = {
@@ -532,6 +536,26 @@ static const esp_efuse_desc_t SYS_DATA_PART2[] = {
     {EFUSE_BLK10, 0, 256}, 	 // System configuration,
 };
 
+static const esp_efuse_desc_t K_RTC_LDO[] = {
+    {EFUSE_BLK1, 141, 7}, 	 // BLOCK1 K_RTC_LDO,
+};
+
+static const esp_efuse_desc_t K_DIG_LDO[] = {
+    {EFUSE_BLK1, 148, 7}, 	 // BLOCK1 K_DIG_LDO,
+};
+
+static const esp_efuse_desc_t V_RTC_DBIAS20[] = {
+    {EFUSE_BLK1, 155, 8}, 	 // BLOCK1 voltage of rtc dbias20,
+};
+
+static const esp_efuse_desc_t V_DIG_DBIAS20[] = {
+    {EFUSE_BLK1, 163, 8}, 	 // BLOCK1 voltage of digital dbias20,
+};
+
+static const esp_efuse_desc_t DIG_DBIAS_HVT[] = {
+    {EFUSE_BLK1, 171, 5}, 	 // BLOCK1 digital dbias when hvt,
+};
+
 
 
 
@@ -617,7 +641,7 @@ const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_SECURE_BOOT_AGGRESSIVE_REVOKE[] = {
 };
 
 const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_GROUP_3[] = {
-    &WR_DIS_GROUP_3[0],    		// Write protection for FLASH_TPUW DIS_DOWNLOAD_MODE DIS_LEGACY_SPI_BOOT UART_PRINT_CHANNEL DIS_USB_DOWNLOAD_MODE ENABLE_SECURITY_DOWNLOAD UART_PRINT_CONTROL PIN_POWER_SELECTION FLASH_TYPE FORCE_SEND_RESUME SECURE_VERSION
+    &WR_DIS_GROUP_3[0],    		// Write protection for FLASH_TPUW DIS_DOWNLOAD_MODE DIS_DIRECT_BOOT DIS_USB_SERIAL_JTAG_ROM_PRINT DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE ENABLE_SECURITY_DOWNLOAD UART_PRINT_CONTROL PIN_POWER_SELECTION FLASH_TYPE FORCE_SEND_RESUME SECURE_VERSION
     NULL
 };
 
@@ -896,13 +920,13 @@ const esp_efuse_desc_t* ESP_EFUSE_DIS_DOWNLOAD_MODE[] = {
     NULL
 };
 
-const esp_efuse_desc_t* ESP_EFUSE_DIS_LEGACY_SPI_BOOT[] = {
-    &DIS_LEGACY_SPI_BOOT[0],    		// Disable_Legcy_SPI_boot mode include boot_mode[3:0] is 4
+const esp_efuse_desc_t* ESP_EFUSE_DIS_DIRECT_BOOT[] = {
+    &DIS_DIRECT_BOOT[0],    		// Disable direct boot mode
     NULL
 };
 
-const esp_efuse_desc_t* ESP_EFUSE_UART_PRINT_CHANNEL[] = {
-    &UART_PRINT_CHANNEL[0],    		// 0: UART0. 1: UART1
+const esp_efuse_desc_t* ESP_EFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT[] = {
+    &DIS_USB_SERIAL_JTAG_ROM_PRINT[0],    		// Disable usb serial jtag print during rom boot
     NULL
 };
 
@@ -911,8 +935,8 @@ const esp_efuse_desc_t* ESP_EFUSE_FLASH_ECC_MODE[] = {
     NULL
 };
 
-const esp_efuse_desc_t* ESP_EFUSE_DIS_USB_DOWNLOAD_MODE[] = {
-    &DIS_USB_DOWNLOAD_MODE[0],    		// Disable download through USB
+const esp_efuse_desc_t* ESP_EFUSE_DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE[] = {
+    &DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE[0],    		// Set this bit to disable download through USB-Serial-JTAG
     NULL
 };
 
@@ -953,6 +977,11 @@ const esp_efuse_desc_t* ESP_EFUSE_FORCE_SEND_RESUME[] = {
 
 const esp_efuse_desc_t* ESP_EFUSE_SECURE_VERSION[] = {
     &SECURE_VERSION[0],    		// Secure version for anti-rollback
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_DIS_USB_OTG_DOWNLOAD_MODE[] = {
+    &DIS_USB_OTG_DOWNLOAD_MODE[0],    		// Set this bit to disable download through USB-OTG
     NULL
 };
 
@@ -1178,5 +1207,30 @@ const esp_efuse_desc_t* ESP_EFUSE_KEY5[] = {
 
 const esp_efuse_desc_t* ESP_EFUSE_SYS_DATA_PART2[] = {
     &SYS_DATA_PART2[0],    		// System configuration
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_K_RTC_LDO[] = {
+    &K_RTC_LDO[0],    		// BLOCK1 K_RTC_LDO
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_K_DIG_LDO[] = {
+    &K_DIG_LDO[0],    		// BLOCK1 K_DIG_LDO
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_V_RTC_DBIAS20[] = {
+    &V_RTC_DBIAS20[0],    		// BLOCK1 voltage of rtc dbias20
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_V_DIG_DBIAS20[] = {
+    &V_DIG_DBIAS20[0],    		// BLOCK1 voltage of digital dbias20
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_DIG_DBIAS_HVT[] = {
+    &DIG_DBIAS_HVT[0],    		// BLOCK1 digital dbias when hvt
     NULL
 };

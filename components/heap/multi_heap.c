@@ -197,6 +197,7 @@ void *multi_heap_malloc_impl(multi_heap_handle_t heap, size_t size)
     void *result = tlsf_malloc(heap->heap_data, size);
     if(result) {
         heap->free_bytes -= tlsf_block_size(result);
+        heap->free_bytes -= tlsf_alloc_overhead();
         if (heap->free_bytes < heap->minimum_free_bytes) {
             heap->minimum_free_bytes = heap->free_bytes;
         }
@@ -213,10 +214,11 @@ void multi_heap_free_impl(multi_heap_handle_t heap, void *p)
         return;
     }
 
-    assert_valid_block(heap, p);
+    assert_valid_block(heap, block_from_ptr(p));
 
     multi_heap_internal_lock(heap);
     heap->free_bytes += tlsf_block_size(p);
+    heap->free_bytes += tlsf_alloc_overhead();
     tlsf_free(heap->heap_data, p);
     multi_heap_internal_unlock(heap);
 }
@@ -229,7 +231,7 @@ void *multi_heap_realloc_impl(multi_heap_handle_t heap, void *p, size_t size)
         return multi_heap_malloc_impl(heap, size);
     }
 
-    assert_valid_block(heap, p);
+    assert_valid_block(heap, block_from_ptr(p));
 
     if (heap == NULL) {
         return NULL;
@@ -239,6 +241,8 @@ void *multi_heap_realloc_impl(multi_heap_handle_t heap, void *p, size_t size)
     size_t previous_block_size =  tlsf_block_size(p);
     void *result = tlsf_realloc(heap->heap_data, p, size);
     if(result) {
+        /* No need to subtract the tlsf_alloc_overhead() as it has already
+         * been subtracted when allocating the block at first with malloc */
         heap->free_bytes += previous_block_size;
         heap->free_bytes -= tlsf_block_size(result);
         if (heap->free_bytes < heap->minimum_free_bytes) {
@@ -270,6 +274,7 @@ void *multi_heap_aligned_alloc_impl_offs(multi_heap_handle_t heap, size_t size, 
     void *result = tlsf_memalign_offs(heap->heap_data, alignment, size, offset);
     if(result) {
         heap->free_bytes -= tlsf_block_size(result);
+        heap->free_bytes -= tlsf_alloc_overhead();
         if(heap->free_bytes < heap->minimum_free_bytes) {
             heap->minimum_free_bytes = heap->free_bytes;
         }
@@ -285,13 +290,47 @@ void *multi_heap_aligned_alloc_impl(multi_heap_handle_t heap, size_t size, size_
     return multi_heap_aligned_alloc_impl_offs(heap, size, alignment, 0);
 }
 
+
+#ifdef MULTI_HEAP_POISONING
+/*!
+ * @brief Global definition of print_errors set in multi_heap_check() when
+ * MULTI_HEAP_POISONING is active. Allows the transfer of the value to
+ * multi_heap_poisoning.c without having to propagate it to the tlsf submodule
+ * and back.
+ */
+static bool g_print_errors = false;
+
+/*!
+ * @brief Definition of the weak function declared in TLSF repository.
+ * The call of this function execute a check for block poisoning on the memory
+ * chunk passed as parameter.
+ *
+ * @param start: pointer to the start of the memory region to check for corruption
+ * @param size: size of the memory region to check for corruption
+ * @param is_free: indicate if the pattern to use the fill the region should be
+ * an after free or after allocation pattern.
+ *
+ * @return bool: true if the the memory is not corrupted, false if the memory if corrupted.
+ */
+bool tlsf_check_hook(void *start, size_t size, bool is_free)
+{
+    return multi_heap_internal_check_block_poisoning(start, size, is_free, g_print_errors);
+}
+#endif // MULTI_HEAP_POISONING
+
 bool multi_heap_check(multi_heap_handle_t heap, bool print_errors)
 {
-    (void)print_errors;
     bool valid = true;
     assert(heap != NULL);
 
     multi_heap_internal_lock(heap);
+
+    #ifdef MULTI_HEAP_POISONING
+        g_print_errors = print_errors;
+    #else
+        (void) print_errors;
+    #endif
+
     if(tlsf_check(heap->heap_data)) {
         valid = false;
     }
@@ -361,6 +400,7 @@ static void multi_heap_get_info_tlsf(void* ptr, size_t size, int used, void* use
 void multi_heap_get_info_impl(multi_heap_handle_t heap, multi_heap_info_t *info)
 {
     uint32_t sl_interval;
+    uint32_t overhead;
 
     memset(info, 0, sizeof(multi_heap_info_t));
 
@@ -370,7 +410,10 @@ void multi_heap_get_info_impl(multi_heap_handle_t heap, multi_heap_info_t *info)
 
     multi_heap_internal_lock(heap);
     tlsf_walk_pool(tlsf_get_pool(heap->heap_data), multi_heap_get_info_tlsf, info);
-    info->total_allocated_bytes = (heap->pool_size - tlsf_size()) - heap->free_bytes;
+    /* TLSF has an overhead per block. Calculate the total amount of overhead, it shall not be
+     * part of the allocated bytes */
+    overhead = info->allocated_blocks * tlsf_alloc_overhead();
+    info->total_allocated_bytes = (heap->pool_size - tlsf_size()) - heap->free_bytes - overhead;
     info->minimum_free_bytes = heap->minimum_free_bytes;
     info->total_free_bytes = heap->free_bytes;
     if (info->largest_free_block) {

@@ -20,6 +20,49 @@ typedef void *esp_lcd_i2c_bus_handle_t;                       /*!< Type of LCD I
 typedef struct esp_lcd_i80_bus_t *esp_lcd_i80_bus_handle_t;   /*!< Type of LCD intel 8080 bus handle */
 
 /**
+ * @brief Type of LCD panel IO event data
+ */
+typedef struct {
+} esp_lcd_panel_io_event_data_t;
+
+/**
+ * @brief Declare the prototype of the function that will be invoked when panel IO finishes transferring color data
+ *
+ * @param[in] panel_io LCD panel IO handle, which is created by factory API like `esp_lcd_new_panel_io_spi()`
+ * @param[in] edata Panel IO event data, fed by driver
+ * @param[in] user_ctx User data, passed from `esp_lcd_panel_io_xxx_config_t`
+ * @return Whether a high priority task has been waken up by this function
+ */
+typedef bool (*esp_lcd_panel_io_color_trans_done_cb_t)(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
+
+/**
+ * @brief Type of LCD panel IO callbacks
+ */
+typedef struct {
+    esp_lcd_panel_io_color_trans_done_cb_t on_color_trans_done; /*!< Callback invoked when color data transfer has finished */
+} esp_lcd_panel_io_callbacks_t;
+
+
+/**
+ * @brief Transmit LCD command and receive corresponding parameters
+ *
+ * @note Commands sent by this function are short, so they are sent using polling transactions.
+ *       The function does not return before the command tranfer is completed.
+ *       If any queued transactions sent by `esp_lcd_panel_io_tx_color()` are still pending when this function is called,
+ *       this function will wait until they are finished and the queue is empty before sending the command(s).
+ *
+ * @param[in]  io LCD panel IO handle, which is created by other factory API like `esp_lcd_new_panel_io_spi()`
+ * @param[in]  lcd_cmd The specific LCD command, set to -1 if no command needed
+ * @param[out] param Buffer for the command data
+ * @param[in]  param_size Size of `param` buffer
+ * @return
+ *          - ESP_ERR_INVALID_ARG   if parameter is invalid
+ *          - ESP_ERR_NOT_SUPPORTED if read is not supported by transport
+ *          - ESP_OK                on success
+ */
+esp_err_t esp_lcd_panel_io_rx_param(esp_lcd_panel_io_handle_t io, int lcd_cmd, void *param, size_t param_size);
+
+/**
  * @brief Transmit LCD command and corresponding parameters
  *
  * @note Commands sent by this function are short, so they are sent using polling transactions.
@@ -28,7 +71,7 @@ typedef struct esp_lcd_i80_bus_t *esp_lcd_i80_bus_handle_t;   /*!< Type of LCD i
  *       this function will wait until they are finished and the queue is empty before sending the command(s).
  *
  * @param[in] io LCD panel IO handle, which is created by other factory API like `esp_lcd_new_panel_io_spi()`
- * @param[in] lcd_cmd The specific LCD command
+ * @param[in] lcd_cmd The specific LCD command (set to -1 if no command needed - only in SPI and I2C)
  * @param[in] param Buffer that holds the command specific parameters, set to NULL if no parameter is needed for the command
  * @param[in] param_size Size of `param` in memory, in bytes, set to zero if no parameter is needed for the command
  * @return
@@ -66,20 +109,16 @@ esp_err_t esp_lcd_panel_io_tx_color(esp_lcd_panel_io_handle_t io, int lcd_cmd, c
 esp_err_t esp_lcd_panel_io_del(esp_lcd_panel_io_handle_t io);
 
 /**
- * @brief Type of LCD panel IO event data
- */
-typedef struct {
-} esp_lcd_panel_io_event_data_t;
-
-/**
- * @brief Declare the prototype of the function that will be invoked when panel IO finishes transferring color data
+ * @brief Register LCD panel IO callbacks
  *
- * @param[in] panel_io LCD panel IO handle, which is created by factory API like `esp_lcd_new_panel_io_spi()`
- * @param[in] edata Panel IO event data, fed by driver
- * @param[in] user_ctx User data, passed from `esp_lcd_panel_io_xxx_config_t`
- * @return Whether a high priority task has been waken up by this function
+ * @param[in] io LCD panel IO handle, which is created by factory API like `esp_lcd_new_panel_io_spi()`
+ * @param[in] cbs structure with all LCD panel IO callbacks
+ * @param[in] user_ctx User private data, passed directly to callback's user_ctx
+ * @return
+ *          - ESP_ERR_INVALID_ARG   if parameter is invalid
+ *          - ESP_OK                on success
  */
-typedef bool (*esp_lcd_panel_io_color_trans_done_cb_t)(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
+esp_err_t esp_lcd_panel_io_register_event_callbacks(esp_lcd_panel_io_handle_t io, const esp_lcd_panel_io_callbacks_t *cbs, void *user_ctx);
 
 /**
  * @brief Panel IO configuration structure, for SPI interface
@@ -115,6 +154,10 @@ typedef struct {
  */
 esp_err_t esp_lcd_new_panel_io_spi(esp_lcd_spi_bus_handle_t bus, const esp_lcd_panel_io_spi_config_t *io_config, esp_lcd_panel_io_handle_t *ret_io);
 
+/**
+ * @brief Panel IO configuration structure, for I2C interface
+ *
+ */
 typedef struct {
     uint32_t dev_addr; /*!< I2C device address */
     esp_lcd_panel_io_color_trans_done_cb_t on_color_trans_done; /*!< Callback invoked when color data transfer has finished */
@@ -125,7 +168,8 @@ typedef struct {
     int lcd_param_bits;         /*!< Bit-width of LCD parameter */
     struct {
         unsigned int dc_low_on_data: 1;  /*!< If this flag is enabled, DC line = 0 means transfer data, DC line = 1 means transfer command; vice versa */
-    } flags;
+        unsigned int disable_control_phase: 1; /*!< If this flag is enabled, the control phase isn't used */
+    } flags; /*!< Extra flags to fine-tune the I2C device */
 } esp_lcd_panel_io_i2c_config_t;
 
 /**
@@ -203,7 +247,7 @@ typedef struct {
         unsigned int swap_color_bytes: 1;   /*!< Swap adjacent two color bytes */
         unsigned int pclk_active_neg: 1;    /*!< The display will write data lines when there's a falling edge on WR signal (a.k.a the PCLK) */
         unsigned int pclk_idle_low: 1;      /*!< The WR signal (a.k.a the PCLK) stays at low level in IDLE phase */
-    } flags;
+    } flags;                                /*!< Panel IO config flags */
 } esp_lcd_panel_io_i80_config_t;
 
 /**

@@ -11,13 +11,15 @@ if(target STREQUAL "linux")
                         "${target}/esp_rom_crc.c"
                         "${target}/esp_rom_md5.c"
                         "${target}/esp_rom_efuse.c")
+    list(APPEND include_dirs "${IDF_PATH}/tools/mocks/soc/include")
 else()
     list(APPEND include_dirs "${target}")
     list(APPEND sources "patches/esp_rom_crc.c"
                         "patches/esp_rom_sys.c"
                         "patches/esp_rom_uart.c"
-                        "patches/esp_rom_tjpgd.c")
-    list(APPEND private_required_comp soc hal)
+                        "patches/esp_rom_tjpgd.c"
+                        "patches/esp_rom_efuse.c")
+    list(APPEND private_required_comp soc hal efuse)
 endif()
 
 if(CONFIG_IDF_TARGET_ARCH_XTENSA)

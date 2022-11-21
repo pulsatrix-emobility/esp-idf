@@ -266,7 +266,7 @@ static void spp_free_slot(spp_slot_t *slot)
 
 static inline void btc_spp_cb_to_app(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
-    esp_spp_cb_t *btc_spp_cb = (esp_spp_cb_t *)btc_profile_cb_get(BTC_PID_SPP);
+    esp_spp_cb_t btc_spp_cb = (esp_spp_cb_t)btc_profile_cb_get(BTC_PID_SPP);
     if (btc_spp_cb) {
         btc_spp_cb(event, param);
     }
@@ -1132,7 +1132,7 @@ void btc_spp_cb_handler(btc_msg_t *msg)
                 // if rx still has data, delay free slot
                 if (slot->close_alarm == NULL && slot->rx.queue && fixed_queue_length(slot->rx.queue) > 0) {
                     tBTA_JV *p_arg = NULL;
-                    if ((p_arg = malloc(sizeof(tBTA_JV))) == NULL) {
+                    if ((p_arg = osi_malloc(sizeof(tBTA_JV))) == NULL) {
                         param.close.status = ESP_SPP_NO_RESOURCE;
                         osi_mutex_unlock(&spp_local_param.spp_slot_mutex);
                         BTC_TRACE_ERROR("%s unable to malloc slot close_alarm arg!", __func__);
@@ -1326,6 +1326,28 @@ int bta_co_rfc_data_outgoing(void *user_data, uint8_t *buf, uint16_t size)
     return 1;
 }
 
+esp_err_t spp_send_data_to_btc(uint32_t handle, int len, uint8_t *p_data, esp_spp_mode_t spp_mode)
+{
+    btc_msg_t msg;
+    btc_spp_args_t arg;
+
+    if (spp_local_param.spp_mode != spp_mode) {
+        BTC_TRACE_WARNING("The current mode used is %d\n", spp_local_param.spp_mode);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    msg.sig = BTC_SIG_API_CALL;
+    msg.pid = BTC_PID_SPP;
+    msg.act = BTC_SPP_ACT_WRITE;
+
+    arg.write.handle = handle;
+    arg.write.len = len;
+    arg.write.p_data = p_data;
+
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_spp_args_t), btc_spp_arg_deep_copy)
+                == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
+}
+
 
 static ssize_t spp_vfs_write(int fd, const void * data, size_t size)
 {
@@ -1405,7 +1427,7 @@ static ssize_t spp_vfs_write(int fd, const void * data, size_t size)
                 }
             }
             if (tx_len == 0) {
-                esp_spp_write(slot->rfc_handle, 0, NULL);
+                spp_send_data_to_btc(slot->rfc_handle, 0, NULL, ESP_SPP_MODE_VFS);
             }
             sent += write_size;
             size -= write_size;
