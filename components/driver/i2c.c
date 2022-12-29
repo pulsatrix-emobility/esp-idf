@@ -65,7 +65,7 @@ static const char *I2C_TAG = "i2c";
 #define I2C_FIFO_FULL_THRESH_VAL       (28)
 #define I2C_FIFO_EMPTY_THRESH_VAL      (5)
 #define I2C_IO_INIT_LEVEL              (1)
-#define I2C_CMD_ALIVE_INTERVAL_TICK    (1000 / portTICK_PERIOD_MS)
+#define I2C_CMD_ALIVE_INTERVAL_TICK    (20 / portTICK_PERIOD_MS)
 #define I2C_CMD_EVT_ALIVE              (0)
 #define I2C_CMD_EVT_DONE               (1)
 #define I2C_EVT_QUEUE_LEN              (1)
@@ -1452,8 +1452,10 @@ esp_err_t i2c_master_cmd_begin(i2c_port_t i2c_num, i2c_cmd_handle_t cmd_handle, 
         i2c_hw_fsm_reset(i2c_num);
         clear_bus_cnt[i2c_num] = 0;
     }
+
     i2c_reset_tx_fifo(i2c_num);
     i2c_reset_rx_fifo(i2c_num);
+
     const i2c_cmd_desc_t *cmd = (const i2c_cmd_desc_t *) cmd_handle;
     /* Before starting the transfer, resetset the number of bytes sent to 0.
      * `i2c_master_cmd_begin_static` will also reset this field for each node
