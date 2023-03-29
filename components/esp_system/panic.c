@@ -370,6 +370,10 @@ void esp_panic_handler(panic_info_t *info)
         esp_panic_handler_reconfigure_wdts();
     }
 #endif /* CONFIG_ESP_COREDUMP_ENABLE */
+
+    // Store CrashLog messages into CrashLog FLASH partition for later inspection
+    store_CrashLog();
+
     wdt_hal_write_protect_disable(&rtc_wdt_ctx);
     wdt_hal_disable(&rtc_wdt_ctx);
     wdt_hal_write_protect_enable(&rtc_wdt_ctx);
@@ -391,13 +395,7 @@ void esp_panic_handler(panic_info_t *info)
         }
     }
 
-    panic_print_str("\r\nPanic handler almost finished...\r\n");
-
-    // Store CrashLog messages into CrashLog FLASH partition for later inspection through MQTT
-    store_CrashLog();
-
-    // Finally, reboot now...
-    panic_print_str("\r\nRebooting now...\r\n\r\n\r\n\r\n");
+    panic_print_str("Rebooting...\r\n");
     panic_restart();
 #else
     disable_all_wdts();
