@@ -227,7 +227,7 @@ static void print_abort_details(const void *f)
 // Control arrives from chip-specific panic handler, environment prepared for
 // the 'main' logic of panic handling. This means that chip-specific stuff have
 // already been done, and panic_info_t has been filled.
-void esp_panic_handler(panic_info_t *info)
+void IRAM_ATTR esp_panic_handler(panic_info_t *info)
 {
     panic_print_str("Entering 'esp_panic_handler'\n");
     
