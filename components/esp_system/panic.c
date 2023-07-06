@@ -291,7 +291,7 @@ void esp_panic_handler_increment_entry_count(void)
 // Control arrives from chip-specific panic handler, environment prepared for
 // the 'main' logic of panic handling. This means that chip-specific stuff have
 // already been done, and panic_info_t has been filled.
-void esp_panic_handler(panic_info_t *info)
+void IRAM_ATTR esp_panic_handler(panic_info_t *info)
 {
     // The port-level panic handler has already called this, but call it again
     // to reset the RTC WDT period
