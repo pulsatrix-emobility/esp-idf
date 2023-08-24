@@ -533,9 +533,10 @@ static void btc_gatts_cb_param_copy_req(btc_msg_t *msg, void *p_dest, void *p_sr
     }
 }
 
-static void btc_gatts_cb_param_copy_free(btc_msg_t *msg, tBTA_GATTS *p_data)
+static void btc_gatts_cb_param_copy_free(btc_msg_t *msg)
 {
     uint16_t event = msg->act;
+    tBTA_GATTS *p_data = (tBTA_GATTS *)msg->arg;
 
     switch (event) {
     case BTA_GATTS_READ_EVT:
@@ -596,8 +597,8 @@ static void btc_gatts_inter_cb(tBTA_GATTS_EVT event, tBTA_GATTS *p_data)
         future_ready(btc_creat_tab_env.complete_future, FUTURE_SUCCESS);
         return;
     }
-    status = btc_transfer_context(&msg, p_data,
-                                  sizeof(tBTA_GATTS), btc_gatts_cb_param_copy_req);
+    status = btc_transfer_context(&msg, p_data, sizeof(tBTA_GATTS),
+                                    btc_gatts_cb_param_copy_req, btc_gatts_cb_param_copy_free);
 
     if (status != BT_STATUS_SUCCESS) {
         BTC_TRACE_ERROR("%s btc_transfer_context failed\n", __func__);
@@ -897,6 +898,8 @@ void btc_gatts_cb_handler(btc_msg_t *msg)
         param.connect.conn_params.interval = p_data->conn.conn_params.interval;
         param.connect.conn_params.latency = p_data->conn.conn_params.latency;
         param.connect.conn_params.timeout = p_data->conn.conn_params.timeout;
+        param.connect.ble_addr_type = p_data->conn.ble_addr_type;
+        param.connect.conn_handle = p_data->conn.conn_handle;
         btc_gatts_cb_to_app(ESP_GATTS_CONNECT_EVT, gatts_if, &param);
         break;
     case BTA_GATTS_DISCONNECT_EVT:
@@ -954,7 +957,7 @@ void btc_gatts_cb_handler(btc_msg_t *msg)
         break;
     }
 
-    btc_gatts_cb_param_copy_free(msg, p_data);
+    btc_gatts_cb_param_copy_free(msg);
 }
 
 void btc_congest_callback(tBTA_GATTS *param)

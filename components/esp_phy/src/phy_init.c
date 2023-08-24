@@ -34,6 +34,7 @@
 #if CONFIG_IDF_TARGET_ESP32
 #include "soc/dport_reg.h"
 #endif
+#include "hal/efuse_hal.h"
 
 #if CONFIG_IDF_TARGET_ESP32
 extern wifi_mac_time_update_cb_t s_wifi_mac_time_update_cb;
@@ -71,7 +72,7 @@ static DRAM_ATTR portMUX_TYPE s_phy_int_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* Memory to store PHY digital registers */
 static uint32_t* s_phy_digital_regs_mem = NULL;
-static uint8_t s_phy_backup_mem_ref = 0;
+static uint8_t s_phy_modem_init_ref = 0;
 
 #if CONFIG_MAC_BB_PD
 uint32_t* s_mac_bb_pd_mem = NULL;
@@ -218,6 +219,11 @@ static inline void phy_digital_regs_load(void)
     }
 }
 
+bool esp_phy_is_initialized(void)
+{
+    return s_is_phy_calibrated;
+}
+
 void esp_phy_enable(void)
 {
     _lock_acquire(&s_phy_access_lock);
@@ -297,11 +303,11 @@ void esp_wifi_bt_power_domain_off(void)
     _lock_release(&s_wifi_bt_pd_controller.lock);
 }
 
-void esp_phy_pd_mem_init(void)
+void esp_phy_modem_init(void)
 {
     _lock_acquire(&s_phy_access_lock);
 
-    s_phy_backup_mem_ref++;
+    s_phy_modem_init_ref++;
     if (s_phy_digital_regs_mem == NULL) {
         s_phy_digital_regs_mem = (uint32_t *)heap_caps_malloc(SOC_PHY_DIG_REGS_MEM_SIZE, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
     }
@@ -310,15 +316,21 @@ void esp_phy_pd_mem_init(void)
 
 }
 
-void esp_phy_pd_mem_deinit(void)
+void esp_phy_modem_deinit(void)
 {
     _lock_acquire(&s_phy_access_lock);
 
-    s_phy_backup_mem_ref--;
-    if (s_phy_backup_mem_ref == 0) {
+    s_phy_modem_init_ref--;
+    if (s_phy_modem_init_ref == 0) {
         s_is_phy_reg_stored = false;
         free(s_phy_digital_regs_mem);
         s_phy_digital_regs_mem = NULL;
+        /* Fix the issue caused by the power domain off.
+        * This issue is only on ESP32C3.
+        */
+#if CONFIG_IDF_TARGET_ESP32C3
+        phy_init_flag();
+#endif
     }
 
     _lock_release(&s_phy_access_lock);
@@ -587,7 +599,7 @@ static esp_err_t load_cal_data_from_nvs_handle(nvs_handle_t handle,
         return ESP_ERR_INVALID_SIZE;
     }
     uint8_t sta_mac[6];
-    esp_efuse_mac_get_default(sta_mac);
+    ESP_ERROR_CHECK(esp_efuse_mac_get_default(sta_mac));
     if (memcmp(sta_mac, cal_data_mac, sizeof(sta_mac)) != 0) {
         ESP_LOGE(TAG, "%s: calibration data MAC check failed: expected " \
                 MACSTR ", found " MACSTR,
@@ -619,7 +631,7 @@ static esp_err_t store_cal_data_to_nvs_handle(nvs_handle_t handle,
     }
 
     uint8_t sta_mac[6];
-    esp_efuse_mac_get_default(sta_mac);
+    ESP_ERROR_CHECK(esp_efuse_mac_get_default(sta_mac));
     err = nvs_set_blob(handle, PHY_CAL_MAC_KEY, sta_mac, sizeof(sta_mac));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "%s: store calibration mac failed(0x%x)\n", __func__, err);
@@ -660,7 +672,7 @@ void esp_phy_load_cal_and_init(void)
     ESP_LOGI(TAG, "phy_version %s", phy_version);
 
 #if CONFIG_IDF_TARGET_ESP32S2
-    phy_eco_version_sel(esp_efuse_get_chip_ver());
+    phy_eco_version_sel(efuse_hal_chip_revision() / 100);
 #endif
     esp_phy_calibration_data_t* cal_data =
             (esp_phy_calibration_data_t*) calloc(sizeof(esp_phy_calibration_data_t), 1);
@@ -699,7 +711,7 @@ void esp_phy_load_cal_and_init(void)
 #endif
 
 #ifdef CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE
-    esp_phy_calibration_mode_t calibration_mode = PHY_RF_CAL_PARTIAL;
+    esp_phy_calibration_mode_t calibration_mode = CONFIG_ESP_PHY_CALIBRATION_MODE;
     uint8_t sta_mac[6];
     if (esp_rom_get_reset_reason(0) == RESET_REASON_CORE_DEEP_SLEEP) {
         calibration_mode = PHY_RF_CAL_NONE;
@@ -710,7 +722,7 @@ void esp_phy_load_cal_and_init(void)
         calibration_mode = PHY_RF_CAL_FULL;
     }
 
-    esp_efuse_mac_get_default(sta_mac);
+    ESP_ERROR_CHECK(esp_efuse_mac_get_default(sta_mac));
     memcpy(cal_data->mac, sta_mac, 6);
     esp_err_t ret = register_chipv7_phy(init_data, cal_data, calibration_mode);
     if (ret == ESP_CAL_DATA_CHECK_FAIL) {

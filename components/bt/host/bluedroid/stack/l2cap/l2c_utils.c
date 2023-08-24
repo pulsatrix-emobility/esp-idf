@@ -1958,7 +1958,7 @@ tL2C_RCB *l2cu_find_ble_rcb_by_psm (UINT16 psm)
 }
 #endif  ///BLE_INCLUDED == TRUE
 
-
+#if (L2CAP_COC_INCLUDED == TRUE)
 /*******************************************************************************
 **
 ** Function         l2cu_process_peer_cfg_req
@@ -2220,7 +2220,6 @@ void l2cu_process_our_cfg_req (tL2C_CCB *p_ccb, tL2CAP_CFG_INFO *p_cfg)
 ** Returns          void
 **
 *******************************************************************************/
-#if (CLASSIC_BT_INCLUDED == TRUE)
 void l2cu_process_our_cfg_rsp (tL2C_CCB *p_ccb, tL2CAP_CFG_INFO *p_cfg)
 {
     /* If peer wants QoS, we are allowed to change the values in a positive response */
@@ -2232,7 +2231,7 @@ void l2cu_process_our_cfg_rsp (tL2C_CCB *p_ccb, tL2CAP_CFG_INFO *p_cfg)
 
     l2c_fcr_adj_our_rsp_options (p_ccb, p_cfg);
 }
-#endif  ///CLASSIC_BT_INCLUDED == TRUE
+#endif // (L2CAP_COC_INCLUDED == TRUE)
 
 
 /*******************************************************************************
@@ -2414,7 +2413,7 @@ BOOLEAN l2cu_create_conn_after_switch (tL2C_LCB *p_lcb)
         clock_offset = (UINT16)(p_inq_info->results.clock_offset);
     } else {
         /* No info known. Use default settings */
-        page_scan_rep_mode = HCI_PAGE_SCAN_REP_MODE_R1;
+        page_scan_rep_mode = HCI_PAGE_SCAN_REP_MODE_R2;
         page_scan_mode = HCI_MANDATARY_PAGE_SCAN_MODE;
 
         clock_offset = (p_dev_rec) ? p_dev_rec->clock_offset : 0;
