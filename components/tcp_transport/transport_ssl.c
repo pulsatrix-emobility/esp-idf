@@ -193,6 +193,11 @@ static int ssl_write(esp_transport_handle_t t, const char *buffer, int len, int 
     }
     int ret = esp_tls_conn_write(ssl->tls, (const unsigned char *) buffer, len);
     if (ret < 0) {
+        if(!ssl || !ssl->tls || !ssl->tls->error_handle){
+          ESP_LOGE(TAG, "INVALID STATE: %s is null", !ssl ? "ssl" : !ssl->tls ? "ssl->tls" : "ssl->tls->error_handle");
+          return ret;
+        }
+
         ESP_LOGE(TAG, "esp_tls_conn_write error, errno=%s", strerror(errno));
         esp_transport_set_errors(t, ssl->tls->error_handle);
     }
