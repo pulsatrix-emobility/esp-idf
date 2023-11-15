@@ -258,6 +258,18 @@ void *multi_heap_malloc(multi_heap_handle_t heap, size_t size)
 #ifdef SLOW
         /* check everything we got back is FREE_FILL_PATTERN & swap for MALLOC_FILL_PATTERN */
         bool ret = verify_fill_pattern(data, size, true, true, true);
+if(!ret) {
+  for(int i=0; i<size; i+=16) {
+    MULTI_HEAP_STDERR_PRINTF("Dump @ %p: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+        data + i,
+        data[i + 0], data[i + 1], data[i + 2], data[i + 3],
+        data[i + 4], data[i + 5], data[i + 6], data[i + 7],
+        data[i + 8], data[i + 9], data[i + 0xa], data[i + 0xb],
+        data[i + 0xc], data[i + 0xd], data[i + 0xe], data[i + 0xf]
+    );
+  }
+}
+
         assert( ret );
 #endif
     }
