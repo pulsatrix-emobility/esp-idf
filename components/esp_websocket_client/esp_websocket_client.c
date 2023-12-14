@@ -567,7 +567,7 @@ static esp_err_t esp_websocket_client_recv(esp_websocket_client_handle_t client)
         client->wait_for_pong_resp = false;
     } else if (client->last_opcode == WS_TRANSPORT_OPCODES_CLOSE) {
         ESP_LOGD(TAG, "Received close frame");
-        client->state = WEBSOCKET_STATE_CLOSING;
+        client->state = client->config->auto_reconnect ? WEBSOCKET_STATE_WAIT_TIMEOUT : WEBSOCKET_STATE_CLOSING;
     }
 
     return ESP_OK;
@@ -705,9 +705,7 @@ static void esp_websocket_client_task(void *pv)
             if (ret < 0) {
                 ESP_LOGW(TAG, "Connection terminated while waiting for clean TCP close");
             }
-            client->run = false;
-            client->state = WEBSOCKET_STATE_UNKNOW;
-            esp_websocket_client_dispatch_event(client, WEBSOCKET_EVENT_CLOSED, NULL, 0);
+            esp_websocket_client_abort_connection(client);
             break;
         }
     }
