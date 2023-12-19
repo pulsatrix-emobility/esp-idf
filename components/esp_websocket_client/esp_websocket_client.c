@@ -877,7 +877,14 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
         if (wlen < 0 || (wlen == 0 && need_write != 0)) {
             ret = wlen;
             ESP_LOGE(TAG, "Network error: esp_transport_write() returned %d, errno=%d", ret, errno);
-            esp_websocket_client_abort_connection(client);
+            esp_transport_close(client->transport);
+
+            if (client->config->auto_reconnect) {
+              client->wait_timeout_ms = WEBSOCKET_RECONNECT_TIMEOUT_MS;
+              client->reconnect_tick_ms = _tick_get_ms();
+              ESP_LOGI(TAG, "Reconnect after %d ms", client->wait_timeout_ms);
+            }
+            client->state = WEBSOCKET_STATE_WAIT_TIMEOUT;
             goto unlock_and_return;
         }
         current_opcode = 0;
