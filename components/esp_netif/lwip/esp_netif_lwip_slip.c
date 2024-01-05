@@ -311,4 +311,17 @@ void sio_send(uint8_t c, sio_fd_t fd)
     }
 }
 
+u32_t sio_write(sio_fd_t fd, u8_t *data, u32_t len)
+{
+    esp_netif_t *esp_netif = fd;
+    ESP_LOGD(TAG, "%s", __func__);
+
+    esp_err_t ret = esp_netif_transmit(esp_netif, (void*)data, len);
+    if (ret != ESP_OK) {
+        // Handle errors
+        ESP_LOGD(TAG, "%s: uart_write_bytes error %i", __func__, ret);
+    }
+    return 0;
+}
+
 #endif /* CONFIG_ESP_NETIF_TCPIP_LWIP */
