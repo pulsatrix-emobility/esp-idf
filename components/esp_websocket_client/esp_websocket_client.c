@@ -162,7 +162,6 @@ static esp_err_t esp_websocket_client_abort_connection(esp_websocket_client_hand
     esp_transport_close(client->transport);
 
     if (client->config->auto_reconnect) {
-        client->wait_timeout_ms = WEBSOCKET_RECONNECT_TIMEOUT_MS;
         client->reconnect_tick_ms = _tick_get_ms();
         ESP_LOGI(TAG, "Reconnect after %d ms", client->wait_timeout_ms);
     }
@@ -437,6 +436,10 @@ esp_websocket_client_handle_t esp_websocket_client_init(const esp_websocket_clie
     });
 
     client->buffer_size = buffer_size;
+
+    // initial delay - can be updated using esp_websocket_client_set_reconnect_delay_ms()
+    client->wait_timeout_ms = WEBSOCKET_RECONNECT_TIMEOUT_MS;
+
     return client;
 
 _websocket_init_fail:
@@ -533,6 +536,10 @@ esp_err_t esp_websocket_client_set_uri(esp_websocket_client_handle_t client, con
         }
     }
     return ESP_OK;
+}
+
+void esp_websocket_client_set_reconnect_delay_ms(esp_websocket_client_handle_t client, int delay_ms) {
+    client->wait_timeout_ms = delay_ms < 100 ? 100 : delay_ms;
 }
 
 static esp_err_t esp_websocket_client_recv(esp_websocket_client_handle_t client)
