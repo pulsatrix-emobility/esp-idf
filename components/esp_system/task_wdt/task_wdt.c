@@ -236,7 +236,7 @@ static esp_err_t delete_entry(bool is_task, void *entry_data)
     twdt_entry_t *entry;
     if (is_task) {
         entry = find_entry_from_task_handle_and_check_all_reset((TaskHandle_t)entry_data, &all_reset);
-        ESP_GOTO_ON_FALSE_ISR((entry != NULL), ESP_ERR_NOT_FOUND, err, TAG, "task not found");
+        ESP_GOTO_ON_FALSE_ISR((entry != NULL), ESP_ERR_NOT_FOUND, err, TAG, "task not found in delete_entry, taskName=%s", pcTaskGetName(entry_data));
     } else {
         entry = (twdt_entry_t *)entry_data;
         bool entry_found = find_entry_and_check_all_reset(entry, &all_reset);
@@ -710,7 +710,7 @@ esp_err_t esp_task_wdt_reset(void)
     bool all_reset;
     twdt_entry_t *entry;
     entry = find_entry_from_task_handle_and_check_all_reset(handle, &all_reset);
-    ESP_GOTO_ON_FALSE_ISR((entry != NULL), ESP_ERR_NOT_FOUND, err, TAG, "task not found");
+    ESP_GOTO_ON_FALSE_ISR((entry != NULL), ESP_ERR_NOT_FOUND, err, TAG, "task not found, taskName=%s", pcTaskGetName(handle));
     // Mark entry as reset and issue timer reset if all entries have been reset
     entry->has_reset = true;    // Reset the task if it's on the task list
     if (all_reset) {    // Reset if all other tasks in list have reset in
