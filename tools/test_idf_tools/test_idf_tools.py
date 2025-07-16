@@ -2,7 +2,6 @@
 #
 # SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
 import re
@@ -10,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     from contextlib import redirect_stdout
@@ -502,10 +502,29 @@ class TestUsage(unittest.TestCase):
 
     def test_export_supported_version_cmake(self):
         tool_to_test = 'cmake'
-        self.run_idf_tools_with_action(['install'])
-        output = self.run_idf_tools_with_action(['export'])
+        supported_version = ''
+        recommended_version = ''
+        for tool in self.tools_dict['tools']:
+            if tool['name'] != tool_to_test:
+                continue
+            for version in tool['versions']:
+                if version['status'] == 'supported':
+                    supported_version = version['name']
+                elif version['status'] == 'recommended':
+                    recommended_version = version['name']
 
-        self.assertNotIn(tool_to_test, output)
+        self.run_idf_tools_with_action(['install'])
+        output = self.run_idf_tools_with_action(['install', f'{tool_to_test}@{supported_version}'])
+        self.assert_tool_installed(output, tool_to_test, supported_version)
+
+        # Remove the recommended version folder installed by install command (in case of Windows)
+        recommended_version_folder = os.path.join(self.temp_tools_dir, 'tools', tool_to_test, recommended_version)
+        if os.path.exists(recommended_version_folder):
+            shutil.rmtree(recommended_version_folder)
+
+        output = self.run_idf_tools_with_action(['export'])
+        self.assertIn(os.path.join(tool_to_test, supported_version), output)
+        self.assertNotIn(os.path.join(tool_to_test, recommended_version), output)
 
 
 class TestMaintainer(unittest.TestCase):
@@ -604,6 +623,31 @@ class TestMaintainer(unittest.TestCase):
         expected_json = self.add_version_get_expected_json('add_version/checksum_expected_override.json', True)
         with open(self.tools_new, 'r') as f1:
             self.assertEqual(json.load(f1), expected_json, "Please check 'tools/tools.new.json' to find a cause!")
+
+
+class TestArmDetection(unittest.TestCase):
+
+    ELF_HEADERS = {
+        idf_tools.PLATFORM_LINUX_ARM64: 'platform_detection/arm64_header.elf',
+        idf_tools.PLATFORM_LINUX_ARMHF: 'platform_detection/armhf_header.elf',
+        idf_tools.PLATFORM_LINUX_ARM32: 'platform_detection/arm32_header.elf',
+    }
+
+    ARM_PLATFORMS = {
+        idf_tools.PLATFORM_LINUX_ARM64,
+        idf_tools.PLATFORM_LINUX_ARMHF,
+        idf_tools.PLATFORM_LINUX_ARM32,
+    }
+
+    def test_arm_detection(self):
+        for platform in idf_tools.Platforms.PLATFORM_FROM_NAME.values():
+            with patch('sys.executable', __file__):  # use invalid ELF as executable. In this case passed parameter must return
+                self.assertEqual(idf_tools.Platforms.detect_linux_arm_platform(platform), platform)
+        # detect_linux_arm_platform() intended to return arch that detected in sys.executable ELF
+        for exec_platform in (idf_tools.PLATFORM_LINUX_ARM64, idf_tools.PLATFORM_LINUX_ARMHF, idf_tools.PLATFORM_LINUX_ARM32):
+            with patch('sys.executable', TestArmDetection.ELF_HEADERS[exec_platform]):
+                for platform in TestArmDetection.ARM_PLATFORMS:
+                    self.assertEqual(idf_tools.Platforms.detect_linux_arm_platform(platform), exec_platform)
 
 
 if __name__ == '__main__':

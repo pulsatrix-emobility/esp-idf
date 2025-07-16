@@ -32,8 +32,14 @@ void test_panic_extram_stack(void);
 
 #if !CONFIG_FREERTOS_UNICORE
 void test_task_wdt_cpu1(void);
-void test_task_wdt_both_cpus(void);
+
+void test_panic_handler_stuck1(void);
+void test_panic_handler_crash1(void);
 #endif
+
+void test_panic_handler_stuck0(void);
+
+void test_panic_handler_crash0(void);
 
 void test_storeprohibited(void);
 
@@ -52,6 +58,10 @@ void test_ub(void);
 void test_assert(void);
 
 void test_assert_cache_disabled(void);
+
+void test_assert_cache_write_back_error_can_print_backtrace(void);
+
+void test_assert_cache_write_back_error_can_print_backtrace2(void);
 
 #ifdef __cplusplus
 }

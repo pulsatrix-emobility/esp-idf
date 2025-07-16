@@ -870,7 +870,13 @@
  *
  * Enable functions that use the filesystem.
  */
+#if CONFIG_MBEDTLS_FS_IO
 #define MBEDTLS_FS_IO
+#else
+#undef MBEDTLS_FS_IO
+#undef MBEDTLS_PSA_ITS_FILE_C
+#undef MBEDTLS_PSA_CRYPTO_STORAGE_C
+#endif
 
 /**
  * \def MBEDTLS_NO_PLATFORM_ENTROPY
@@ -2079,6 +2085,21 @@
 #endif
 
 /**
+ * \def MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME
+ *
+ * Caller: library/ssl_tls.c
+ *
+ * Allow weak certificate verification without a hostname.
+ * This option is not recommended for production use.
+ */
+
+#if CONFIG_MBEDTLS_ALLOW_WEAK_CERTIFICATE_VERIFICATION
+#define MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME
+#else
+#undef MBEDTLS_SSL_CLI_ALLOW_WEAK_CERTIFICATE_VERIFICATION_WITHOUT_HOSTNAME
+#endif
+
+/**
  * \def MBEDTLS_GCM_C
  *
  * Enable the Galois/Counter Mode (GCM).
@@ -2519,6 +2540,21 @@
 #else
 #undef MBEDTLS_SHA384_C
 #undef MBEDTLS_SHA512_C
+#endif
+
+/**
+ * \def MBEDTLS_SHA3_C
+ *
+ *  Enable the SHA3 cryptographic hash algorithm.
+ *
+ * Module:  library/sha3.c
+ *
+ * This module adds support for SHA3.
+ */
+#ifdef CONFIG_MBEDTLS_SHA3_C
+#define MBEDTLS_SHA3_C
+#else
+#undef MBEDTLS_SHA3_C
 #endif
 
 /**

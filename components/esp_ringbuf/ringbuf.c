@@ -394,7 +394,7 @@ static void prvSendItemDoneNoSplit(Ringbuffer_t *pxRingbuffer, uint8_t* pucItem)
      */
     pxCurHeader = (ItemHeader_t *)pxRingbuffer->pucWrite;
     //Skip over Items that have already been written or are dummy items
-    while (((pxCurHeader->uxItemFlags & rbITEM_WRITTEN_FLAG) || (pxCurHeader->uxItemFlags & rbITEM_DUMMY_DATA_FLAG)) && pxRingbuffer->pucWrite != pxRingbuffer->pucAcquire) {
+    while (((pxCurHeader->uxItemFlags & rbITEM_WRITTEN_FLAG) || (pxCurHeader->uxItemFlags & rbITEM_DUMMY_DATA_FLAG))) {
         if (pxCurHeader->uxItemFlags & rbITEM_DUMMY_DATA_FLAG) {
             pxCurHeader->uxItemFlags |= rbITEM_WRITTEN_FLAG;   //Mark as freed (not strictly necessary but adds redundancy)
             pxRingbuffer->pucWrite = pxRingbuffer->pucHead;    //Wrap around due to dummy data
@@ -409,6 +409,12 @@ static void prvSendItemDoneNoSplit(Ringbuffer_t *pxRingbuffer, uint8_t* pucItem)
         if ((pxRingbuffer->pucTail - pxRingbuffer->pucWrite) < rbHEADER_SIZE) {
             pxRingbuffer->pucWrite = pxRingbuffer->pucHead;
         }
+
+        // If the write pointer has caught up to the acquire pointer, we can break out of the loop
+        if (pxRingbuffer->pucWrite == pxRingbuffer->pucAcquire) {
+            break;
+        }
+
         pxCurHeader = (ItemHeader_t *)pxRingbuffer->pucWrite;      //Update header to point to item
     }
 }
@@ -514,6 +520,13 @@ static BaseType_t prvCheckItemAvail(Ringbuffer_t *pxRingbuffer)
         return pdFALSE;     //Byte buffers do not allow multiple retrievals before return
     }
     if ((pxRingbuffer->xItemsWaiting > 0) && ((pxRingbuffer->pucRead != pxRingbuffer->pucWrite) || (pxRingbuffer->uxRingbufferFlags & rbBUFFER_FULL_FLAG))) {
+        // If the ring buffer is a no-split buffer, the read pointer must point to an item that has been written to.
+        if ((pxRingbuffer->uxRingbufferFlags & (rbBYTE_BUFFER_FLAG | rbALLOW_SPLIT_FLAG)) == 0) {
+            ItemHeader_t *pxHeader = (ItemHeader_t *)pxRingbuffer->pucRead;
+            if ((pxHeader->uxItemFlags & rbITEM_WRITTEN_FLAG) == 0) {
+                return pdFALSE;
+            }
+        }
         return pdTRUE;      //Items/data available for retrieval
     } else {
         return pdFALSE;     //No items/data available for retrieval
@@ -997,9 +1010,6 @@ BaseType_t xRingbufferSendAcquire(RingbufHandle_t xRingbuffer, void **ppvItem, s
     if (xItemSize > pxRingbuffer->xMaxItemSize) {
         return pdFALSE;     //Data will never ever fit in the queue.
     }
-    if ((pxRingbuffer->uxRingbufferFlags & rbBYTE_BUFFER_FLAG) && xItemSize == 0) {
-        return pdTRUE;      //Sending 0 bytes to byte buffer has no effect
-    }
 
     return prvSendAcquireGeneric(pxRingbuffer, NULL, ppvItem, xItemSize, xTicksToWait);
 }
@@ -1110,6 +1120,7 @@ void *xRingbufferReceive(RingbufHandle_t xRingbuffer, size_t *pxItemSize, TickTy
 
     //Check arguments
     configASSERT(pxRingbuffer && pxItemSize);
+    configASSERT((pxRingbuffer->uxRingbufferFlags & rbALLOW_SPLIT_FLAG) == 0);    // This function must not be called for allow-split buffers
 
     //Attempt to retrieve an item
     void *pvTempItem;
@@ -1126,6 +1137,7 @@ void *xRingbufferReceiveFromISR(RingbufHandle_t xRingbuffer, size_t *pxItemSize)
 
     //Check arguments
     configASSERT(pxRingbuffer && pxItemSize);
+    configASSERT((pxRingbuffer->uxRingbufferFlags & rbALLOW_SPLIT_FLAG) == 0);    // This function must not be called for allow-split buffers
 
     //Attempt to retrieve an item
     void *pvTempItem;
@@ -1391,6 +1403,11 @@ RingbufHandle_t xRingbufferCreateWithCaps(size_t xBufferSize, RingbufferType_t x
     RingbufHandle_t xRingbuffer;
     StaticRingbuffer_t *pxStaticRingbuffer;
     uint8_t *pucRingbufferStorage;
+
+    //Allocate memory
+    if (xBufferType != RINGBUF_TYPE_BYTEBUF) {
+        xBufferSize = rbALIGN_SIZE(xBufferSize);    //xBufferSize is rounded up for no-split/allow-split buffers
+    }
 
     pxStaticRingbuffer = heap_caps_malloc(sizeof(StaticRingbuffer_t), (uint32_t)uxMemoryCaps);
     pucRingbufferStorage = heap_caps_malloc(xBufferSize, (uint32_t)uxMemoryCaps);

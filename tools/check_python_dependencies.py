@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 #
-# SPDX-FileCopyrightText: 2018-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2018-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import argparse
 import os
 import re
 import sys
+from typing import Optional
 
 try:
     from packaging.requirements import Requirement
@@ -17,12 +18,14 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from importlib.metadata import requires
-    from importlib.metadata import version as get_version
+    from importlib.metadata import requires as _requires
+    from importlib.metadata import version as _version
+    from importlib.metadata import PackageNotFoundError
 except ImportError:
     # compatibility for python <=3.7
-    from importlib_metadata import requires  # type: ignore
-    from importlib_metadata import version as get_version  # type: ignore
+    from importlib_metadata import requires as _requires  # type: ignore
+    from importlib_metadata import version as _version  # type: ignore
+    from importlib_metadata import PackageNotFoundError  # type: ignore
 
 try:
     from typing import Set
@@ -33,24 +36,76 @@ except ImportError:
 
 PYTHON_PACKAGE_RE = re.compile(r'[^<>=~]+')
 
+
+def validate_requirement_list(file_path: str) -> str:
+    """Validate that a requirement file exists and is readable."""
+    if not os.path.isfile(file_path):
+        raise argparse.ArgumentTypeError(
+            f'Requirement file {file_path} not found\n'
+            'Please make sure the file path is correct.\n'
+            'In case the file was removed, please run the export script again, to update the environment.'
+        )
+    try:
+        open(file_path, encoding='utf-8').close()
+    except IOError as e:
+        raise argparse.ArgumentTypeError(f'Cannot read requirement file {file_path}: {e}')
+    return file_path
+
+
+# The version and requires function from importlib.metadata in python prior
+# 3.10 does perform distribution name normalization before searching for
+# package distribution. This might cause problems for package with dot in its
+# name as the wheel build backend(e.g. setuptools >= 75.8.1), may perform
+# distribution name normalization. If the package name is not found, try again
+# with normalized name.
+# https://packaging.python.org/en/latest/specifications/binary-distribution-format/#escaping-and-unicode
+def normalize_name(name: str) -> str:
+    return re.sub(r'[-_.]+', '-', name).lower().replace('-', '_')
+
+
+def get_version(name: str) -> str:
+    try:
+        version = _version(name)
+    except PackageNotFoundError:
+        version = _version(normalize_name(name))
+    return version
+
+
+def get_requires(name: str) -> Optional[list]:
+    try:
+        requires = _requires(name)
+    except PackageNotFoundError:
+        requires = _requires(normalize_name(name))
+    return requires
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ESP-IDF Python package dependency checker')
-    parser.add_argument('--requirements', '-r',
-                        help='Path to a requirements file (can be used multiple times)',
-                        action='append', default=[])
-    parser.add_argument('--constraints', '-c', default=[],
-                        help='Path to a constraints file (can be used multiple times)',
-                        action='append')
+    parser.add_argument(
+        '--requirements',
+        '-r',
+        help='Path to a requirements file (can be used multiple times)',
+        action='append',
+        default=[],
+        type=validate_requirement_list,
+    )
+    parser.add_argument(
+        '--constraints',
+        '-c',
+        default=[],
+        help='Path to a constraints file (can be used multiple times)',
+        action='append',
+    )
     args = parser.parse_args()
 
     required_set = set()
     for req_path in args.requirements:
-        with open(req_path) as f:
+        with open(req_path, encoding='utf-8') as f:
             required_set |= set(i for i in map(str.strip, f.readlines()) if len(i) > 0 and not i.startswith('#'))
 
     constr_dict = {}  # for example package_name -> package_name==1.0
     for const_path in args.constraints:
-        with open(const_path) as f:
+        with open(const_path, encoding='utf-8') as f:
             for con in [i for i in map(str.strip, f.readlines()) if len(i) > 0 and not i.startswith('#')]:
                 if con.startswith('file://'):
                     con = os.path.basename(con)
@@ -108,7 +163,7 @@ if __name__ == '__main__':
                 dependency_requirements = set()
                 extras = list(requirement.extras) or ['']
                 # `requires` returns all sub-requirements including all extras - we need to filter out just required ones
-                for name in requires(requirement.name) or []:
+                for name in get_requires(requirement.name) or []:
                     sub_req = Requirement(name)
                     # check extras e.g. esptool[hsm]
                     for extra in extras:

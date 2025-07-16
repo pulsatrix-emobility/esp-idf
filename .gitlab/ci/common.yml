@@ -6,20 +6,20 @@ stages:
   - pre_check
   - build
   - assign_test
+  - build_doc
   - target_test
   - host_test
-  - build_doc
   - test_deploy
   - deploy
   - post_deploy
 
 variables:
-# System environment
+  # System environment
 
   # Common parameters for the 'make' during CI tests
   MAKEFLAGS: "-j5 --no-keep-going"
 
-# GitLab-CI environment
+  # GitLab-CI environment
   # Thanks to pack-objects cache, clone strategy should behave faster than fetch
   #   so we pick "clone" as default git strategy
   # Shiny runners by default remove the CI_PROJECT_DIR every time at the beginning of one job
@@ -39,7 +39,7 @@ variables:
   GIT_FETCH_EXTRA_FLAGS: "--no-recurse-submodules --prune --prune-tags"
   # we're using .cache folder for caches
   GIT_CLEAN_FLAGS: -ffdx -e .cache/
-  LATEST_GIT_TAG: v5.2.1
+  LATEST_GIT_TAG: v5.2.5
 
   SUBMODULE_FETCH_TOOL: "tools/ci/ci_fetch_submodule.py"
   # by default we will fetch all submodules
@@ -165,13 +165,21 @@ variables:
   fi
 
   # Custom OpenOCD
-  if [[ ! -z "$OOCD_DISTRO_URL" && "$CI_JOB_STAGE" == "target_test" ]]; then
-    echo "Using custom OpenOCD from ${OOCD_DISTRO_URL}"
-    wget $OOCD_DISTRO_URL
-    ARCH_NAME=$(basename $OOCD_DISTRO_URL)
-    tar -x -f $ARCH_NAME
-    export OPENOCD_SCRIPTS=$PWD/openocd-esp32/share/openocd/scripts
-    export PATH=$PWD/openocd-esp32/bin:$PATH
+  if [[ "$CI_JOB_STAGE" == "target_test" ]]; then
+    machine="$(uname -m)"
+    if [[ "$machine" == "armv7l" ]] ; then
+      OOCD_DISTRO_URL="$OOCD_DISTRO_URL_ARMHF"
+    elif [[ "$machine" == "aarch64" ]] ; then
+      OOCD_DISTRO_URL="$OOCD_DISTRO_URL_ARM64"
+    fi
+    if [[ ! -z "$OOCD_DISTRO_URL" ]]; then
+      echo "Using custom OpenOCD from ${OOCD_DISTRO_URL}"
+      wget $OOCD_DISTRO_URL
+      ARCH_NAME=$(basename $OOCD_DISTRO_URL)
+      tar -x -f $ARCH_NAME
+      export OPENOCD_SCRIPTS=$PWD/openocd-esp32/share/openocd/scripts
+      export PATH=$PWD/openocd-esp32/bin:$PATH
+    fi
   fi
 
   if [[ -n "$CI_PYTHON_TOOL_REPO" ]]; then
@@ -207,13 +215,14 @@ variables:
     - *setup_tools_and_idf_python_venv
     - fetch_submodules
 
-.after_script:build:macos:upload-when-fail:
+.after_script:build:macos:upload-failed-job-logs:ccache-show-stats:
   after_script:
     # macos is running shell executor, which means it would use
     # the system installed /usr/local/bin/python3 by default.
     # Ensure pyenv and PYENV_VERSION installed
     - eval "$(pyenv init -)"
     - *upload_failed_job_log_artifacts
+    - *show_ccache_statistics
 
 .before_script:build:
   before_script:
@@ -224,7 +233,7 @@ variables:
     - export EXTRA_CFLAGS=${PEDANTIC_CFLAGS}
     - export EXTRA_CXXFLAGS=${PEDANTIC_CXXFLAGS}
 
-.after_script:build:ccache:
+.after_script:build:ccache-show-stats:
   after_script:
     - *show_ccache_statistics
     - *upload_failed_job_log_artifacts

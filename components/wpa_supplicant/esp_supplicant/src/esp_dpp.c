@@ -40,15 +40,11 @@ struct action_rx_param {
 
 static int esp_dpp_post_evt(uint32_t evt_id, uint32_t data)
 {
-    dpp_event_t *evt = os_zalloc(sizeof(dpp_event_t));
-    int ret = ESP_OK;
+    dpp_event_t evt;
+    esp_err_t ret = ESP_OK;
 
-    if (evt == NULL) {
-        ret = ESP_ERR_NO_MEM;
-        goto end;
-    }
-    evt->id = evt_id;
-    evt->data = data;
+    evt.id = evt_id;
+    evt.data = data;
     if (s_dpp_api_lock) {
         DPP_API_LOCK();
     } else {
@@ -67,10 +63,7 @@ static int esp_dpp_post_evt(uint32_t evt_id, uint32_t data)
 
     return ret;
 end:
-    if (evt) {
-        os_free(evt);
-    }
-    wpa_printf(MSG_ERROR,"DPP: Failed to send event %d to DPP task", evt_id);
+    wpa_printf(MSG_ERROR, "DPP: Failed to send event %d to DPP task", evt_id);
     return ret;
 }
 
@@ -86,7 +79,7 @@ static uint8_t esp_dpp_deinit_auth(void)
 
 static void esp_dpp_call_cb(esp_supp_dpp_event_t evt, void *data)
 {
-    if ( evt == ESP_SUPP_DPP_FAIL && s_dpp_ctx.dpp_auth) {
+    if (s_dpp_ctx.dpp_auth) {
         esp_dpp_deinit_auth();
     }
     s_dpp_ctx.dpp_event_cb(evt, data);
@@ -177,6 +170,7 @@ static void esp_dpp_rx_auth_req(struct action_rx_param *rx_param, uint8_t *dpp_d
                                          own_bi, rx_param->channel,
                                          (const u8 *)&rx_param->action_frm->u.public_action.v, dpp_data, len);
     os_memcpy(s_dpp_ctx.dpp_auth->peer_mac_addr, rx_param->sa, ETH_ALEN);
+    wpa_printf(MSG_DEBUG, "DPP: Sending authentication response.");
     esp_dpp_send_action_frame(rx_param->sa, wpabuf_head(s_dpp_ctx.dpp_auth->resp_msg),
                           wpabuf_len(s_dpp_ctx.dpp_auth->resp_msg),
                           rx_param->channel, OFFCHAN_TX_WAIT_TIME);
@@ -380,17 +374,16 @@ static void esp_dpp_rx_action(struct action_rx_param *rx_param)
 
 static void esp_dpp_task(void *pvParameters )
 {
-    dpp_event_t *evt;
+    dpp_event_t evt;
     bool task_del = false;
 
     for (;;) {
         if (os_queue_recv(s_dpp_evt_queue, &evt, OS_BLOCK) == TRUE) {
-            if (evt->id >= SIG_DPP_MAX) {
-                os_free(evt);
+            if (evt.id >= SIG_DPP_MAX) {
                 continue;
             }
 
-            switch (evt->id) {
+            switch (evt.id) {
             case SIG_DPP_DEL_TASK:
                 struct dpp_bootstrap_params_t *params = &s_dpp_ctx.bootstrap_params;
                 eloop_cancel_timeout(esp_dpp_auth_conf_wait_timeout, NULL, NULL);
@@ -411,7 +404,7 @@ static void esp_dpp_task(void *pvParameters )
                 break;
 
             case SIG_DPP_BOOTSTRAP_GEN: {
-                char *command = (char *)evt->data;
+                char *command = (char *)evt.data;
                 const char *uri;
 
                 s_dpp_ctx.id = dpp_bootstrap_gen(s_dpp_ctx.dpp_global, command);
@@ -423,7 +416,7 @@ static void esp_dpp_task(void *pvParameters )
             break;
 
             case SIG_DPP_RX_ACTION: {
-                esp_dpp_rx_action((struct action_rx_param *)evt->data);
+                esp_dpp_rx_action((struct action_rx_param *)evt.data);
             }
             break;
 
@@ -461,8 +454,6 @@ static void esp_dpp_task(void *pvParameters )
                 break;
             }
 
-            os_free(evt);
-
             if (task_del) {
                 break;
             }
@@ -473,7 +464,7 @@ static void esp_dpp_task(void *pvParameters )
     s_dpp_evt_queue = NULL;
 
     if (s_dpp_api_lock) {
-        os_semphr_delete(s_dpp_api_lock);
+        os_mutex_delete(s_dpp_api_lock);
         s_dpp_api_lock = NULL;
     }
 
@@ -704,7 +695,7 @@ esp_err_t esp_supp_dpp_init(esp_supp_dpp_event_cb_t cb)
         return ESP_FAIL;
     }
     if (s_dpp_ctx.dpp_global) {
-        wpa_printf(MSG_ERROR, "DPP: failed to init as init already done.");
+        wpa_printf(MSG_ERROR, "DPP: failed to init as init already done. Please deinit first and retry.");
         return ESP_FAIL;
     }
 

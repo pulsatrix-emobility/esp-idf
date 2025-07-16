@@ -2,7 +2,7 @@
 
 /*
  * SPDX-FileCopyrightText: 2017 Intel Corporation
- * SPDX-FileContributor: 2018-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -22,7 +22,9 @@
 #include "prov_common.h"
 #include "prov_node.h"
 
+#if CONFIG_BLE_MESH_V11_SUPPORT
 #include "mesh_v1.1/utils.h"
+#endif
 
 #if (CONFIG_BLE_MESH_NODE && CONFIG_BLE_MESH_PB_GATT) || \
      CONFIG_BLE_MESH_GATT_PROXY_SERVER
@@ -826,6 +828,12 @@ static void proxy_connected(struct bt_mesh_conn *conn, uint8_t err)
 
     BT_DBG("conn %p err 0x%02x", conn, err);
 
+    if (gatt_svc == MESH_GATT_PROV && conn_count == 1) {
+       BT_WARN("Only one prov connection could exists");
+       bt_mesh_gatts_disconnect(conn, 0x13);
+       return;
+    }
+
     conn_count++;
 
     /* Since we use ADV_OPT_ONE_TIME */
@@ -1333,7 +1341,7 @@ int bt_mesh_proxy_server_segment_send(struct bt_mesh_conn *conn, uint8_t type,
     net_buf_simple_pull(msg, mtu);
 
     while (msg->len) {
-        if (msg->len + 1 < mtu) {
+        if (msg->len + 1 <= mtu) {
             net_buf_simple_push_u8(msg, BLE_MESH_PROXY_PDU_HDR(BLE_MESH_PROXY_SAR_LAST, type));
             proxy_send(conn, msg->data, msg->len);
             break;

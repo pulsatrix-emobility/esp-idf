@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -64,6 +64,7 @@ static const char *I2C_TAG = "i2c";
 #define I2C_CMD_USER_ALLOC_ERR_STR     "i2c command link allocation error: the buffer provided is too small."
 #define I2C_TRANS_MODE_ERR_STR         "i2c trans mode error"
 #define I2C_MODE_ERR_STR               "i2c mode error"
+#define I2C_CLEAR_BUS_ERR_STR          "clear bus error"
 #define I2C_SDA_IO_ERR_STR             "sda gpio number error"
 #define I2C_SCL_IO_ERR_STR             "scl gpio number error"
 #define I2C_SCL_SDA_EQUAL_ERR_STR      "scl and sda gpio numbers are the same"
@@ -121,6 +122,8 @@ static const char *I2C_TAG = "i2c";
 #else
 #define I2C_RCC_ATOMIC()
 #endif
+
+#define I2C_CLR_BUS_TIMEOUT_MS        (50)  // 50ms is sufficient for clearing the bus
 
 /**
  * I2C bus are defined in the header files, let's check that the values are correct
@@ -626,6 +629,7 @@ esp_err_t i2c_get_data_mode(i2c_port_t i2c_num, i2c_trans_mode_t *tx_trans_mode,
  **/
 static esp_err_t i2c_master_clear_bus(i2c_port_t i2c_num)
 {
+    esp_err_t ret = ESP_OK;
 #if !SOC_I2C_SUPPORT_HW_CLR_BUS
     const int scl_half_period = I2C_CLR_BUS_HALF_PERIOD_US; // use standard 100kHz data rate
     int i = 0;
@@ -653,9 +657,23 @@ static esp_err_t i2c_master_clear_bus(i2c_port_t i2c_num)
     gpio_set_level(sda_io, 1); // STOP, SDA low -> high while SCL is HIGH
     i2c_set_pin(i2c_num, sda_io, scl_io, 1, 1, I2C_MODE_MASTER);
 #else
-    i2c_ll_master_clr_bus(i2c_context[i2c_num].hal.dev, I2C_CLR_BUS_SCL_NUM);
+    i2c_ll_master_clr_bus(i2c_context[i2c_num].hal.dev, I2C_CLR_BUS_SCL_NUM, true);
+    // If the i2c master clear bus state machine got disturbed when working, it would go into error state.
+    // The solution here is to use freertos tick counter to set a timeout threshold. If it doesn't return on time,
+    // return invalid state and turn off the state machine as its always wrong.
+    TickType_t start_tick = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(I2C_CLR_BUS_TIMEOUT_MS);
+    while (i2c_ll_master_is_bus_clear_done(i2c_context[i2c_num].hal.dev)) {
+        if ((xTaskGetTickCount() - start_tick) > timeout_ticks) {
+            ESP_LOGE(I2C_TAG, I2C_CLEAR_BUS_ERR_STR);
+            i2c_ll_master_clr_bus(i2c_context[i2c_num].hal.dev, 0, false);
+            ret = ESP_ERR_INVALID_STATE;
+            break;
+        }
+    }
+    i2c_ll_update(i2c_context[i2c_num].hal.dev);
 #endif
-    return ESP_OK;
+    return ret;
 }
 
 /**if the power and SDA/SCL wires are in proper condition, everything works find with reading the slave.
@@ -1675,6 +1693,7 @@ int i2c_slave_read_buffer(i2c_port_t i2c_num, uint8_t *data, size_t max_size, Ti
 }
 #endif
 
+#if !CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK
 /**
  * @brief This function will be called during start up, to check that this legacy i2c driver is not running along with the new I2C driver
  */
@@ -1690,3 +1709,4 @@ static void check_i2c_driver_conflict(void)
     }
     ESP_EARLY_LOGW(I2C_TAG, "This driver is an old driver, please migrate your application code to adapt `driver/i2c_master.h`");
 }
+#endif //CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK

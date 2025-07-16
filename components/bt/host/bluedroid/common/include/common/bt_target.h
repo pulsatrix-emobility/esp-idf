@@ -195,10 +195,63 @@
 #define BLE_50_FEATURE_SUPPORT   FALSE
 #endif
 
+#if (UC_BT_BLE_ENABLED ==TRUE)
 #if (UC_BT_BLE_42_FEATURES_SUPPORTED == TRUE || BLE_50_FEATURE_SUPPORT == FALSE)
 #define BLE_42_FEATURE_SUPPORT   TRUE
 #else
 #define BLE_42_FEATURE_SUPPORT   FALSE
+#endif
+#else
+#define BLE_42_FEATURE_SUPPORT   FALSE
+#define BLE_50_FEATURE_SUPPORT   FALSE
+#endif /* UC_BT_BLE_ENABLED */
+
+#if (UC_BT_BLE_42_DTM_TEST_EN == TRUE)
+#define BLE_42_DTM_TEST_EN       TRUE
+#else
+#define BLE_42_DTM_TEST_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_42_ADV_EN == TRUE)
+#define BLE_42_ADV_EN       TRUE
+#else
+#define BLE_42_ADV_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_42_SCAN_EN == TRUE)
+#define BLE_42_SCAN_EN       TRUE
+#else
+#define BLE_42_SCAN_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_50_EXTEND_ADV_EN == TRUE)
+#define BLE_50_EXTEND_ADV_EN       TRUE
+#else
+#define BLE_50_EXTEND_ADV_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_50_PERIODIC_ADV_EN == TRUE)
+#define BLE_50_PERIODIC_ADV_EN       TRUE
+#else
+#define BLE_50_PERIODIC_ADV_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_50_EXTEND_SCAN_EN == TRUE)
+#define BLE_50_EXTEND_SCAN_EN       TRUE
+#else
+#define BLE_50_EXTEND_SCAN_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_50_EXTEND_SYNC_EN == TRUE)
+#define BLE_50_EXTEND_SYNC_EN       TRUE
+#else
+#define BLE_50_EXTEND_SYNC_EN       FALSE
+#endif
+
+#if (UC_BT_BLE_50_DTM_TEST_EN == TRUE)
+#define BLE_50_DTM_TEST_EN       TRUE
+#else
+#define BLE_50_DTM_TEST_EN       FALSE
 #endif
 
 #if (UC_BT_BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER == TRUE)
@@ -217,6 +270,108 @@
 #define BLE_FEAT_CREATE_SYNC_ENH   TRUE
 #else
 #define BLE_FEAT_CREATE_SYNC_ENH   FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_EN == TRUE)
+#define BLE_FEAT_ISO_EN     TRUE
+#else
+#define BLE_FEAT_ISO_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_60_EN == TRUE)
+#define BLE_FEAT_ISO_60_EN     TRUE
+#else
+#define BLE_FEAT_ISO_60_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_BIG_BROCASTER == TRUE)
+#define BLE_FEAT_ISO_BIG_BROCASTER_EN   TRUE
+#else
+#define BLE_FEAT_ISO_BIG_BROCASTER_EN   FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_BIG_SYNCER == TRUE)
+#define BLE_FEAT_ISO_BIG_SYNCER_EN   TRUE
+#else
+#define BLE_FEAT_ISO_BIG_SYNCER_EN   FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_CIG_CENTRAL == TRUE)
+#define BLE_FEAT_ISO_CIG_CENTRAL_EN   TRUE
+#else
+#define BLE_FEAT_ISO_CIG_CENTRAL_EN   FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_ISO_CIG_PERIPHERAL == TRUE)
+#define BLE_FEAT_ISO_CIG_PERIPHERAL_EN   TRUE
+#else
+#define BLE_FEAT_ISO_CIG_PERIPHERAL_EN   FALSE
+#endif
+
+#if ((BLE_FEAT_ISO_CIG_CENTRAL_EN == TRUE) || (BLE_FEAT_ISO_CIG_PERIPHERAL_EN == TRUE))
+#define BLE_FEAT_ISO_CIG_EN             TRUE
+#else
+#define BLE_FEAT_ISO_CIG_EN             FALSE
+#endif
+
+#ifdef UC_BT_BLE_ISO_CIS_MAX_COUNT
+#define BLE_ISO_CIS_MAX_COUNT   UC_BT_BLE_ISO_CIS_MAX_COUNT
+#else
+#define BLE_ISO_CIS_MAX_COUNT   (0)
+#endif
+
+#ifdef CONFIG_BT_BLE_ISO_BIS_MAX_COUNT
+#define BLE_ISO_BIS_MAX_COUNT   CONFIG_BT_BLE_ISO_BIS_MAX_COUNT
+#else
+#define BLE_ISO_BIS_MAX_COUNT   (0)
+#endif
+
+#ifdef UC_BT_BLE_ISO_STD_FLOW_CTRL
+#define BLE_ISO_STD_FLOW_CTRL        TRUE
+#endif
+
+#ifdef UC_BT_BLE_ISO_NON_STD_FLOW_CTRL
+#define BLE_ISO_NON_STD_FLOW_CTRL        TRUE
+#endif
+
+#if ((UC_BT_BLE_ISO_STD_FLOW_CTRL == TRUE) && (UC_BT_BLE_ISO_NON_STD_FLOW_CTRL == TRUE))
+#error "Only one of standard or non-standard can be enabled"
+#endif
+
+#if (UC_BT_BLE_FEAT_CTE_EN == TRUE)
+#define BLE_FEAT_CTE_EN     TRUE
+#else
+#define BLE_FEAT_CTE_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_CTE_CONNECTIONLESS_EN == TRUE)
+#define BLE_FEAT_CTE_CONNECTIONLESS_EN     TRUE
+#else
+#define BLE_FEAT_CTE_CONNECTIONLESS_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_CTE_CONNECTION_EN == TRUE)
+#define BLE_FEAT_CTE_CONNECTION_EN     TRUE
+#else
+#define BLE_FEAT_CTE_CONNECTION_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_POWER_CONTROL == TRUE)
+#define BLE_FEAT_POWER_CONTROL_EN     TRUE
+#else
+#define BLE_FEAT_POWER_CONTROL_EN     FALSE
+#endif
+
+#if (UC_BT_BLE_FEAT_CONN_SUBRATING == TRUE)
+#define BLE_FEAT_CONN_SUBRATING     TRUE
+#else
+#define BLE_FEAT_CONN_SUBRATING     FALSE
+#endif
+
+#if (UC_BT_BLE_VENDOR_HCI_EN == TRUE)
+#define BLE_VENDOR_HCI_EN TRUE
+#else
+#define BLE_VENDOR_HCI_EN FALSE
 #endif
 
 #if (UC_BT_BLE_HIGH_DUTY_ADV_INTERVAL == TRUE)
@@ -289,6 +444,12 @@
 #define BLE_SMP_ID_RESET_ENABLE          TRUE
 #else
 #define BLE_SMP_ID_RESET_ENABLE          FALSE
+#endif
+
+#if (UC_BT_BLE_SMP_BOND_NVS_FLASH)
+#define BLE_SMP_BOND_NVS_FLASH      TRUE
+#else
+#define BLE_SMP_BOND_NVS_FLASH      FALSE
 #endif
 
 #ifdef UC_BTDM_BLE_ADV_REPORT_FLOW_CTRL_SUPP
@@ -522,12 +683,6 @@
 
 #ifndef BTA_AV_CO_CP_SCMS_T
 #define BTA_AV_CO_CP_SCMS_T  FALSE
-#endif
-
-#if UC_BT_BLE_HOST_QUEUE_CONGESTION_CHECK
-#define SCAN_QUEUE_CONGEST_CHECK  TRUE
-#else
-#define SCAN_QUEUE_CONGEST_CHECK  FALSE
 #endif
 
 #ifdef UC_CONFIG_BT_GATTS_PPCP_CHAR_GAP
@@ -905,9 +1060,82 @@
 #define BTM_SEC_MAX_DEVICE_RECORDS  UC_BT_SMP_MAX_BONDS
 #endif
 
-/* The number of security records for services. 32 AS Default*/
+#if BTA_SDP_INCLUDED
+#define BTM_SDP_SEC_SERVICE_RECORDS 1
+#else
+#define BTM_SDP_SEC_SERVICE_RECORDS 0
+#endif
+
+#if BTA_AG_INCLUDED
+#define BTM_AG_SEC_SERVICE_RECORDS 1
+#else
+#define BTM_AG_SEC_SERVICE_RECORDS 0
+#endif
+
+#if BTA_HF_INCLUDED
+#define BTM_HF_SEC_SERVICE_RECORDS 1
+#else
+#define BTM_HF_SEC_SERVICE_RECORDS 0
+#endif
+
+#if BTA_JV_INCLUDED
+#define BTM_JV_SEC_SERVICE_RECORDS (MAX_RFC_PORTS - BTM_HF_SEC_SERVICE_RECORDS - BTM_AG_SEC_SERVICE_RECORDS)
+#else
+#define BTM_JV_SEC_SERVICE_RECORDS 0
+#endif
+
+#if AVCT_INCLUDED
+#if AVCT_BROWSE_INCLUDED
+#define BTM_AVCT_SEC_SERVICE_RECORDS 2
+#else
+#define BTM_AVCT_SEC_SERVICE_RECORDS 1
+#endif // AVCT_BROWSE_INCLUDED
+#else
+#define BTM_AVCT_SEC_SERVICE_RECORDS 0
+#endif
+
+#if AVDT_INCLUDED
+#if AVDT_REPORTING
+#define BTM_AVDT_SEC_SERVICE_RECORDS 3
+#else
+#define BTM_AVDT_SEC_SERVICE_RECORDS 2
+#endif // AVDT_INCLUDED
+#else
+#define BTM_AVDT_SEC_SERVICE_RECORDS 0
+#endif
+
+#if GAP_CONN_INCLUDED
+#define BTM_GAP_SEC_SERVICE_RECORDS GAP_MAX_CONNECTIONS
+#else
+#define BTM_GAP_SEC_SERVICE_RECORDS 0
+#endif
+
+#if HID_DEV_INCLUDED
+#define BTM_HIDD_SEC_SERVICE_RECORDS 3
+#else
+#define BTM_HIDD_SEC_SERVICE_RECORDS 0
+#endif
+
+#if HID_HOST_INCLUDED
+#define BTM_HIDH_SEC_SERVICE_RECORDS 3
+#else
+#define BTM_HIDH_SEC_SERVICE_RECORDS 0
+#endif
+
+#if BLE_INCLUDED
+#define BTM_GATT_SEC_SERVICE_RECORDS 1
+#else
+#define BTM_GATT_SEC_SERVICE_RECORDS 0
+#endif
+
+#define BTM_SEC_DEV_SERVICE_RECORDS  1
+
+/* The number of security records for services. */
 #ifndef BTM_SEC_MAX_SERVICE_RECORDS
-#define BTM_SEC_MAX_SERVICE_RECORDS 8 // 32
+#define BTM_SEC_MAX_SERVICE_RECORDS (BTM_SDP_SEC_SERVICE_RECORDS + BTM_AG_SEC_SERVICE_RECORDS     \
+   + BTM_AVCT_SEC_SERVICE_RECORDS + BTM_AVDT_SEC_SERVICE_RECORDS + BTM_GAP_SEC_SERVICE_RECORDS    \
+   + BTM_HIDD_SEC_SERVICE_RECORDS  + BTM_GATT_SEC_SERVICE_RECORDS + BTM_JV_SEC_SERVICE_RECORDS    \
+   + BTM_HIDH_SEC_SERVICE_RECORDS + BTM_SEC_DEV_SERVICE_RECORDS + BTM_HF_SEC_SERVICE_RECORDS)
 #endif
 
 /* If True, force a retrieval of remote device name for each bond in case it's changed */
@@ -1248,7 +1476,72 @@
 #endif
 
 #ifndef BLE_ANDROID_CONTROLLER_SCAN_FILTER
-#define BLE_ANDROID_CONTROLLER_SCAN_FILTER            TRUE
+#define BLE_ANDROID_CONTROLLER_SCAN_FILTER            FALSE
+#endif
+
+#ifndef BLE_HOST_BLE_MULTI_ADV_EN
+#define BLE_HOST_BLE_MULTI_ADV_EN                     FALSE
+#endif
+
+#ifndef BLE_HOST_TRACK_ADVERTISER_EN
+#define BLE_HOST_TRACK_ADVERTISER_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_ENERGY_INFO_EN
+#define BLE_HOST_ENERGY_INFO_EN                  FALSE
+#endif
+
+
+#ifndef BLE_HOST_ENABLE_TEST_MODE_EN
+#define BLE_HOST_ENABLE_TEST_MODE_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_EXECUTE_CBACK_EN
+#define BLE_HOST_EXECUTE_CBACK_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_REMOVE_ALL_ACL_EN
+#define BLE_HOST_REMOVE_ALL_ACL_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_REMOVE_AN_ACL_EN
+#define BLE_HOST_REMOVE_AN_ACL_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_READ_TX_POWER_EN
+#define BLE_HOST_READ_TX_POWER_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_STOP_ADV_UNUSED
+#define BLE_HOST_STOP_ADV_UNUSED                  FALSE
+#endif
+
+#ifndef BLE_HOST_BLE_OBSERVE_EN
+#define BLE_HOST_BLE_OBSERVE_EN                  FALSE
+#endif
+
+#ifndef BLE_HOST_BLE_SCAN_PARAM_UNUSED
+#define BLE_HOST_BLE_SCAN_PARAM_UNUSED           FALSE
+#endif
+
+#ifndef BLE_HOST_CONN_SCAN_PARAM_EN
+#define BLE_HOST_CONN_SCAN_PARAM_EN              FALSE
+#endif
+
+#ifndef BLE_HOST_SETUP_STORAGE_EN
+#define BLE_HOST_SETUP_STORAGE_EN              FALSE
+#endif
+
+#ifndef BLE_HOST_READ_SCAN_REPORTS_EN
+#define BLE_HOST_READ_SCAN_REPORTS_EN              FALSE
+#endif
+
+#ifndef BLE_HOST_BATCH_SCAN_EN
+#define BLE_HOST_BATCH_SCAN_EN              FALSE
+#endif
+
+#ifndef BLE_HOST_BG_CONNECT_EN
+#define BLE_HOST_BG_CONNECT_EN              FALSE
 #endif
 
 #ifndef LOCAL_BLE_CONTROLLER_ID
@@ -1282,7 +1575,7 @@
 #ifdef CONFIG_IDF_TARGET_ESP32
 #define BTM_BLE_ADV_TX_POWER {-12, -9, -6, -3, 0, 3, 6, 9}
 #else
-#define BTM_BLE_ADV_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 21}
+#define BTM_BLE_ADV_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 20}
 #endif
 #endif
 
@@ -1290,7 +1583,7 @@
 #ifdef CONFIG_IDF_TARGET_ESP32
 #define BTM_TX_POWER {-12, -9, -6, -3, 0, 3, 6, 9}
 #else
-#define BTM_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 21}
+#define BTM_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 20}
 #endif
 #endif
 
@@ -2371,12 +2664,6 @@ The maximum number of payload octets that the local device can receive in a sing
 /* Enable/disable BTSnoop memory logging */
 #ifndef BTSNOOP_MEM
 #define BTSNOOP_MEM FALSE
-#endif
-
-#if UC_HEAP_ALLOCATION_FROM_SPIRAM_FIRST
-#define HEAP_ALLOCATION_FROM_SPIRAM_FIRST TRUE
-#else
-#define HEAP_ALLOCATION_FROM_SPIRAM_FIRST FALSE
 #endif
 
 #include "common/bt_trace.h"

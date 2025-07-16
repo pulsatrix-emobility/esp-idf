@@ -247,8 +247,8 @@ esp_err_t rmt_new_rx_channel(const rmt_rx_channel_config_t *config, rmt_channel_
 
     // select the clock source
     ESP_GOTO_ON_ERROR(rmt_select_periph_clock(&rx_channel->base, config->clk_src), err, TAG, "set group clock failed");
-    // set channel clock resolution
-    uint32_t real_div = group->resolution_hz / config->resolution_hz;
+    // set channel clock resolution, find the divider to get the closest resolution
+    uint32_t real_div = (group->resolution_hz + config->resolution_hz / 2) / config->resolution_hz;
     rmt_ll_rx_set_channel_clock_div(hal->regs, channel_id, real_div);
     // resolution loss due to division, calculate the real resolution
     rx_channel->base.resolution_hz = group->resolution_hz / real_div;
@@ -374,12 +374,12 @@ esp_err_t rmt_receive(rmt_channel_handle_t channel, void *buffer, size_t buffer_
 
     uint32_t filter_reg_value = ((uint64_t)rx_chan->filter_clock_resolution_hz * config->signal_range_min_ns) / 1000000000UL;
     uint32_t idle_reg_value = ((uint64_t)channel->resolution_hz * config->signal_range_max_ns) / 1000000000UL;
-    ESP_RETURN_ON_FALSE_ISR(filter_reg_value <= RMT_LL_MAX_FILTER_VALUE, ESP_ERR_INVALID_ARG, TAG, "signal_range_min_ns too big");
-    ESP_RETURN_ON_FALSE_ISR(idle_reg_value <= RMT_LL_MAX_IDLE_VALUE, ESP_ERR_INVALID_ARG, TAG, "signal_range_max_ns too big");
+    ESP_RETURN_ON_FALSE_ISR(filter_reg_value <= RMT_LL_MAX_FILTER_VALUE, ESP_ERR_INVALID_ARG, TAG, "signal_range_min_ns too big, should be less than %"PRIu32" ns", (uint32_t)((uint64_t)RMT_LL_MAX_FILTER_VALUE * 1000000000UL / rx_chan->filter_clock_resolution_hz));
+    ESP_RETURN_ON_FALSE_ISR(idle_reg_value <= RMT_LL_MAX_IDLE_VALUE, ESP_ERR_INVALID_ARG, TAG, "signal_range_max_ns too big, should be less than %"PRIu32" ns", (uint32_t)((uint64_t)RMT_LL_MAX_IDLE_VALUE * 1000000000UL / channel->resolution_hz));
 
     // check if we're in a proper state to start the receiver
     rmt_fsm_t expected_fsm = RMT_FSM_ENABLE;
-    ESP_RETURN_ON_FALSE_ISR(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT),
+    ESP_RETURN_ON_FALSE_ISR(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT),
                             ESP_ERR_INVALID_STATE, TAG, "channel not in enable state");
 
     // fill in the transaction descriptor
@@ -408,11 +408,11 @@ esp_err_t rmt_receive(rmt_channel_handle_t channel, void *buffer, size_t buffer_
     rmt_ll_rx_set_idle_thres(hal->regs, channel_id, idle_reg_value);
     // turn on RMT RX machine
     rmt_ll_rx_enable(hal->regs, channel_id, true);
-    portEXIT_CRITICAL_SAFE(&channel->spinlock);
 
     // saying we're in running state, this state will last until the receiving is done
     // i.e., we will switch back to the enable state in the receive done interrupt handler
     atomic_store(&channel->fsm, RMT_FSM_RUN);
+    portEXIT_CRITICAL_SAFE(&channel->spinlock);
 
     return ESP_OK;
 }
@@ -460,7 +460,7 @@ static esp_err_t rmt_rx_enable(rmt_channel_handle_t channel)
 {
     // can only enable the channel when it's in "init" state
     rmt_fsm_t expected_fsm = RMT_FSM_INIT;
-    ESP_RETURN_ON_FALSE(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT),
+    ESP_RETURN_ON_FALSE(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT),
                         ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
 
     rmt_group_t *group = channel->group;
@@ -496,11 +496,11 @@ static esp_err_t rmt_rx_disable(rmt_channel_handle_t channel)
     // can disable the channel when it's in `enable` or `run` state
     bool valid_state = false;
     rmt_fsm_t expected_fsm = RMT_FSM_ENABLE;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_INIT_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         valid_state = true;
     }
     expected_fsm = RMT_FSM_RUN;
-    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_INIT_WAIT)) {
+    if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_WAIT)) {
         valid_state = true;
     }
     ESP_RETURN_ON_FALSE(valid_state, ESP_ERR_INVALID_STATE, TAG, "channel not in enable or run state");
@@ -563,11 +563,21 @@ static bool IRAM_ATTR rmt_isr_handle_rx_done(rmt_rx_channel_t *rx_chan)
     // disable the RX engine, it will be enabled again when next time user calls `rmt_receive()`
     rmt_ll_rx_enable(hal->regs, channel_id, false);
     uint32_t offset = rmt_ll_rx_get_memory_writer_offset(hal->regs, channel_id);
-    // sanity check
-    assert(offset >= rx_chan->mem_off);
+
     rmt_ll_rx_set_mem_owner(hal->regs, channel_id, RMT_LL_MEM_OWNER_SW);
     // copy the symbols to user space
-    size_t stream_symbols = offset - rx_chan->mem_off;
+    
+    // Start from C6, the actual pulse count is the number of input pulses N - 1.
+    // Resulting in the last threshold interrupts may not be triggered correctly when the number of received symbols is a multiple of the memory block size.
+    // As shown in the figure below, So we special handle the offset
+
+    //  mem_off (should be updated here in the last threshold interrupt, but interrupt lost)
+    //     |
+    //     V
+    //     |________|________|
+    //     |        |
+    //   offset   mem_off(actually here now)
+    size_t stream_symbols = (offset >= rx_chan->mem_off ? offset - rx_chan->mem_off : rx_chan->mem_off - offset);
     size_t copy_size = rmt_copy_symbols(channel->hw_mem_base + rx_chan->mem_off, stream_symbols,
                                         trans_desc->buffer, trans_desc->copy_dest_off, trans_desc->buffer_size);
     rmt_ll_rx_set_mem_owner(hal->regs, channel_id, RMT_LL_MEM_OWNER_HW);

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -7,10 +7,12 @@
 #include <unistd.h>
 #include <assert.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include "esp_partition.h"
 #include "esp_flash.h"
 #include "esp_system.h"
+#include "spi_flash_mmap.h"
 
 #include "esp_private/cache_utils.h"
 #include "esp_memory_utils.h"
@@ -18,6 +20,11 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "rom/cache.h"
+
+volatile uint32_t g_panic_handler_stuck = 0;
+volatile uint32_t g_panic_handler_crash = 0;
 
 /* Test utility function */
 
@@ -96,6 +103,34 @@ void test_panic_extram_stack(void) {
 #endif // ESP_COREDUMP_ENABLE_TO_FLASH && SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
 
 
+void __attribute__((no_sanitize_undefined)) test_panic_handler_stuck(void *arg)
+{
+    g_panic_handler_stuck = 1;
+
+    /* Cause a panic */
+#ifdef __XTENSA__
+    asm("ill");     // should be an invalid operation on xtensa targets
+#elif __riscv
+    asm("unimp");   // should be an invalid operation on RISC-V targets
+#endif
+
+    vTaskDelete(NULL);
+}
+
+void __attribute__((no_sanitize_undefined)) test_panic_handler_crash(void *arg)
+{
+    g_panic_handler_crash = 1;
+
+    /* Cause a panic */
+#ifdef __XTENSA__
+    asm("ill");
+#elif __riscv
+    asm("unimp");
+#endif
+
+    vTaskDelete(NULL);
+}
+
 #if !CONFIG_FREERTOS_UNICORE
 static void infinite_loop(void* arg) {
     (void) arg;
@@ -112,17 +147,46 @@ void test_task_wdt_cpu1(void)
     }
 }
 
-void test_task_wdt_both_cpus(void)
+void test_panic_handler_stuck1(void)
 {
-    xTaskCreatePinnedToCore(infinite_loop, "Infinite loop", 1024, NULL, 4, NULL, 1);
-    /* Give some time to the task on CPU 1 to be scheduled */
-    vTaskDelay(1);
-    xTaskCreatePinnedToCore(infinite_loop, "Infinite loop", 1024, NULL, 4, NULL, 0);
-    while (true) {
-        ;
+    /* Cause the panic on core 1 */
+    xTaskCreatePinnedToCore(test_panic_handler_stuck, "panic_handler_stuck", 2048, NULL, 1, NULL, 1);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
+
+void test_panic_handler_crash1(void)
+{
+    /* Cause the panic on core 1 */
+    xTaskCreatePinnedToCore(test_panic_handler_crash, "panic_handler_crash", 2048, NULL, 1, NULL, 1);
+
+    while(1) {
+        vTaskDelay(10);
     }
 }
 #endif
+
+void test_panic_handler_stuck0(void)
+{
+    /* Cause the panic on core 0 */
+    xTaskCreatePinnedToCore(test_panic_handler_stuck, "panic_handler_stuck", 2048, NULL, 1, NULL, 0);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
+
+void test_panic_handler_crash0(void)
+{
+    /* Cause the panic on core 0 */
+    xTaskCreatePinnedToCore(test_panic_handler_crash, "panic_handler_crash", 2048, NULL, 1, NULL, 0);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
 
 void __attribute__((no_sanitize_undefined)) test_storeprohibited(void)
 {
@@ -153,6 +217,46 @@ void IRAM_ATTR test_assert_cache_disabled(void)
 {
     spi_flash_disable_interrupts_caches_and_other_cpu();
     assert(0);
+}
+
+const char TEST_STR[] = "my_tag";
+void test_assert_cache_write_back_error_can_print_backtrace(void)
+{
+    printf("1) %p\n", TEST_STR);
+    *(uint32_t*)TEST_STR = 3; // We changed the rodata string.
+    // All chips except ESP32S3 stop execution here and raise a LoadStore error on the line above.
+#if CONFIG_IDF_TARGET_ESP32S3
+    // On the ESP32S3, the error occurs later when the cache writeback is triggered
+    // (in this test, a direct call to Cache_WriteBack_All).
+    Cache_WriteBack_All(); // Cache writeback triggers the invalid cache access interrupt.
+#endif
+    // We are testing that the backtrace is printed instead of TG1WDT.
+    printf("2) %p\n", TEST_STR); // never get to this place.
+}
+
+void test_assert_cache_write_back_error_can_print_backtrace2(void)
+{
+    printf("1) %p\n", TEST_STR);
+    *(uint32_t*)TEST_STR = 3; // We changed the rodata string.
+    // All chips except ESP32S3 stop execution here and raise a LoadStore error on the line above.
+    // On the ESP32S3, the error occurs later when the cache writeback is triggered
+    // (in this test, a large range of DRAM is mapped and read, causing an error).
+    uint8_t temp = 0;
+    size_t map_size = SPI_FLASH_SEC_SIZE * 512;
+    const void *map;
+    spi_flash_mmap_handle_t out_handle;
+    esp_err_t err = spi_flash_mmap(0, map_size, SPI_FLASH_MMAP_DATA, &map, &out_handle);
+    if (err != ESP_OK) {
+        printf("spi_flash_mmap failed %x\n", err);
+        return;
+    }
+    const uint8_t *rodata = map;
+    for (size_t i = 0; i < map_size; i++) {
+        temp = rodata[i];
+    }
+    // Cache writeback triggers the invalid cache access interrupt.
+    // We are testing that the backtrace is printed instead of TG1WDT.
+    printf("2) %p 0x%" PRIx8 " \n", TEST_STR, temp); // never get to this place.
 }
 
 /**

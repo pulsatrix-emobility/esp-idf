@@ -24,7 +24,7 @@ extern "C" {
  *    This RC oscillator generates a ~136kHz clock signal output as the RC_SLOW_CLK. The exact frequency of this clock
  *    can be computed in runtime through calibration.
  *
- * 4) Internal 32kHz RC Oscillator: RC32K
+ * 4) Internal 32kHz RC Oscillator: RC32K [NOT RECOMMENDED TO USE]
  *
  *    The exact frequency of this clock can be computed in runtime through calibration.
  *
@@ -344,7 +344,7 @@ typedef enum {
 /**
  * @brief Array initializer for all supported clock sources of SPI
  */
-#define SOC_SPI_CLKS {SOC_MOD_CLK_PLL_F80M, SOC_MOD_CLK_XTAL, SOC_MOD_CLK_RC_FAST}
+#define SOC_SPI_CLKS {SOC_MOD_CLK_PLL_F80M, SOC_MOD_CLK_RC_FAST, SOC_MOD_CLK_XTAL}
 
 /**
  * @brief Type of SPI clock source.

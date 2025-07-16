@@ -30,7 +30,6 @@
 #define BT_RC_CT_TAG          "RC_CT"
 
 /* device name */
-#define TARGET_DEVICE_NAME    "ESP_SPEAKER"
 #define LOCAL_DEVICE_NAME     "ESP_A2DP_SRC"
 
 /* AVRCP used transaction label */
@@ -111,6 +110,8 @@ static int s_connecting_intv = 0;                             /* count of heart 
 static uint32_t s_pkt_cnt = 0;                                /* count of packets */
 static esp_avrc_rn_evt_cap_mask_t s_avrc_peer_rn_cap;         /* AVRC target notification event capability bit mask */
 static TimerHandle_t s_tmr;                                   /* handle of heart beat timer */
+
+static const char remote_device_name[] = CONFIG_EXAMPLE_PEER_DEVICE_NAME;
 
 /*********************************
  * STATIC FUNCTION DEFINITIONS
@@ -199,7 +200,7 @@ static void filter_inquiry_scan_result(esp_bt_gap_cb_param_t *param)
     /* search for target device in its Extended Inqury Response */
     if (eir) {
         get_name_from_eir(eir, s_peer_bdname, NULL);
-        if (strcmp((char *)s_peer_bdname, TARGET_DEVICE_NAME) == 0) {
+        if (strcmp((char *)s_peer_bdname, remote_device_name) == 0) {
             ESP_LOGI(BT_AV_TAG, "Found a target device, address %s, name %s", bda_str, s_peer_bdname);
             s_a2d_state = APP_AV_STATE_DISCOVERED;
             memcpy(s_peer_bda, param->disc_res.bda, ESP_BD_ADDR_LEN);
@@ -270,12 +271,12 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 #if (CONFIG_EXAMPLE_SSP_ENABLED == true)
     /* when Security Simple Pairing user confirmation requested, this event comes */
     case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %"PRIu32, param->cfm_req.num_val);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
         esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
         break;
     /* when Security Simple Pairing passkey notified, this event comes */
     case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %"PRIu32, param->key_notif.passkey);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %06"PRIu32, param->key_notif.passkey);
         break;
     /* when Security Simple Pairing passkey requested, this event comes */
     case ESP_BT_GAP_KEY_REQ_EVT:

@@ -155,23 +155,25 @@ static inline void lp_uart_ll_set_source_clk(uart_dev_t *hw, soc_periph_lp_uart_
  * @param  baud The baud rate to be set.
  * @param  sclk_freq Frequency of the clock source of UART, in Hz.
  *
- * @return None
+ * @return True if baud-rate set successfully; False if baud-rate requested cannot be achieved
  */
-FORCE_INLINE_ATTR void lp_uart_ll_set_baudrate(uart_dev_t *hw, uint32_t baud, uint32_t sclk_freq)
+FORCE_INLINE_ATTR bool lp_uart_ll_set_baudrate(uart_dev_t *hw, uint32_t baud, uint32_t sclk_freq)
 {
-#define DIV_UP(a, b)    (((a) + (b) - 1) / (b))
-    const uint32_t max_div = BIT(12) - 1;   // UART divider integer part only has 12 bits
-    uint32_t sclk_div = DIV_UP(sclk_freq, (uint64_t)max_div * baud);
-
-    if (sclk_div == 0) abort();
-
-    uint32_t clk_div = ((sclk_freq) << 4) / (baud * sclk_div);
-    // The baud rate configuration register is divided into
-    // an integer part and a fractional part.
-    hw->clkdiv_sync.clkdiv_int = clk_div >> 4;
-    hw->clkdiv_sync.clkdiv_frag = clk_div & 0xf;
-    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->clk_conf, sclk_div_num, sclk_div - 1);
+    if (baud == 0) {
+        return false;
+    }
+    // No pre-divider for LP UART clock source on the target
+    uint32_t clk_div = (sclk_freq << 4) / baud;
+    // The baud rate configuration register is divided into an integer part and a fractional part.
+    uint32_t clkdiv_int = clk_div >> 4;
+    if (clkdiv_int > UART_CLKDIV_V) {
+        return false; // unachievable baud-rate
+    }
+    uint32_t clkdiv_frag = clk_div & 0xf;
+    hw->clkdiv_sync.clkdiv_int = clkdiv_int;
+    hw->clkdiv_sync.clkdiv_frag = clkdiv_frag;
     uart_ll_update(hw);
+    return true;
 }
 
 /**
@@ -378,28 +380,33 @@ FORCE_INLINE_ATTR void uart_ll_get_sclk(uart_dev_t *hw, soc_module_clk_t *source
  * @param  baud The baud rate to be set.
  * @param  sclk_freq Frequency of the clock source of UART, in Hz.
  *
- * @return None
+ * @return True if baud-rate set successfully; False if baud-rate requested cannot be achieved
  */
-FORCE_INLINE_ATTR void uart_ll_set_baudrate(uart_dev_t *hw, uint32_t baud, uint32_t sclk_freq)
+FORCE_INLINE_ATTR bool uart_ll_set_baudrate(uart_dev_t *hw, uint32_t baud, uint32_t sclk_freq)
 {
-#define DIV_UP(a, b)    (((a) + (b) - 1) / (b))
-    const uint32_t max_div = BIT(12) - 1;   // UART divider integer part only has 12 bits
-    uint32_t sclk_div = DIV_UP(sclk_freq, (uint64_t)max_div * baud);
+    if ((hw) == &LP_UART) {
+        abort(); // need to call lp_uart_ll_set_baudrate()
+    }
 
-    if (sclk_div == 0) abort();
+#define DIV_UP(a, b)    (((a) + (b) - 1) / (b))
+    if (baud == 0) {
+        return false;
+    }
+    const uint32_t max_div = UART_CLKDIV_V;   // UART divider integer part only has 12 bits
+    uint32_t sclk_div = DIV_UP(sclk_freq, (uint64_t)max_div * baud);
+#undef DIV_UP
+
+    if (sclk_div == 0 || sclk_div > (PCR_UART0_SCLK_DIV_NUM_V + 1)) {
+        return false; // unachievable baud-rate
+    }
 
     uint32_t clk_div = ((sclk_freq) << 4) / (baud * sclk_div);
-    // The baud rate configuration register is divided into
-    // an integer part and a fractional part.
+    // The baud rate configuration register is divided into an integer part and a fractional part.
     hw->clkdiv_sync.clkdiv_int = clk_div >> 4;
     hw->clkdiv_sync.clkdiv_frag = clk_div & 0xf;
-    if ((hw) == &LP_UART) {
-        abort();
-    } else {
-        UART_LL_PCR_REG_U32_SET(hw, sclk_conf, sclk_div_num, sclk_div - 1);
-    }
-#undef DIV_UP
+    UART_LL_PCR_REG_U32_SET(hw, sclk_conf, sclk_div_num, sclk_div - 1);
     uart_ll_update(hw);
+    return true;
 }
 
 /**
@@ -416,7 +423,7 @@ FORCE_INLINE_ATTR uint32_t uart_ll_get_baudrate(uart_dev_t *hw, uint32_t sclk_fr
     div_reg.val = hw->clkdiv_sync.val;
     int sclk_div;
     if ((hw) == &LP_UART) {
-        sclk_div = HAL_FORCE_READ_U32_REG_FIELD(hw->clk_conf, sclk_div_num) + 1;
+        sclk_div = 1; // no pre-divider for LP UART clock source on the target
     } else {
         sclk_div = UART_LL_PCR_REG_U32_GET(hw, sclk_conf, sclk_div_num) + 1;
     }
@@ -569,7 +576,7 @@ FORCE_INLINE_ATTR void uart_ll_txfifo_rst(uart_dev_t *hw)
  */
 FORCE_INLINE_ATTR uint32_t uart_ll_get_rxfifo_len(uart_dev_t *hw)
 {
-    return (hw->status.rxfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw);
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->status, rxfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw);
 }
 
 /**
@@ -582,7 +589,7 @@ FORCE_INLINE_ATTR uint32_t uart_ll_get_rxfifo_len(uart_dev_t *hw)
 FORCE_INLINE_ATTR uint32_t uart_ll_get_txfifo_len(uart_dev_t *hw)
 {
     uint32_t total_fifo_len = ((hw) == &LP_UART) ? LP_UART_LL_FIFO_DEF_LEN : UART_LL_FIFO_DEF_LEN;
-    uint32_t txfifo_len = (hw->status.txfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw);
+    uint32_t txfifo_len = HAL_FORCE_READ_U32_REG_FIELD(hw->status, txfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw);
     return (total_fifo_len - txfifo_len);
 }
 
@@ -658,7 +665,7 @@ FORCE_INLINE_ATTR void uart_ll_get_parity(uart_dev_t *hw, uart_parity_t *parity_
  */
 FORCE_INLINE_ATTR void uart_ll_set_rxfifo_full_thr(uart_dev_t *hw, uint16_t full_thrhd)
 {
-    hw->conf1.rxfifo_full_thrhd = full_thrhd << UART_LL_REG_FIELD_BIT_SHIFT(hw);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->conf1, rxfifo_full_thrhd, full_thrhd << UART_LL_REG_FIELD_BIT_SHIFT(hw));
 }
 
 /**
@@ -672,7 +679,7 @@ FORCE_INLINE_ATTR void uart_ll_set_rxfifo_full_thr(uart_dev_t *hw, uint16_t full
  */
 FORCE_INLINE_ATTR void uart_ll_set_txfifo_empty_thr(uart_dev_t *hw, uint16_t empty_thrhd)
 {
-    hw->conf1.txfifo_empty_thrhd = empty_thrhd << UART_LL_REG_FIELD_BIT_SHIFT(hw);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->conf1, txfifo_empty_thrhd, empty_thrhd << UART_LL_REG_FIELD_BIT_SHIFT(hw));
 }
 
 /**
@@ -736,7 +743,7 @@ FORCE_INLINE_ATTR void uart_ll_set_hw_flow_ctrl(uart_dev_t *hw, uart_hw_flowcont
 {
     //only when UART_HW_FLOWCTRL_RTS is set , will the rx_thresh value be set.
     if (flow_ctrl & UART_HW_FLOWCTRL_RTS) {
-        hw->hwfc_conf_sync.rx_flow_thrhd = rx_thrs << UART_LL_REG_FIELD_BIT_SHIFT(hw);
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->hwfc_conf_sync, rx_flow_thrhd, rx_thrs << UART_LL_REG_FIELD_BIT_SHIFT(hw));
         hw->hwfc_conf_sync.rx_flow_en = 1;
     } else {
         hw->hwfc_conf_sync.rx_flow_en = 0;
@@ -782,8 +789,8 @@ FORCE_INLINE_ATTR void uart_ll_set_sw_flow_ctrl(uart_dev_t *hw, uart_sw_flowctrl
     if (sw_flow_ctrl_en) {
         hw->swfc_conf0_sync.xonoff_del = 1;
         hw->swfc_conf0_sync.sw_flow_con_en = 1;
-        hw->swfc_conf1.xon_threshold = (flow_ctrl->xon_thrd) << UART_LL_REG_FIELD_BIT_SHIFT(hw);
-        hw->swfc_conf1.xoff_threshold = (flow_ctrl->xoff_thrd) << UART_LL_REG_FIELD_BIT_SHIFT(hw);
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->swfc_conf1, xon_threshold, (flow_ctrl->xon_thrd) << UART_LL_REG_FIELD_BIT_SHIFT(hw));
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->swfc_conf1, xoff_threshold, (flow_ctrl->xoff_thrd) << UART_LL_REG_FIELD_BIT_SHIFT(hw));
         HAL_FORCE_MODIFY_U32_REG_FIELD(hw->swfc_conf0_sync, xon_char, flow_ctrl->xon_char);
         HAL_FORCE_MODIFY_U32_REG_FIELD(hw->swfc_conf0_sync, xoff_char, flow_ctrl->xoff_char);
     } else {
@@ -1072,7 +1079,7 @@ FORCE_INLINE_ATTR void uart_ll_get_data_bit_num(uart_dev_t *hw, uart_word_length
  */
 FORCE_INLINE_ATTR bool uart_ll_is_tx_idle(uart_dev_t *hw)
 {
-    return ((((hw->status.txfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw)) == 0) && (hw->fsm_status.st_utx_out == 0));
+    return (((HAL_FORCE_READ_U32_REG_FIELD(hw->status, txfifo_cnt) >> UART_LL_REG_FIELD_BIT_SHIFT(hw)) == 0) && (hw->fsm_status.st_utx_out == 0));
 }
 
 /**

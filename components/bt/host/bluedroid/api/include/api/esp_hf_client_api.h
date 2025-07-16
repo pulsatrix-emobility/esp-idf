@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -41,6 +41,15 @@ typedef enum {
     ESP_HF_CLIENT_IN_BAND_RINGTONE_NOT_PROVIDED = 0,
     ESP_HF_CLIENT_IN_BAND_RINGTONE_PROVIDED,
 } esp_hf_client_in_band_ring_state_t;
+
+/**
+ * @brief HF client profile status parameters
+ */
+typedef struct {
+    bool hf_client_inited;                             /*!< hf client initialization */
+    uint8_t slc_conn_num;                              /*!< Number of Service Level Connections */
+    uint8_t sync_conn_num;                             /*!< Number of (e)SCO Connections */
+} esp_hf_client_profile_status_t;
 
 /* features masks of AG */
 #define ESP_HF_CLIENT_PEER_FEAT_3WAY       0x01        /* Three-way calling */
@@ -97,6 +106,7 @@ typedef enum {
     ESP_HF_CLIENT_BINP_EVT,                          /*!< requested number of last voice tag from AG */
     ESP_HF_CLIENT_RING_IND_EVT,                      /*!< ring indication event */
     ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT,             /*!< requested number of packet different status */
+    ESP_HF_CLIENT_PROF_STATE_EVT,                    /*!< Indicate HF CLIENT init or deinit complete */
 } esp_hf_client_cb_event_t;
 
 /// HFP client callback parameters
@@ -266,6 +276,13 @@ typedef union {
         uint32_t tx_discarded;    /*!< the total number of packets send lost */
     } pkt_nums;                   /*!< HF callback param of ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT */
 
+    /**
+     * @brief ESP_HF_CLIENT_PROF_STATE_EVT
+     */
+    struct hf_client_prof_stat_param {
+        esp_hf_prof_state_t state;               /*!< hf client profile state param */
+    } prof_stat;                                 /*!< status to indicate hf client prof init or deinit */
+
 } esp_hf_client_cb_param_t;                      /*!< HFP client callback parameters */
 
 /**
@@ -323,6 +340,7 @@ esp_err_t esp_hf_client_register_callback(esp_hf_client_cb_t callback);
  *
  * @brief           Initialize the bluetooth HFP client module.
  *                  This function should be called after esp_bluedroid_enable() completes successfully.
+ *                  ESP_HF_CLIENT_PROF_STATE_EVT with ESP_HF_INIT_SUCCESS will reported to the APP layer.
  *
  * @return
  *                  - ESP_OK: if the initialization request is sent successfully
@@ -336,6 +354,7 @@ esp_err_t esp_hf_client_init(void);
  *
  * @brief           De-initialize for HFP client module.
  *                  This function should be called only after esp_bluedroid_enable() completes successfully.
+ *                  ESP_HF_CLIENT_PROF_STATE_EVT with ESP_HF_DEINIT_SUCCESS will reported to the APP layer.
  *
  * @return
  *                  - ESP_OK: success
@@ -422,7 +441,7 @@ esp_err_t esp_hf_client_start_voice_recognition(void);
  *                  As a precondition to use this API, Service Level Connection shall exist with AG.
  *
  * @return
- *                  - ESP_OK: stoping voice recognition is sent to lower layer
+ *                  - ESP_OK: stopping voice recognition is sent to lower layer
  *                  - ESP_ERR_INVALID_STATE: if bluetooth stack is not yet enabled
  *                  - ESP_FAIL: others
  *
@@ -727,6 +746,17 @@ void esp_hf_client_pcm_resample_deinit(void);
  * @return          number of samples converted
  */
 int32_t esp_hf_client_pcm_resample(void *src, uint32_t in_bytes, void *dst);
+
+/**
+ * @brief       This function is used to get the status of hf client
+ *
+ * @param[out]  profile_status - hf client status
+ *
+ * @return
+ *              - ESP_OK: success
+ *              - other: failed
+ */
+esp_err_t esp_hf_client_get_profile_status(esp_hf_client_profile_status_t *profile_status);
 
 #ifdef __cplusplus
 }

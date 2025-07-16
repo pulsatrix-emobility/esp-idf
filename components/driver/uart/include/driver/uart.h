@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -37,7 +37,8 @@ extern "C" {
  * @brief UART configuration parameters for uart_param_config function
  */
 typedef struct {
-    int baud_rate;                      /*!< UART baud rate*/
+    int baud_rate;                      /*!< UART baud rate
+                                             Note that the actual baud rate set could have a slight deviation from the user-configured value due to rounding error*/
     uart_word_length_t data_bits;       /*!< UART byte size*/
     uart_parity_t parity;               /*!< UART parity mode*/
     uart_stop_bits_t stop_bits;         /*!< UART stop bits*/
@@ -50,11 +51,9 @@ typedef struct {
 #endif
     };
     struct {
-#if SOC_UART_SUPPORT_SLEEP_RETENTION
-        uint32_t backup_before_sleep: 1;    /*!< If set, the driver will backup/restore the HP UART registers before/after entering/exist sleep mode.
+        uint32_t backup_before_sleep: 1;    /*!< If set, the driver will backup/restore the HP UART registers before entering/after exiting sleep mode.
                                                  By this approach, the system can power off HP UART's power domain.
                                                  This can save power, but at the expense of more RAM being consumed */
-#endif
     } flags;                                /*!< Configuration flags */
 } uart_config_t;
 
@@ -230,19 +229,23 @@ esp_err_t uart_get_parity(uart_port_t uart_num, uart_parity_t* parity_mode);
 esp_err_t uart_get_sclk_freq(uart_sclk_t sclk, uint32_t* out_freq_hz);
 
 /**
- * @brief Set UART baud rate.
+ * @brief Set desired UART baud rate.
+ *
+ * Note that the actual baud rate set could have a slight deviation from the user-configured value due to rounding error.
  *
  * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).
  * @param baudrate UART baud rate.
  *
  * @return
- *     - ESP_FAIL Parameter error
+ *     - ESP_FAIL Parameter error, such as baud rate unachievable
  *     - ESP_OK   Success
  */
 esp_err_t uart_set_baudrate(uart_port_t uart_num, uint32_t baudrate);
 
 /**
- * @brief Get the UART baud rate configuration.
+ * @brief Get the actual UART baud rate.
+ *
+ * It returns the real UART rate set in the hardware. It could have a slight deviation from the user-configured baud rate.
  *
  * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).
  * @param baudrate Pointer to accept value of UART baud rate
@@ -403,8 +406,10 @@ esp_err_t uart_enable_tx_intr(uart_port_t uart_num, int enable, int thresh);
  *       RX pin binded to a GPIO through the GPIO matrix, whereas TX is binded
  *       to its GPIO through the IOMUX.
  *
- * @note Internal signal can be output to multiple GPIO pads.
- *       Only one GPIO pad can connect with input signal.
+ * @note It is possible to configure TX and RX to share the same IO (single wire mode),
+ *       but please be aware of output conflict, which could damage the pad.
+ *       Apply open-drain and pull-up to the pad ahead of time as a protection,
+ *       or the upper layer protocol must guarantee no output from two ends at the same time.
  *
  * @param uart_num   UART port number, the max port number is (UART_NUM_MAX -1).
  * @param tx_io_num  UART TX pin GPIO number.
@@ -464,7 +469,7 @@ esp_err_t uart_set_tx_idle_num(uart_port_t uart_num, uint16_t idle_num);
  *
  * @return
  *     - ESP_OK   Success
- *     - ESP_FAIL Parameter error
+ *     - ESP_FAIL Parameter error, such as baud rate unachievable
  */
 esp_err_t uart_param_config(uart_port_t uart_num, const uart_config_t *uart_config);
 

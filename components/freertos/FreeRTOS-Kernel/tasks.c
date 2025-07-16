@@ -3063,19 +3063,7 @@ char * pcTaskGetName( TaskHandle_t xTaskToQuery ) /*lint !e971 Unqualified char 
                 /* Arrange for xTickCount to reach xNextTaskUnblockTime in
                  * xTaskIncrementTick() when the scheduler resumes.  This ensures
                  * that any delayed tasks are resumed at the correct time. */
-                #if ( configNUMBER_OF_CORES > 1 )
-                {
-                    /* In SMP, the entire tickless idle handling block
-                     * is replaced with a critical section, taking the kernel lock. */
-                    configASSERT( taskIS_SCHEDULER_SUSPENDED() == pdFALSE );
-                }
-                #else /* configNUMBER_OF_CORES > 1 */
-                {
-                    /* In single-core, the entire tickless idle handling block
-                     * is done with scheduler suspended. */
-                    configASSERT( taskIS_SCHEDULER_SUSPENDED() == pdTRUE );
-                }
-                #endif /* configNUMBER_OF_CORES > 1 */
+                configASSERT( taskIS_SCHEDULER_SUSPENDED() == pdTRUE );
                 configASSERT( xTicksToJump != ( TickType_t ) 0 );
 
                 xPendedTicks++;
@@ -3819,7 +3807,7 @@ void vTaskPlaceOnUnorderedEventList( List_t * pxEventList,
             prvAddCurrentTaskToDelayedList( xTicksToWait, xWaitIndefinitely );
         }
         /* Release the previously taken kernel lock. */
-        taskEXIT_CRITICAL( &xKernelLock );
+        prvEXIT_CRITICAL_SMP_ONLY( &xKernelLock );
     }
 
 #endif /* configUSE_TIMERS */
@@ -4086,10 +4074,19 @@ void vTaskRemoveFromUnorderedEventList( ListItem_t * pxEventListItem,
         if( taskIS_YIELD_REQUIRED( pxUnblockedTCB, pdFALSE ) == pdTRUE )
         {
             /* The unblocked task has a priority above that of the calling task, so
-             * a context switch is required.  This function is called with the
-             * scheduler suspended so xYieldPending is set so the context switch
-             * occurs immediately that the scheduler is resumed (unsuspended). */
-            xYieldPending[ xCurCoreID ] = pdTRUE;
+             * a context switch is required. */
+            #if ( configNUM_CORES > 1 )
+
+                /* In SMP mode, this function is called from a critical section, so we
+                 * yield the current core to schedule the unblocked task. */
+                portYIELD_WITHIN_API();
+            #else /* configNUM_CORES > 1 */
+
+                /* In single-core mode, this function is called with the scheduler suspended
+                 * so xYieldPending is set so the context switch occurs immediately once the
+                 * scheduler is resumed (unsuspended). */
+                xYieldPending[ xCurCoreID ] = pdTRUE;
+            #endif /* configNUM_CORES > 1 */
         }
     }
 }
@@ -4323,31 +4320,37 @@ static portTASK_FUNCTION( prvIdleTask, pvParameters )
 
             if( xExpectedIdleTime >= configEXPECTED_IDLE_TIME_BEFORE_SLEEP )
             {
-                prvENTER_CRITICAL_OR_SUSPEND_ALL( &xKernelLock );
+                /* In SMP mode, the entire tickless idle handling block
+                 * must be done with the kernel lock held. */
+                prvENTER_CRITICAL_SMP_ONLY( &xKernelLock );
                 {
-                    /* Now the scheduler is suspended, the expected idle
-                     * time can be sampled again, and this time its value can
-                     * be used. */
-                    configASSERT( xNextTaskUnblockTime >= xTickCount );
-                    xExpectedIdleTime = prvGetExpectedIdleTime();
-
-                    /* Define the following macro to set xExpectedIdleTime to 0
-                     * if the application does not want
-                     * portSUPPRESS_TICKS_AND_SLEEP() to be called. */
-                    configPRE_SUPPRESS_TICKS_AND_SLEEP_PROCESSING( xExpectedIdleTime );
-
-                    if( xExpectedIdleTime >= configEXPECTED_IDLE_TIME_BEFORE_SLEEP )
+                    vTaskSuspendAll();
                     {
-                        traceLOW_POWER_IDLE_BEGIN();
-                        portSUPPRESS_TICKS_AND_SLEEP( xExpectedIdleTime );
-                        traceLOW_POWER_IDLE_END();
+                        /* Now the scheduler is suspended, the expected idle
+                         * time can be sampled again, and this time its value can
+                         * be used. */
+                        configASSERT( xNextTaskUnblockTime >= xTickCount );
+                        xExpectedIdleTime = prvGetExpectedIdleTime();
+
+                        /* Define the following macro to set xExpectedIdleTime to 0
+                         * if the application does not want
+                         * portSUPPRESS_TICKS_AND_SLEEP() to be called. */
+                        configPRE_SUPPRESS_TICKS_AND_SLEEP_PROCESSING( xExpectedIdleTime );
+
+                        if( xExpectedIdleTime >= configEXPECTED_IDLE_TIME_BEFORE_SLEEP )
+                        {
+                            traceLOW_POWER_IDLE_BEGIN();
+                            portSUPPRESS_TICKS_AND_SLEEP( xExpectedIdleTime );
+                            traceLOW_POWER_IDLE_END();
+                        }
+                        else
+                        {
+                            mtCOVERAGE_TEST_MARKER();
+                        }
                     }
-                    else
-                    {
-                        mtCOVERAGE_TEST_MARKER();
-                    }
+                    ( void ) xTaskResumeAll();
                 }
-                ( void ) prvEXIT_CRITICAL_OR_RESUME_ALL( &xKernelLock );
+                prvEXIT_CRITICAL_SMP_ONLY( &xKernelLock );
             }
             else
             {

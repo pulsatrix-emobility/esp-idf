@@ -256,6 +256,10 @@ LEDC 驱动提供了一个辅助函数 :cpp:func:`ledc_find_suitable_duty_resolu
 
         在 {IDF_TARGET_NAME} 上，当通道绑定的定时器配置了其最大 PWM 占空比分辨率（ ``MAX_DUTY_RES`` ），通道的占空比不能被设置到 ``(2 ** MAX_DUTY_RES)`` 。否则，硬件内部占空比计数器会溢出，并导致占空比计算错误。
 
+    .. only:: esp32h2
+
+        以上硬件限制仅在芯片版本低于 v1.2 的 ESP32H2 上存在。
+
 
 使用硬件改变 PWM 占空比
 """"""""""""""""""""""""""""""""""""
@@ -300,14 +304,14 @@ LED PWM 控制器 API 有多种方式即时改变 PWM 频率：
 控制 PWM 的更多方式
 """""""""""""""""""""
 
-有一些较底层的定时器特定函数可用于更改 PWM 设置：
+有一些较独立的定时器特定函数可用于更改 PWM 输出：
 
 * :cpp:func:`ledc_timer_set`
 * :cpp:func:`ledc_timer_rst`
 * :cpp:func:`ledc_timer_pause`
 * :cpp:func:`ledc_timer_resume`
 
-前两个功能可通过函数 :cpp:func:`ledc_channel_config` 在后台运行，在定时器配置后启动。
+前两个功能可通过函数 :cpp:func:`ledc_timer_config` 在后台运行，在定时器配置后启动。
 
 
 使用中断

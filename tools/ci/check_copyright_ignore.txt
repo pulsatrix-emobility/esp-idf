@@ -403,7 +403,6 @@ components/esp_event/esp_event_private.c
 components/esp_event/host_test/esp_event_unit_test/main/esp_event_test.cpp
 components/esp_event/host_test/fixtures.hpp
 components/esp_event/include/esp_event_loop.h
-components/esp_event/private_include/esp_event_internal.h
 components/esp_event/private_include/esp_event_private.h
 components/esp_hid/include/esp_hid_common.h
 components/esp_hid/include/esp_hidd.h
@@ -584,7 +583,6 @@ components/nvs_flash/src/nvs_pagemanager.hpp
 components/nvs_flash/src/nvs_partition_lookup.cpp
 components/nvs_flash/src/nvs_partition_lookup.hpp
 components/nvs_flash/src/nvs_test_api.h
-components/nvs_flash/src/nvs_types.cpp
 components/nvs_flash/test_nvs_host/main.cpp
 components/nvs_flash/test_nvs_host/sdkconfig.h
 components/nvs_flash/test_nvs_host/test_intrusive_list.cpp
@@ -656,7 +654,6 @@ components/soc/esp32c3/include/soc/boot_mode.h
 components/soc/esp32c3/include/soc/extmem_reg.h
 components/soc/esp32c3/include/soc/fe_reg.h
 components/soc/esp32c3/include/soc/gpio_reg.h
-components/soc/esp32c3/include/soc/gpio_struct.h
 components/soc/esp32c3/include/soc/i2c_reg.h
 components/soc/esp32c3/include/soc/interrupt_core0_reg.h
 components/soc/esp32c3/include/soc/ledc_reg.h
@@ -1277,7 +1274,6 @@ tools/test_apps/build_system/embed_test/main/test_main.c
 tools/test_apps/build_system/ldalign_test/main/test_main.c
 tools/test_apps/build_system/ldgen_test/main/src1.c
 tools/test_apps/build_system/ldgen_test/main/src2.c
-tools/test_apps/build_system/ldgen_test/main/test_main.c
 tools/test_apps/peripherals/i2c_wifi/main/i2c_wifi_main.c
 tools/test_apps/protocols/esp_netif/build_config/main/init_macro.h
 tools/test_apps/protocols/esp_netif/build_config/main/main.cpp
@@ -1294,7 +1290,6 @@ tools/test_apps/system/build_test/main/test_main.c
 tools/test_apps/system/cxx_no_except/main/main.cpp
 tools/test_apps/system/gdb_loadable_elf/main/hello_world_main.c
 tools/test_apps/system/longjmp_test/main/hello_world_main.c
-tools/test_apps/system/memprot/main/esp32s2/test_memprot_main.c
 tools/test_apps/system/no_embedded_paths/check_for_file_paths.py
 tools/test_apps/system/no_embedded_paths/main/test_no_embedded_paths_main.c
 tools/test_apps/system/startup/main/test_startup_main.c

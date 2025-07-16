@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_cpu.h"
 
+#include "esp_private/esp_sleep_internal.h"
 #include "esp_private/crosscore_int.h"
 #include "esp_private/uart_private.h"
 
@@ -97,6 +98,9 @@
 #endif
 
 static portMUX_TYPE s_switch_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_cpu_freq_switch_lock[portNUM_PROCESSORS] = {
+    [0 ... (portNUM_PROCESSORS - 1)] = portMUX_INITIALIZER_UNLOCKED
+};
 /* The following state variables are protected using s_switch_lock: */
 /* Current sleep mode; When switching, contains old mode until switch is complete */
 static pm_mode_t s_mode = PM_MODE_CPU_MAX;
@@ -455,6 +459,17 @@ esp_err_t esp_pm_configure(const void* vconfig)
     res = rtc_clk_cpu_freq_mhz_to_config(min_freq_mhz, &s_cpu_freq_by_mode[PM_MODE_APB_MIN]);
     assert(res);
     s_cpu_freq_by_mode[PM_MODE_LIGHT_SLEEP] = s_cpu_freq_by_mode[PM_MODE_APB_MIN];
+
+    if (config->light_sleep_enable) {
+        // Enable the wakeup source here because the `esp_sleep_disable_wakeup_source` in the `else`
+        // branch must be called if corresponding wakeup source is already enabled.
+        esp_sleep_enable_timer_wakeup(0);
+        esp_sleep_overhead_out_time_refresh();
+    } else if (s_light_sleep_en) {
+        // Since auto light-sleep will enable the timer wakeup source, to avoid affecting subsequent possible
+        // deepsleep requests, disable the timer wakeup source here.
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    }
     s_light_sleep_en = config->light_sleep_enable;
     s_config_changed = true;
     portEXIT_CRITICAL(&s_switch_lock);
@@ -540,13 +555,6 @@ void IRAM_ATTR esp_pm_impl_switch_mode(pm_mode_t mode,
  */
 static void IRAM_ATTR on_freq_update(uint32_t old_ticks_per_us, uint32_t ticks_per_us)
 {
-    uint32_t old_apb_ticks_per_us = MIN(old_ticks_per_us, 80);
-    uint32_t apb_ticks_per_us = MIN(ticks_per_us, 80);
-    /* Update APB frequency value used by the timer */
-    if (old_apb_ticks_per_us != apb_ticks_per_us) {
-        esp_timer_private_update_apb_freq(apb_ticks_per_us);
-    }
-
 #ifdef CONFIG_FREERTOS_SYSTICK_USES_CCOUNT
 #ifdef XT_RTOS_TIMER_INT
     /* Calculate new tick divisor */
@@ -604,6 +612,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
         }
 #ifdef CONFIG_FREERTOS_SYSTICK_USES_CCOUNT
         if (s_need_update_ccompare[core_id]) {
+            update_ccompare();
             s_need_update_ccompare[core_id] = false;
         }
 #endif
@@ -616,6 +625,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
     s_is_switching = true;
     bool config_changed = s_config_changed;
     s_config_changed = false;
+    portENTER_CRITICAL_ISR(&s_cpu_freq_switch_lock[core_id]);
     portEXIT_CRITICAL_ISR(&s_switch_lock);
 
     rtc_cpu_freq_config_t new_config = s_cpu_freq_by_mode[new_mode];
@@ -655,6 +665,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
     }
 
     portENTER_CRITICAL_ISR(&s_switch_lock);
+    portEXIT_CRITICAL_ISR(&s_cpu_freq_switch_lock[core_id]);
     s_mode = new_mode;
     s_is_switching = false;
     portEXIT_CRITICAL_ISR(&s_switch_lock);
@@ -793,10 +804,6 @@ void IRAM_ATTR vApplicationSleep( TickType_t xExpectedIdleTime )
 #endif
         if (sleep_time_us >= configEXPECTED_IDLE_TIME_BEFORE_SLEEP * portTICK_PERIOD_MS * 1000LL) {
             esp_sleep_enable_timer_wakeup(sleep_time_us - LIGHT_SLEEP_EARLY_WAKEUP_US);
-#if CONFIG_PM_TRACE && SOC_PM_SUPPORT_RTC_PERIPH_PD
-            /* to force tracing GPIOs to keep state */
-            esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-#endif
             /* Enter sleep */
             ESP_PM_TRACE_ENTER(SLEEP, core_id);
             int64_t sleep_start = esp_timer_get_time();

@@ -197,6 +197,7 @@
 #define SOC_I2C_SUPPORT_SLAVE   (1)
 
 #define SOC_I2C_SUPPORT_APB     (1)
+#define SOC_I2C_SUPPORT_10BIT_ADDR (1)
 
 // On ESP32, the stop bit should be independent, we can't put trans data and stop command together
 #define SOC_I2C_STOP_INDEPENDENT (1)
@@ -315,6 +316,10 @@
 #define SOC_TIMER_GROUP_COUNTER_BIT_WIDTH (64)
 #define SOC_TIMER_GROUP_TOTAL_TIMERS      (4)
 #define SOC_TIMER_GROUP_SUPPORT_APB       (1)
+
+/*-------------------------- LP_TIMER CAPS ----------------------------------*/
+#define SOC_LP_TIMER_BIT_WIDTH_LO           32 // Bit width of lp_timer low part
+#define SOC_LP_TIMER_BIT_WIDTH_HI           16 // Bit width of lp_timer high part
 
 /*-------------------------- TOUCH SENSOR CAPS -------------------------------*/
 #define SOC_TOUCH_VERSION_1                 (1)     /*!<Hardware version of touch sensor */

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,6 +14,45 @@
 #include "common/bt_target.h"
 
 #if (defined BTC_SDP_INCLUDED && BTC_SDP_INCLUDED == TRUE)
+
+static bool esp_sdp_record_integrity_check(esp_bluetooth_sdp_record_t *record)
+{
+    bool ret = true;
+
+    if (record != NULL) {
+        if (record->hdr.type < ESP_SDP_TYPE_RAW || record->hdr.type > ESP_SDP_TYPE_SAP_SERVER) {
+            LOG_ERROR("Invalid type!\n");
+            return false;
+        }
+        switch (record->hdr.type) {
+        case ESP_SDP_TYPE_MAP_MAS:
+            if ((record->mas.mas_instance_id >> 8) || (record->mas.supported_message_types >> 8)) {
+                LOG_ERROR("mas_instance_id and supported_message_types are defined as uint8_t in the spec!\n");
+               ret = false;
+            }
+            break;
+        case ESP_SDP_TYPE_PBAP_PSE:
+            if (record->pse.supported_repositories >> 8) {
+                LOG_ERROR("supported_repositories is defined in the spec as uint8_t!\n");
+               ret = false;
+            }
+            break;
+
+        default:
+            break;
+        }
+        if (record->hdr.service_name_length > ESP_SDP_SERVER_NAME_MAX ||
+            strlen(record->hdr.service_name) + 1 != record->hdr.service_name_length) {
+            LOG_ERROR("Invalid server name!\n");
+            ret = false;
+        }
+    } else {
+        LOG_ERROR("record is NULL!\n");
+        ret = false;
+    }
+
+    return ret;
+}
 
 esp_err_t esp_sdp_register_callback(esp_sdp_cb_t callback)
 {
@@ -85,9 +124,7 @@ esp_err_t esp_sdp_create_record(esp_bluetooth_sdp_record_t *record)
 {
     ESP_BLUEDROID_STATUS_CHECK(ESP_BLUEDROID_STATUS_ENABLED);
 
-    if (record == NULL || record->hdr.service_name_length > ESP_SDP_SERVER_NAME_MAX
-            || strlen(record->hdr.service_name)+1 != record->hdr.service_name_length) {
-        LOG_ERROR("Invalid server name!\n");
+    if (!esp_sdp_record_integrity_check(record)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -100,7 +137,7 @@ esp_err_t esp_sdp_create_record(esp_bluetooth_sdp_record_t *record)
     msg.act = BTC_SDP_ACT_CREATE_RECORD;
 
     memset(&arg, 0, sizeof(btc_sdp_args_t));
-    arg.creat_record.record = (bluetooth_sdp_record *)record;
+    arg.create_record.record = (bluetooth_sdp_record *)record;
 
     /* Switch to BTC context */
     stat = btc_transfer_context(&msg, &arg, sizeof(btc_sdp_args_t),
@@ -125,6 +162,19 @@ esp_err_t esp_sdp_remove_record(int record_handle)
     /* Switch to BTC context */
     stat = btc_transfer_context(&msg, &arg, sizeof(btc_sdp_args_t), NULL, NULL);
     return (stat == BT_STATUS_SUCCESS) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t esp_sdp_get_protocol_status(esp_sdp_protocol_status_t *status)
+{
+    ESP_BLUEDROID_STATUS_CHECK(ESP_BLUEDROID_STATUS_ENABLED);
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(status, 0, sizeof(esp_sdp_protocol_status_t));
+    btc_sdp_get_protocol_status(status);
+
+    return ESP_OK;
 }
 
 #endif ///defined BTC_SDP_INCLUDED && BTC_SDP_INCLUDED == TRUE

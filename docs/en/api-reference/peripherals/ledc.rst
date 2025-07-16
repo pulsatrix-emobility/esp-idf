@@ -256,6 +256,10 @@ The range of the duty cycle values passed to functions depends on selected ``dut
 
         On {IDF_TARGET_NAME}, when channel's binded timer selects its maximum duty resolution, the duty cycle value cannot be set to ``(2 ** duty_resolution)``. Otherwise, the internal duty counter in the hardware will overflow and be messed up.
 
+    .. only:: esp32h2
+
+        The hardware limitation above only applies to chip revision before v1.2.
+
 
 Change PWM Duty Cycle Using Hardware
 """"""""""""""""""""""""""""""""""""
@@ -300,14 +304,14 @@ The LEDC API provides several ways to change the PWM frequency "on the fly":
 More Control Over PWM
 """""""""""""""""""""
 
-There are several lower level timer-specific functions that can be used to change PWM settings:
+There are several individual timer-specific functions that can be used to change PWM output:
 
 * :cpp:func:`ledc_timer_set`
 * :cpp:func:`ledc_timer_rst`
 * :cpp:func:`ledc_timer_pause`
 * :cpp:func:`ledc_timer_resume`
 
-The first two functions are called "behind the scenes" by :cpp:func:`ledc_channel_config` to provide a startup of a timer after it is configured.
+The first two functions are called "behind the scenes" by :cpp:func:`ledc_timer_config` to provide a startup of a timer after it is configured.
 
 
 Use Interrupts

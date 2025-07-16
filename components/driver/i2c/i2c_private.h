@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -52,10 +52,7 @@ extern "C" {
 #define I2C_ALLOW_INTR_PRIORITY_MASK ESP_INTR_FLAG_LOWMED
 
 #define I2C_PM_LOCK_NAME_LEN_MAX 16
-#define I2C_STATIC_OPERATION_ARRAY_MAX 6
-
-#define ACK_VAL 0
-#define NACK_VAL 1
+#define I2C_STATIC_OPERATION_ARRAY_MAX SOC_I2C_CMD_REG_NUM
 
 #define I2C_TRANS_READ_COMMAND(ack_value)    {.ack_val = (ack_value), .op_code = I2C_LL_CMD_READ}
 #define I2C_TRANS_WRITE_COMMAND(ack_check)   {.ack_en = (ack_check), .op_code = I2C_LL_CMD_WRITE}
@@ -67,11 +64,6 @@ typedef struct i2c_master_bus_t i2c_master_bus_t;
 typedef struct i2c_bus_t *i2c_bus_handle_t;
 typedef struct i2c_master_dev_t i2c_master_dev_t;
 typedef struct i2c_slave_dev_t i2c_slave_dev_t;
-
-typedef enum {
-    I2C_BUS_MODE_MASTER = 0,
-    I2C_BUS_MODE_SLAVE = 1,
-} i2c_bus_mode_t;
 
 typedef enum {
     I2C_SLAVE_FIFO = 0,
@@ -245,6 +237,14 @@ esp_err_t i2c_select_periph_clock(i2c_bus_handle_t handle, i2c_clock_source_t cl
  *      - Otherwise: Set SCL/SDA IOs error.
  */
 esp_err_t i2c_common_set_pins(i2c_bus_handle_t handle);
+
+/**
+ * @brief Check whether bus is acquired
+ *
+ * @param port_num number of port
+ * @return true if the bus is occupied, false if the bus is not occupied.
+*/
+bool i2c_bus_occupied(i2c_port_num_t port_num);
 
 #ifdef __cplusplus
 }

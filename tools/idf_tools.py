@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding=utf-8
 #
-# SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -166,27 +166,50 @@ class Platforms:
     }
 
     @staticmethod
+    def detect_linux_arm_platform(supposed_platform):  # type: (Optional[str]) -> Optional[str]
+        """
+        We probe the python binary to check exactly what environment the script is running in.
+
+        ARM platform may run on armhf hardware but having armel installed packages.
+        To avoid possible armel/armhf libraries mixing need to define user's
+        packages architecture to use the same
+        See note section in https://gcc.gnu.org/onlinedocs/gcc/ARM-Options.html#index-mfloat-abi
+
+        ARM platform may run on aarch64 hardware but having armhf installed packages
+        (it happens if a docker container is running on arm64 hardware, but using an armhf image).
+
+        """
+        if supposed_platform not in (PLATFORM_LINUX_ARM32, PLATFORM_LINUX_ARMHF, PLATFORM_LINUX_ARM64):
+            return supposed_platform
+
+        # suppose that installed python was built with the right ABI
+        with open(sys.executable, 'rb') as f:
+            # see ELF header description in https://man7.org/linux/man-pages/man5/elf.5.html, offsets depend on ElfN size
+            if int.from_bytes(f.read(4), sys.byteorder) != int.from_bytes(b'\x7fELF', sys.byteorder):
+                return supposed_platform  # ELF magic not found. Use the default platform name from PLATFORM_FROM_NAME
+            f.seek(18)  # seek to e_machine
+            e_machine = int.from_bytes(f.read(2), sys.byteorder)
+            if e_machine == 183:  # EM_AARCH64, https://github.com/ARM-software/abi-aa/blob/main/aaelf64/aaelf64.rst
+                supposed_platform = PLATFORM_LINUX_ARM64
+            elif e_machine == 40:  # EM_ARM, https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst
+                f.seek(36)  # seek to e_flags
+                e_flags = int.from_bytes(f.read(4), sys.byteorder)
+                if e_flags & 0x400:
+                    supposed_platform = PLATFORM_LINUX_ARMHF
+                else:
+                    supposed_platform = PLATFORM_LINUX_ARM32
+
+        return supposed_platform
+
+    @staticmethod
     def get(platform_alias):  # type: (Optional[str]) -> Optional[str]
         if platform_alias is None:
             return None
 
         if platform_alias == 'any' and CURRENT_PLATFORM:
             platform_alias = CURRENT_PLATFORM
-
         platform_name = Platforms.PLATFORM_FROM_NAME.get(platform_alias, None)
-
-        # ARM platform may run on armhf hardware but having armel installed packages.
-        # To avoid possible armel/armhf libraries mixing need to define user's
-        # packages architecture to use the same
-        # See note section in https://gcc.gnu.org/onlinedocs/gcc/ARM-Options.html#index-mfloat-abi
-        if platform_name in (PLATFORM_LINUX_ARM32, PLATFORM_LINUX_ARMHF) and 'arm' in platform.machine():
-            # suppose that installed python was built with a right ABI
-            with open(sys.executable, 'rb') as f:
-                if int.from_bytes(f.read(4), sys.byteorder) != int.from_bytes(b'\x7fELF', sys.byteorder):
-                    return platform_name  # ELF magic not found. Use default platform name from PLATFORM_FROM_NAME
-                f.seek(36)  # seek to e_flags (https://man7.org/linux/man-pages/man5/elf.5.html)
-                e_flags = int.from_bytes(f.read(4), sys.byteorder)
-                platform_name = PLATFORM_LINUX_ARMHF if e_flags & 0x400 else PLATFORM_LINUX_ARM32
+        platform_name = Platforms.detect_linux_arm_platform(platform_name)
         return platform_name
 
     @staticmethod
@@ -363,10 +386,7 @@ def get_env_for_extra_paths(extra_paths):  # type: (List[str]) -> Dict[str, str]
     """
     env_arg = os.environ.copy()
     new_path = os.pathsep.join(extra_paths) + os.pathsep + env_arg['PATH']
-    if sys.version_info.major == 2:
-        env_arg['PATH'] = new_path.encode('utf8')  # type: ignore
-    else:
-        env_arg['PATH'] = new_path
+    env_arg['PATH'] = new_path
     return env_arg
 
 
@@ -407,11 +427,14 @@ def unpack(filename, destination):  # type: (str, str) -> None
         archive_obj = ZipFile(filename)
     else:
         raise NotImplementedError('Unsupported archive type')
-    if sys.version_info.major == 2:
-        # This is a workaround for the issue that unicode destination is not handled:
-        # https://bugs.python.org/issue17153
-        destination = str(destination)
-    archive_obj.extractall(destination)
+
+    # Handle tar/zip extraction with backward compatibility
+    if isinstance(archive_obj, tarfile.TarFile) and sys.version_info[:2] >= (3, 12):
+        # Use the tar filter argument for Python 3.12 and later
+        archive_obj.extractall(destination, filter='tar')
+    else:
+        archive_obj.extractall(destination)
+
     # ZipFile on Unix systems does not preserve file permissions while extracting it
     # We need to reset the permissions afterward
     if sys.platform != 'win32' and filename.endswith('zip') and isinstance(archive_obj, ZipFile):
@@ -770,13 +793,36 @@ class IDFTool(object):
             return recommended_versions[0]
         return None
 
-    def get_preferred_installed_version(self):  # type: () -> Optional[str]
-        recommended_versions = [k for k in self.versions_installed
-                                if self.versions[k].status == IDFToolVersion.STATUS_RECOMMENDED
-                                and self.versions[k].compatible_with_platform(self._platform)]
-        assert len(recommended_versions) <= 1
-        if recommended_versions:
-            return recommended_versions[0]
+    def get_preferred_installed_version(self) -> Optional[str]:
+        """
+        Get the preferred installed version of the tool.
+        If more versions installed, return recommended version if exists, otherwise return the highest supported version
+        """
+
+        self.find_installed_versions()
+
+        if self.get_recommended_version() in self.versions_installed:
+            return self.get_recommended_version()
+
+        supported_installed_versions = [
+            k
+            for k in self.versions_installed
+            if self.versions[k].status == IDFToolVersion.STATUS_SUPPORTED
+            and self.versions[k].compatible_with_platform(self._platform)
+        ]
+        sorted_supported_installed_versions = sorted(
+            supported_installed_versions, key=lambda x: self.versions[x], reverse=True
+        )
+        if sorted_supported_installed_versions:
+            warn(
+                ''.join(
+                    [
+                        f'Using supported version {sorted_supported_installed_versions[0]} for tool {self.name} ',
+                        f'as recommended version {self.get_recommended_version()} is not installed.',
+                    ]
+                )
+            )
+            return sorted_supported_installed_versions[0]
         return None
 
     def find_installed_versions(self):  # type: () -> None
@@ -822,8 +868,7 @@ class IDFTool(object):
                 if ver_str != version:
                     warn('tool {} version {} is installed, but has reported version {}'.format(
                         self.name, version, ver_str))
-                else:
-                    self.versions_installed.append(version)
+                self.versions_installed.append(version)
 
     def latest_installed_version(self):  # type: () -> Optional[str]
         """
@@ -1180,6 +1225,25 @@ class IDFRecord:
         features.add('core')
         self._features = list(features)
 
+    def check_feature_requirements_files(self) -> None:
+        """
+        Check if feature requirements files exist.
+        If not, remove the feature from the features list.
+        """
+        features_to_remove: Tuple[str, ...] = ()
+        for feature in self._features:
+            if not os.path.isfile(feature_to_requirements_path(feature)):
+                info(
+                    '\n'.join(
+                        [
+                            f"Feature file '{feature_to_requirements_path(feature)}' does not exist.",
+                            f'Removing feature {feature}',
+                        ]
+                    )
+                )
+                features_to_remove += (feature,)
+        self.update_features(remove=features_to_remove)
+
     @property
     def targets(self) -> List[str]:
         return self._targets
@@ -1312,7 +1376,7 @@ class ENVState:
 
         if cls.deactivate_file_path:
             try:
-                with open(cls.deactivate_file_path, 'r') as fp:
+                with open(cls.deactivate_file_path, 'r', encoding='utf-8') as fp:
                     env_state_obj.idf_variables = json.load(fp)
             except (IOError, OSError, ValueError):
                 pass
@@ -1322,7 +1386,7 @@ class ENVState:
         try:
             if self.deactivate_file_path and os.path.basename(self.deactivate_file_path).endswith('idf_' + str(os.getppid())):
                 # If exported file path/name exists and belongs to actual opened shell
-                with open(self.deactivate_file_path, 'w') as w:
+                with open(self.deactivate_file_path, 'w', encoding='utf-8') as w:
                     json.dump(self.idf_variables, w, ensure_ascii=False, indent=4)  # type: ignore
             else:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='idf_' + str(os.getppid())) as fp:
@@ -1340,7 +1404,7 @@ def load_tools_info():  # type: () -> dict[str, IDFTool]
     """
     tool_versions_file_name = global_tools_json
 
-    with open(tool_versions_file_name, 'r') as f:  # type: ignore
+    with open(tool_versions_file_name, 'r', encoding='utf-8') as f:  # type: ignore
         tools_info = json.load(f)
 
     return parse_tools_info_json(tools_info)  # type: ignore
@@ -1389,9 +1453,9 @@ def get_idf_version() -> str:
     """
     idf_version: Optional[str] = None
 
-    version_file_path = os.path.join(global_idf_path, 'version.txt')
+    version_file_path = os.path.join(global_idf_path or '', 'version.txt')
     if os.path.exists(version_file_path):
-        with open(version_file_path, 'r') as version_file:
+        with open(version_file_path, 'r', encoding='utf-8') as version_file:
             idf_version_str = version_file.read()
 
         match = re.match(r'^v([0-9]+\.[0-9]+).*', idf_version_str)
@@ -1400,7 +1464,7 @@ def get_idf_version() -> str:
 
     if idf_version is None:
         try:
-            with open(os.path.join(global_idf_path, 'components', 'esp_common', 'include', 'esp_idf_version.h')) as f:
+            with open(os.path.join(global_idf_path or '', 'components', 'esp_common', 'include', 'esp_idf_version.h'), encoding='utf-8') as f:
                 m = re.search(r'^#define\s+ESP_IDF_VERSION_MAJOR\s+(\d+).+?^#define\s+ESP_IDF_VERSION_MINOR\s+(\d+)',
                               f.read(), re.DOTALL | re.MULTILINE)
                 if m:
@@ -1460,6 +1524,9 @@ def expand_tools_arg(tools_spec, overall_tools, targets):  # type: (list[str], O
 
     # Filtering by ESP_targets
     tools = [k for k in tools if overall_tools[k].is_supported_for_any_of_targets(targets)]
+
+    # Processing specific version of tool - defined with '@'
+    tools.extend([tool_pattern for tool_pattern in tools_spec if '@' in tool_pattern])
     return tools
 
 
@@ -1498,15 +1565,26 @@ def feature_to_requirements_path(feature):  # type: (str) -> str
 def process_and_check_features(idf_env_obj, features_str):  # type: (IDFEnv, str) -> list[str]
     new_features = []
     remove_features = []
-    for new_feature_candidate in features_str.split(','):
+    invalid_features = []
+
+    for new_feature_candidate in [feature for feature in features_str.split(',') if feature != '']:
+        # Feature to be added/removed needs to be checked if valid
+        sanitized_feat = new_feature_candidate.lstrip('-+')
+        if not os.path.isfile(feature_to_requirements_path(sanitized_feat)):
+            invalid_features += [sanitized_feat]
+            continue
+
         if new_feature_candidate.startswith('-'):
             remove_features += [new_feature_candidate.lstrip('-')]
         else:
-            new_feature_candidate = new_feature_candidate.lstrip('+')
-            # Feature to be added needs to be checked if is valid
-            if os.path.isfile(feature_to_requirements_path(new_feature_candidate)):
-                new_features += [new_feature_candidate]
+            new_features += [new_feature_candidate.lstrip('+')]
+
+    if invalid_features:
+        fatal(f'The following selected features are not valid: {", ".join(invalid_features)}')
+        raise SystemExit(1)
+
     idf_env_obj.get_active_idf_record().update_features(tuple(new_features), tuple(remove_features))
+    idf_env_obj.get_active_idf_record().check_feature_requirements_files()
     return idf_env_obj.get_active_idf_record().features
 
 
@@ -1742,7 +1820,6 @@ def process_tool(
     tool_export_paths: List[str] = []
     tool_export_vars: Dict[str, str] = {}
 
-    tool.find_installed_versions()
     recommended_version_to_use = tool.get_preferred_installed_version()
 
     if not tool.is_executable and recommended_version_to_use:
@@ -1782,7 +1859,7 @@ def process_tool(
 
 def check_python_venv_compatibility(idf_python_env_path: str, idf_version: str) -> None:
     try:
-        with open(os.path.join(idf_python_env_path, VENV_VER_FILE), 'r') as f:
+        with open(os.path.join(idf_python_env_path, VENV_VER_FILE), 'r', encoding='utf-8') as f:
             read_idf_version = f.read().strip()
         if read_idf_version != idf_version:
             fatal(f'Python environment is set to {idf_python_env_path} which was generated for '
@@ -2211,18 +2288,12 @@ def action_install_python_env(args):  # type: ignore
         warn('Removing the existing Python environment in {}'.format(idf_python_env_path))
         shutil.rmtree(idf_python_env_path)
 
-    venv_can_upgrade = False
-
     if os.path.exists(virtualenv_python):
         check_python_venv_compatibility(idf_python_env_path, idf_version)
     else:
         if subprocess.run([sys.executable, '-m', 'venv', '-h'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             # venv available
             virtualenv_options = ['--clear']  # delete environment if already exists
-            if sys.version_info[:2] >= (3, 9):
-                # upgrade pip & setuptools
-                virtualenv_options += ['--upgrade-deps']
-                venv_can_upgrade = True
 
             info('Creating a new Python environment in {}'.format(idf_python_env_path))
 
@@ -2248,7 +2319,7 @@ def action_install_python_env(args):  # type: ignore
                                   stdout=sys.stdout, stderr=sys.stderr)
 
             try:
-                with open(os.path.join(idf_python_env_path, VENV_VER_FILE), 'w') as f:
+                with open(os.path.join(idf_python_env_path, VENV_VER_FILE), 'w', encoding='utf-8') as f:
                     f.write(idf_version)
             except OSError as e:
                 warn(f'The following issue occurred while generating the ESP-IDF version file in the Python environment: {e}. '
@@ -2263,17 +2334,25 @@ def action_install_python_env(args):  # type: ignore
         warn('Found PIP_USER="yes" in the environment. Disabling PIP_USER in this shell to install packages into a virtual environment.')
         env_copy['PIP_USER'] = 'no'
 
-    if not venv_can_upgrade:
-        info('Upgrading pip and setuptools...')
-        subprocess.check_call([virtualenv_python, '-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools'],
-                              stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
+    constraint_file = get_constraints(idf_version) if use_constraints else None
+
+    info('Upgrading pip...')
+    run_args = [virtualenv_python, '-m', 'pip', 'install', '--upgrade', 'pip']
+    if constraint_file:
+        run_args += ['--constraint', constraint_file]
+    subprocess.check_call(run_args, stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
+
+    info('Upgrading setuptools...')
+    run_args = [virtualenv_python, '-m', 'pip', 'install', '--upgrade', 'setuptools']
+    if constraint_file:
+        run_args += ['--constraint', constraint_file]
+    subprocess.check_call(run_args, stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
 
     run_args = [virtualenv_python, '-m', 'pip', 'install', '--no-warn-script-location']
     requirements_file_list = get_requirements(args.features)
     for requirement_file in requirements_file_list:
         run_args += ['-r', requirement_file]
-    if use_constraints:
-        constraint_file = get_constraints(idf_version)
+    if constraint_file:
         run_args += ['--upgrade', '--constraint', constraint_file]
     if args.extra_wheels_dir:
         run_args += ['--find-links', args.extra_wheels_dir]
@@ -2287,8 +2366,8 @@ def action_install_python_env(args):  # type: ignore
         run_args += ['--find-links', wheels_dir]
 
     info('Installing Python packages')
-    if use_constraints:
-        info(' Constraint file: {}'.format(constraint_file))
+    if constraint_file:
+        info(f' Constraint file: {constraint_file}')
     info(' Requirement files:')
     info(os.linesep.join('  - {}'.format(path) for path in requirements_file_list))
     subprocess.check_call(run_args, stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
@@ -2372,7 +2451,7 @@ class ChecksumFileParser():
             sha256_file = sha256_file_tmp
             download(url, sha256_file)
 
-        with open(sha256_file, 'r') as f:
+        with open(sha256_file, 'r', encoding='utf-8') as f:
             self.checksum = f.read().splitlines()
 
         # remove temp file
@@ -2391,7 +2470,7 @@ class ChecksumFileParser():
         try:
             for bytes_str, hash_str in zip(self.checksum[0::2], self.checksum[1::2]):
                 bytes_filename = self.parseLine(r'^# (\S*):', bytes_str)
-                hash_filename = self.parseLine(r'^\S* \*(\S*)', hash_str)
+                hash_filename = self.parseLine(r'^\S* [\* ](\S*)', hash_str)
                 if hash_filename != bytes_filename:
                     fatal('filename in hash-line and in bytes-line are not the same')
                     raise SystemExit(1)
@@ -2445,7 +2524,7 @@ def action_add_version(args):  # type: ignore
     json_str = dump_tools_json(tools_info)
     if not args.output:
         args.output = os.path.join(global_idf_path, TOOLS_FILE_NEW)
-    with open(args.output, 'w') as f:
+    with open(args.output, 'w', encoding='utf-8') as f:
         f.write(json_str)
         f.write('\n')
     info('Wrote output to {}'.format(args.output))
@@ -2456,7 +2535,7 @@ def action_rewrite(args):  # type: ignore
     json_str = dump_tools_json(tools_info)
     if not args.output:
         args.output = os.path.join(global_idf_path, TOOLS_FILE_NEW)
-    with open(args.output, 'w') as f:
+    with open(args.output, 'w', encoding='utf-8') as f:
         f.write(json_str)
         f.write('\n')
     info('Wrote output to {}'.format(args.output))
@@ -2476,8 +2555,10 @@ def action_uninstall(args):  # type: (Any) -> None
     for tool in installed_tools:
         tool_versions = os.listdir(os.path.join(tools_path, tool)) if os.path.isdir(os.path.join(tools_path, tool)) else []
         try:
-            unused_versions = ([x for x in tool_versions if x != tools_info[tool].get_recommended_version()])
-        except KeyError:  # When tool that is not supported by tools_info (tools.json) anymore, remove the whole tool file
+            unused_versions = [x for x in tool_versions if x != tools_info[tool].get_preferred_installed_version()]
+        except (
+            KeyError
+        ):  # When tool that is not supported by tools_info (tools.json) anymore, remove the whole tool file
             unused_versions = ['']
         if unused_versions:
             unused_tools_versions[tool] = unused_versions
@@ -2522,7 +2603,7 @@ def action_uninstall(args):  # type: (Any) -> None
                 tool_name, tool_version = tool_spec.split('@', 1)
             tool_obj = tools_info_for_platform[tool_name]
             if tool_version is None:
-                tool_version = tool_obj.get_recommended_version()
+                tool_version = tool_obj.get_preferred_installed_version()
             # mypy-checks
             if tool_version is not None:
                 archive_version = tool_obj.versions[tool_version].get_download_for_platform(CURRENT_PLATFORM)
@@ -2546,10 +2627,10 @@ def action_validate(args):  # type: ignore
         fatal('You need to install jsonschema package to use validate command')
         raise SystemExit(1)
 
-    with open(os.path.join(global_idf_path, TOOLS_FILE), 'r') as tools_file:
+    with open(os.path.join(global_idf_path, TOOLS_FILE), 'r', encoding='utf-8') as tools_file:
         tools_json = json.load(tools_file)
 
-    with open(os.path.join(global_idf_path, TOOLS_SCHEMA_FILE), 'r') as schema_file:
+    with open(os.path.join(global_idf_path, TOOLS_SCHEMA_FILE), 'r', encoding='utf-8') as schema_file:
         schema_json = json.load(schema_file)
     jsonschema.validate(tools_json, schema_json)
     # on failure, this will raise an exception with a fairly verbose diagnostic message
@@ -2811,15 +2892,6 @@ def main(argv):  # type: (list[str]) -> None
     # Otherwise sys.executable keeps pointing to the system Python, even when a python binary from a virtualenv is invoked.
     # See https://bugs.python.org/issue22490#msg283859.
     os.environ.pop('__PYVENV_LAUNCHER__', None)
-
-    if sys.version_info.major == 2:
-        try:
-            global_idf_tools_path.decode('ascii')  # type: ignore
-        except UnicodeDecodeError:
-            fatal('IDF_TOOLS_PATH contains non-ASCII characters: {}'.format(global_idf_tools_path) +
-                  '\nThis is not supported yet with Python 2. ' +
-                  'Please set IDF_TOOLS_PATH to a directory with an ASCII name, or switch to Python 3.')
-            raise SystemExit(1)
 
     if CURRENT_PLATFORM is None:
         fatal('Platform {} appears to be unsupported'.format(PYTHON_PLATFORM))

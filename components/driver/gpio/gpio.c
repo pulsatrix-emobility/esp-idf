@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -23,6 +23,7 @@
 #include "hal/gpio_hal.h"
 #include "esp_rom_gpio.h"
 #include "esp_private/esp_gpio_reserve.h"
+#include "esp_private/io_mux.h"
 
 #if (SOC_RTCIO_PIN_COUNT > 0)
 #include "hal/rtc_io_hal.h"
@@ -76,7 +77,7 @@ static gpio_context_t gpio_context = {
 
 esp_err_t gpio_pullup_en(gpio_num_t gpio_num)
 {
-    GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
+    GPIO_CHECK(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), "GPIO number error (input-only pad has no internal PU)", ESP_ERR_INVALID_ARG);
 
     if (!rtc_gpio_is_valid_gpio(gpio_num) || SOC_GPIO_SUPPORT_RTC_INDEPENDENT) {
         portENTER_CRITICAL(&gpio_context.gpio_spinlock);
@@ -114,7 +115,7 @@ esp_err_t gpio_pullup_dis(gpio_num_t gpio_num)
 
 esp_err_t gpio_pulldown_en(gpio_num_t gpio_num)
 {
-    GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
+    GPIO_CHECK(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), "GPIO number error (input-only pad has no internal PD)", ESP_ERR_INVALID_ARG);
 
     if (!rtc_gpio_is_valid_gpio(gpio_num) || SOC_GPIO_SUPPORT_RTC_INDEPENDENT) {
         portENTER_CRITICAL(&gpio_context.gpio_spinlock);
@@ -632,6 +633,11 @@ esp_err_t gpio_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
     if ((intr_type == GPIO_INTR_LOW_LEVEL) || (intr_type == GPIO_INTR_HIGH_LEVEL)) {
 #if SOC_RTCIO_WAKE_SUPPORTED
         if (rtc_gpio_is_valid_gpio(gpio_num)) {
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+            // LP_IO Wake-up function does not depend on LP_IO Matrix, but uses its clock to
+            // sample the wake-up signal, we need to enable the LP_IO clock here.
+            io_mux_enable_lp_io_clock(gpio_num, true);
+#endif
             ret = rtc_gpio_wakeup_enable(gpio_num, intr_type);
         }
 #endif
@@ -657,6 +663,9 @@ esp_err_t gpio_wakeup_disable(gpio_num_t gpio_num)
 #if SOC_RTCIO_WAKE_SUPPORTED
     if (rtc_gpio_is_valid_gpio(gpio_num)) {
         ret = rtc_gpio_wakeup_disable(gpio_num);
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+        io_mux_enable_lp_io_clock(gpio_num, false);
+#endif
     }
 #endif
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
@@ -984,6 +993,9 @@ esp_err_t gpio_deep_sleep_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t int
         return ESP_ERR_INVALID_ARG;
     }
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+    io_mux_enable_lp_io_clock(gpio_num, true);
+#endif
     gpio_hal_deepsleep_wakeup_enable(gpio_context.gpio_hal, gpio_num, intr_type);
 #if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
     gpio_hal_sleep_sel_dis(gpio_context.gpio_hal, gpio_num);
@@ -1003,6 +1015,9 @@ esp_err_t gpio_deep_sleep_wakeup_disable(gpio_num_t gpio_num)
 #if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
     gpio_hal_sleep_sel_en(gpio_context.gpio_hal, gpio_num);
 #endif
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+    io_mux_enable_lp_io_clock(gpio_num, false);
+#endif
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     return ESP_OK;
 }
@@ -1018,9 +1033,24 @@ esp_err_t gpio_dump_io_configuration(FILE *out_stream, uint64_t io_bit_mask)
         uint32_t gpio_num = __builtin_ffsll(io_bit_mask) - 1;
         io_bit_mask &= ~(1ULL << gpio_num);
 
-        bool pu, pd, ie, oe, od, slp_sel;
-        uint32_t drv, fun_sel, sig_out;
+        bool pu = 0;
+        bool pd = 0;
+        bool ie = 0;
+        bool oe = 0;
+        bool od = 0;
+        bool slp_sel = 0;
+        uint32_t drv = 0;
+        uint32_t fun_sel = 0;
+        uint32_t sig_out = 0;
         gpio_hal_get_io_config(gpio_context.gpio_hal, gpio_num, &pu, &pd, &ie, &oe, &od, &drv, &fun_sel, &sig_out, &slp_sel);
+#if !SOC_GPIO_SUPPORT_RTC_INDEPENDENT && SOC_RTCIO_PIN_COUNT > 0
+        if (rtc_gpio_is_valid_gpio(gpio_num)) {
+            int rtcio_num = rtc_io_number_get(gpio_num);
+            pu = rtcio_hal_is_pullup_enabled(rtcio_num);
+            pd = rtcio_hal_is_pulldown_enabled(rtcio_num);
+            drv = rtcio_hal_get_drive_capability(rtcio_num);
+        }
+#endif
 
         fprintf(out_stream, "IO[%"PRIu32"]%s -\n", gpio_num, esp_gpio_is_pin_reserved(gpio_num) ? " **RESERVED**" : "");
         fprintf(out_stream, "  Pullup: %d, Pulldown: %d, DriveCap: %"PRIu32"\n", pu, pd, drv);
@@ -1046,6 +1076,6 @@ esp_err_t gpio_dump_io_configuration(FILE *out_stream, uint64_t io_bit_mask)
         fprintf(out_stream, "  SleepSelEn: %d\n", slp_sel);
         fprintf(out_stream, "\n");
     }
-    fprintf(out_stream, "=================IO DUMP End==================\n");
+    fprintf(out_stream, "=================IO DUMP End=================\n");
     return ESP_OK;
 }
