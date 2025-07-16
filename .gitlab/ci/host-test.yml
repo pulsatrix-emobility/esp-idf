@@ -111,7 +111,8 @@ test_cli_installer:
   script:
     # Tools must be downloaded for testing
     # We could use "idf_tools.py download all", but we don't want to install clang because of its huge size
-    - python3 ${IDF_PATH}/tools/idf_tools.py download required qemu-riscv32 qemu-xtensa cmake
+    #                                                                      cmake@version that is supported
+    - python3 ${IDF_PATH}/tools/idf_tools.py download required qemu-riscv32 qemu-xtensa cmake cmake@3.16.3
     - cd ${IDF_PATH}/tools/test_idf_tools
     - python3 -m pip install jsonschema
     - python3 ./test_idf_tools.py -v
@@ -233,6 +234,7 @@ test_mqtt_on_host:
 
 test_transport_on_host:
   extends: .host_test_template
+  allow_failure: true # IDFCI-2781 [v5.5, v5.4] test_transport_on_host fails on ubuntu 24.04
   script:
     - cd ${IDF_PATH}/components/tcp_transport/host_test
     - idf.py build

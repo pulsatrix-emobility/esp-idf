@@ -31,6 +31,7 @@ if(NOT non_os_build)
                      "sleep_modem.c"
                      "sleep_modes.c"
                      "sleep_console.c"
+                     "sleep_usb.c"
                      "sleep_gpio.c"
                      "sleep_event.c"
                      "regi2c_ctrl.c"
@@ -42,7 +43,8 @@ if(NOT non_os_build)
                      "dma/esp_dma_utils.c"
                      "dma/gdma_link.c"
                      "spi_share_hw_ctrl.c"
-                     "spi_bus_lock.c")
+                     "spi_bus_lock.c"
+                     "clk_utils.c")
 
     if(CONFIG_SOC_ADC_SUPPORTED)
         list(APPEND srcs "adc_share_hw_ctrl.c")

@@ -114,15 +114,27 @@ endif()
 
 if(CONFIG_ESP_WIFI_MBEDTLS_CRYPTO)
     set(crypto_src
-    "esp_supplicant/src/crypto/fastpbkdf2.c"
     "esp_supplicant/src/crypto/crypto_mbedtls.c"
     "esp_supplicant/src/crypto/crypto_mbedtls-bignum.c"
     "esp_supplicant/src/crypto/crypto_mbedtls-rsa.c"
     "esp_supplicant/src/crypto/crypto_mbedtls-ec.c")
+    if(NOT CONFIG_IDF_TARGET_ESP32)
+        list(APPEND crypto_src "esp_supplicant/src/crypto/fastpsk.c")
+    endif()
     # Add internal RC4 as RC4 has been removed from mbedtls
     set(crypto_src ${crypto_src} "src/crypto/rc4.c")
     if(NOT CONFIG_MBEDTLS_DES_C)
         set(crypto_src ${crypto_src} "src/crypto/des-internal.c")
+    endif()
+    if(NOT CONFIG_MBEDTLS_SHA1_C AND NOT CONFIG_MBEDTLS_HARDWARE_SHA)
+        set(crypto_src ${crypto_src} "src/crypto/sha1-pbkdf2.c"
+                       ${crypto_src} "src/crypto/sha1.c"
+                       ${crypto_src} "src/crypto/sha1-internal.c")
+    else()
+        set(crypto_src ${crypto_src} "esp_supplicant/src/crypto/fastpbkdf2.c")
+    endif()
+    if(NOT CONFIG_MBEDTLS_SHA1_C AND CONFIG_MBEDTLS_HARDWARE_SHA)
+        set(crypto_src ${crypto_src} "src/crypto/sha1.c")
     endif()
     # Enabling this only for WiFi is probably not a good idea since MbedTLS
     # uses generic crypto init/update functions for this. That causes
@@ -174,8 +186,11 @@ endif()
 if(CONFIG_ESP_WIFI_11KV_SUPPORT OR CONFIG_ESP_WIFI_11R_SUPPORT)
     set(roaming_src
     "src/common/ieee802_11_common.c")
-    if(CONFIG_ESP_WIFI_11KV_SUPPORT)
-        set(roaming_src ${roaming_src} "src/common/rrm.c" "src/common/wnm_sta.c")
+    if(CONFIG_ESP_WIFI_RRM_SUPPORT)
+        set(roaming_src ${roaming_src} "src/common/rrm.c")
+    endif()
+    if(CONFIG_ESP_WIFI_WNM_SUPPORT)
+        set(roaming_src ${roaming_src} "src/common/wnm_sta.c")
     endif()
     if(CONFIG_ESP_WIFI_11R_SUPPORT)
         set(roaming_src ${roaming_src} "src/rsn_supp/wpa_ft.c")
@@ -255,8 +270,11 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CONFIG_IEEE80211W
     CONFIG_SHA256
     CONFIG_NO_RADIUS
-    CONFIG_FAST_PBKDF2
     )
+
+if(CONFIG_MBEDTLS_SHA1_C OR CONFIG_MBEDTLS_HARDWARE_SHA)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_FAST_PBKDF2)
+endif()
 
 if(CONFIG_ESP_WIFI_ENABLE_WPA3_SAE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_WPA3_SAE)
@@ -289,7 +307,13 @@ if(CONFIG_ESP_WIFI_DPP_SUPPORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_DPP)
 endif()
 if(CONFIG_ESP_WIFI_11KV_SUPPORT)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_SUPPLICANT_TASK CONFIG_WNM CONFIG_RRM CONFIG_IEEE80211KV)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_IEEE80211KV)
+endif()
+if(CONFIG_ESP_WIFI_RRM_SUPPORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_RRM)
+endif()
+if(CONFIG_ESP_WIFI_WNM_SUPPORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_WNM)
 endif()
 if(CONFIG_ESP_WIFI_11R_SUPPORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_IEEE80211R)
@@ -303,7 +327,8 @@ if(NOT CONFIG_ESP_WIFI_MBEDTLS_TLS_CLIENT)
 endif()
 if(CONFIG_ESP_WIFI_MBEDTLS_CRYPTO)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CRYPTO_MBEDTLS)
-else()
+endif()
+if(NOT CONFIG_MBEDTLS_SHA1_C AND NOT CONFIG_MBEDTLS_HARDWARE_SHA)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_CRYPTO_INTERNAL)
 endif()
 if(CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR)

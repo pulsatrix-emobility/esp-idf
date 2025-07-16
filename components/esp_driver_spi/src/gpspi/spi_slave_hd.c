@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2010-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2010-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -170,7 +170,12 @@ esp_err_t spi_slave_hd_init(spi_host_device_t host_id, const spi_bus_config_t *b
     spi_slave_hd_hal_init(&host->hal, &hal_config);
 
 #ifdef CONFIG_PM_ENABLE
-    ret = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "spi_slave", &host->pm_lock);
+#if CONFIG_IDF_TARGET_ESP32P4
+    // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+    ret = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "spi_slave_hd", &host->pm_lock);
+#else
+    ret = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "spi_slave_hd", &host->pm_lock);
+#endif
     if (ret != ESP_OK) {
         goto cleanup;
     }
@@ -597,8 +602,8 @@ static esp_err_t s_spi_slave_hd_setup_priv_trans(spi_host_device_t host, spi_sla
     uint16_t alignment = spihost[host]->internal_mem_align_size;
     uint32_t byte_len = orig_trans->len;
 
-    if (((uint32_t)orig_trans->data) | (byte_len & (alignment - 1))) {
-        ESP_RETURN_ON_FALSE(orig_trans->flags & SPI_SLAVE_HD_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, TAG, "data buffer addr&len not align to %d, or not dma_capable", alignment);
+    if (((uint32_t)orig_trans->data | byte_len) & (alignment - 1)) {
+        ESP_RETURN_ON_FALSE(orig_trans->flags & SPI_SLAVE_HD_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, TAG, "data buffer addr&len not align to %d byte, or not dma_capable", alignment);
         byte_len = (byte_len + alignment - 1) & (~(alignment - 1));  // up align to alignment
         ESP_LOGD(TAG, "Re-allocate %s buffer of len %" PRIu32 " for DMA", (chan == SPI_SLAVE_CHAN_TX) ? "TX" : "RX", byte_len);
         priv_trans->aligned_buffer = heap_caps_aligned_alloc(64, byte_len, MALLOC_CAP_DMA);

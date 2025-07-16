@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "http_header.h"
 #include "esp_transport.h"
 #include "esp_transport_tcp.h"
+#include "esp_transport_ssl.h"
 #include "http_utils.h"
 #include "http_auth.h"
 #include "sdkconfig.h"
@@ -33,6 +34,8 @@ static const char *TAG = "HTTP_CLIENT";
 
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_ANY == (int)ESP_TLS_VER_ANY, "Enum mismatch in esp_http_client and esp-tls");
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_MAX <= (int)ESP_TLS_VER_TLS_MAX, "HTTP client supported TLS is not supported in esp-tls");
+ESP_STATIC_ASSERT((int)HTTP_TLS_DYN_BUF_RX_STATIC == (int)ESP_TLS_DYN_BUF_RX_STATIC, "Enum mismatch in esp_http_client and esp-tls");
+ESP_STATIC_ASSERT((int)HTTP_TLS_DYN_BUF_STRATEGY_MAX <= (int)ESP_TLS_DYN_BUF_STRATEGY_MAX, "HTTP client supported TLS is not supported in esp-tls");
 
 #if CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT == -1
 #define ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT portMAX_DELAY
@@ -356,7 +359,7 @@ static int http_on_chunk_header(http_parser *parser)
 
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client, const char *key, const char *value)
 {
-    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL || value == NULL) {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -694,10 +697,26 @@ static bool init_common_tcp_transport(esp_http_client_handle_t client, const esp
     return true;
 }
 
+static esp_err_t http_convert_addr_family_to_tls(esp_http_client_addr_type_t http_addr_family, esp_tls_addr_family_t *tls_addr_family)
+{
+    esp_err_t ret = ESP_OK;
+    if (http_addr_family == HTTP_ADDR_TYPE_UNSPEC) {
+        *tls_addr_family = ESP_TLS_AF_UNSPEC;
+    } else if (http_addr_family == HTTP_ADDR_TYPE_INET) {
+        *tls_addr_family = ESP_TLS_AF_INET;
+    } else if (http_addr_family == HTTP_ADDR_TYPE_INET6) {
+        *tls_addr_family = ESP_TLS_AF_INET6;
+    } else {
+        ret = ESP_ERR_INVALID_ARG;
+    }
+    return ret;
+}
+
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
 {
 
     esp_http_client_handle_t client;
+    esp_tls_addr_family_t addr_family = ESP_TLS_AF_UNSPEC;
     esp_err_t ret = ESP_OK;
     esp_transport_handle_t tcp = NULL;
     char *host_name;
@@ -731,6 +750,8 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         ESP_LOGE(TAG, "Error initialize transport");
         goto error;
     }
+    ESP_GOTO_ON_ERROR(http_convert_addr_family_to_tls(config->addr_type, &addr_family), error, TAG, "Failed to convert addr type %d", config->addr_type);
+    esp_transport_ssl_set_addr_family(tcp, addr_family);
 
     ESP_GOTO_ON_FALSE(init_common_tcp_transport(client, config, tcp), ESP_FAIL, error, TAG, "Failed to set TCP config");
 
@@ -746,6 +767,7 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         ESP_LOGE(TAG, "Error initialize SSL Transport");
         goto error;
     }
+    esp_transport_ssl_set_addr_family(ssl, addr_family);
 
     ESP_GOTO_ON_FALSE(init_common_tcp_transport(client, config, ssl), ESP_FAIL, error, TAG, "Failed to set SSL config");
 
@@ -773,6 +795,14 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         }
     }
     esp_transport_ssl_set_tls_version(ssl, config->tls_version);
+
+#if CONFIG_MBEDTLS_DYNAMIC_BUFFER
+    /* When tls_dyn_buf_strategy is 0, mbedTLS dynamic buffer allocation uses default behavior.
+     * No need to call esp_transport_ssl_set_esp_tls_dyn_buf_strategy() in this case */
+    if (config->tls_dyn_buf_strategy != 0 && config->tls_dyn_buf_strategy < HTTP_TLS_DYN_BUF_STRATEGY_MAX) {
+        esp_transport_ssl_set_esp_tls_dyn_buf_strategy(ssl, config->tls_dyn_buf_strategy);
+    }
+#endif
 
 #if CONFIG_ESP_TLS_USE_SECURE_ELEMENT
     if (config->use_secure_element) {
@@ -1150,6 +1180,15 @@ int esp_http_client_get_errno(esp_http_client_handle_t client)
     return esp_transport_get_errno(client->transport);
 }
 
+esp_err_t esp_http_client_get_and_clear_last_tls_error(esp_http_client_handle_t client, int *tls_code, int *tls_flags)
+{
+    if (!client) {
+        ESP_LOGE(TAG, "Invalid client handle");
+        return ESP_FAIL;
+    }
+    return esp_tls_get_and_clear_last_error(esp_transport_get_error_handle(client->transport), tls_code, tls_flags);
+}
+
 esp_err_t esp_http_client_set_method(esp_http_client_handle_t client, esp_http_client_method_t method)
 {
     client->connection_info.method = method;
@@ -1519,6 +1558,8 @@ static int http_client_prepare_first_line(esp_http_client_handle_t client, int w
                                       client->connection_info.method != HTTP_METHOD_DELETE);
         if (write_len != 0 || length_required) {
             http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
+        } else {
+            http_header_delete(client->request->headers, "Content-Length");
         }
     } else {
         esp_http_client_set_header(client, "Transfer-Encoding", "chunked");
@@ -1859,7 +1900,7 @@ esp_err_t esp_http_client_get_url(esp_http_client_handle_t client, char *url, co
         return ESP_ERR_INVALID_ARG;
     }
     if (client->connection_info.host && client->connection_info.scheme && client->connection_info.path) {
-        snprintf(url, len, "%s://%s%s", client->connection_info.scheme, client->connection_info.host, client->connection_info.path);
+        snprintf(url, len, "%s://%s:%d%s", client->connection_info.scheme, client->connection_info.host, client->connection_info.port, client->connection_info.path);
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "Failed to get URL");

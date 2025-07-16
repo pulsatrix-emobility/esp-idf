@@ -64,7 +64,7 @@ esp_err_t rtc_gpio_deinit(gpio_num_t gpio_num)
     rtcio_hal_function_select(rtc_io_number_get(gpio_num), RTCIO_LL_FUNC_DIGITAL);
 
 #if SOC_LP_IO_CLOCK_IS_INDEPENDENT
-    io_mux_enable_lp_io_clock(gpio_num, false);
+    io_mux_force_disable_lp_io_clock(gpio_num);
 #endif
     RTCIO_EXIT_CRITICAL();
 
@@ -254,9 +254,11 @@ esp_err_t rtc_gpio_isolate(gpio_num_t gpio_num)
 esp_err_t rtc_gpio_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
 {
     ESP_RETURN_ON_FALSE(rtc_gpio_is_valid_gpio(gpio_num), ESP_ERR_INVALID_ARG, RTCIO_TAG, "RTCIO number error");
+#if !SOC_RTCIO_EDGE_WAKE_SUPPORTED
     if (intr_type == GPIO_INTR_POSEDGE || intr_type == GPIO_INTR_NEGEDGE || intr_type == GPIO_INTR_ANYEDGE) {
         return ESP_ERR_INVALID_ARG; // Dont support this mode.
     }
+#endif //!SOC_RTCIO_EDGE_WAKE_SUPPORTED
     RTCIO_ENTER_CRITICAL();
     rtcio_hal_wakeup_enable(rtc_io_number_get(gpio_num), intr_type);
     RTCIO_EXIT_CRITICAL();

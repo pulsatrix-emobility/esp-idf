@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -32,6 +32,7 @@
 #define SOC_AHB_GDMA_SUPPORTED          1
 #define SOC_GPTIMER_SUPPORTED           1
 #define SOC_LCDCAM_SUPPORTED            1
+#define SOC_LCDCAM_CAM_SUPPORTED        1 // support the camera driver based on the LCD_CAM peripheral
 #define SOC_LCDCAM_I80_LCD_SUPPORTED    1
 #define SOC_LCDCAM_RGB_LCD_SUPPORTED    1
 #define SOC_MCPWM_SUPPORTED             1
@@ -82,6 +83,7 @@
 #define SOC_DEEP_SLEEP_SUPPORTED        1
 #define SOC_LP_PERIPH_SHARE_INTERRUPT   1   // LP peripherals sharing the same interrupt source
 #define SOC_PM_SUPPORTED                1
+#define SOC_SIMD_INSTRUCTION_SUPPORTED  1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
 #define SOC_XTAL_SUPPORT_40M            1
@@ -145,7 +147,9 @@
 
 #define SOC_CPU_BREAKPOINTS_NUM             2
 #define SOC_CPU_WATCHPOINTS_NUM             2
-#define SOC_CPU_WATCHPOINT_MAX_REGION_SIZE  64 // bytes
+#define SOC_CPU_WATCHPOINT_MAX_REGION_SIZE  0x40 // bytes
+
+#define SOC_SIMD_PREFERRED_DATA_ALIGNMENT 16 // The preferred data alignment accepted by the SIMD instructions, in bytes
 
 /*-------------------------- DIGITAL SIGNATURE CAPS ----------------------------------------*/
 /** The maximum length of a Digital Signature in bits. */
@@ -320,9 +324,11 @@
                                              */
 #define SOC_RTCIO_HOLD_SUPPORTED 1
 #define SOC_RTCIO_WAKE_SUPPORTED 1
+// LP IO peripherals have independent clock gating to manage
+#define SOC_LP_IO_CLOCK_IS_INDEPENDENT 1
 
 /*-------------------------- Sigma Delta Modulator CAPS -----------------*/
-#define SOC_SDM_GROUPS             1
+#define SOC_SDM_GROUPS             (1U)
 #define SOC_SDM_CHANNELS_PER_GROUP 8
 #define SOC_SDM_CLK_SUPPORT_APB    1
 
@@ -379,6 +385,10 @@
 #define SOC_TIMER_GROUP_SUPPORT_XTAL      (1)
 #define SOC_TIMER_GROUP_SUPPORT_APB       (1)
 #define SOC_TIMER_GROUP_TOTAL_TIMERS      (4)
+
+/*-------------------------- LP_TIMER CAPS ----------------------------------*/
+#define SOC_LP_TIMER_BIT_WIDTH_LO           32 // Bit width of lp_timer low part
+#define SOC_LP_TIMER_BIT_WIDTH_HI           16 // Bit width of lp_timer high part
 
 /*-------------------------- TOUCH SENSOR CAPS -------------------------------*/
 #define SOC_TOUCH_SENSOR_VERSION                    (2)  /*!< Hardware version of touch sensor */
@@ -575,3 +585,8 @@
 
 /*------------------------------------- PHY CAPS -------------------------------------*/
 #define SOC_PHY_COMBO_MODULE                  (1) /*!< Support Wi-Fi and BLE*/
+
+/*--------------------------- CAM ---------------------------------*/
+#define SOC_LCDCAM_CAM_SUPPORT_RGB_YUV_CONV         (1)
+#define SOC_LCDCAM_CAM_PERIPH_NUM                   (1U)
+#define SOC_LCDCAM_CAM_DATA_WIDTH_MAX               (16U)

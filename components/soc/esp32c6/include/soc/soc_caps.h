@@ -79,7 +79,8 @@
 #define SOC_PM_SUPPORTED                1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
-#define SOC_XTAL_SUPPORT_40M            1
+#define SOC_XTAL_SUPPORT_40M                        1
+#define SOC_XTAL_CLOCK_PATH_DEPENDS_ON_TOP_DOMAIN   1
 
 /*-------------------------- AES CAPS -----------------------------------------*/
 #define SOC_AES_SUPPORT_DMA     (1)
@@ -230,6 +231,7 @@
                                              */
 #define SOC_RTCIO_HOLD_SUPPORTED            1
 #define SOC_RTCIO_WAKE_SUPPORTED            1
+#define SOC_RTCIO_EDGE_WAKE_SUPPORTED       1
 
 /*-------------------------- Dedicated GPIO CAPS -----------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -565,6 +567,7 @@
 #define SOC_PM_PAU_REGDMA_LINK_WIFIMAC      (1)
 
 #define SOC_PM_PAU_REGDMA_UPDATE_CACHE_BEFORE_WAIT_COMPARE  (1)
+#define SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED    (1)
 
 #define SOC_PM_RETENTION_MODULE_NUM         (32)
 

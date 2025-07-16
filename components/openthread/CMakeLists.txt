@@ -17,6 +17,7 @@ if(CONFIG_OPENTHREAD_ENABLED)
         "openthread/examples/platforms"
         "openthread/src"
         "openthread/src/core"
+        "openthread/src/include"
         "openthread/src/lib"
         "openthread/src/lib/hdlc"
         "openthread/src/lib/spinel"
@@ -102,8 +103,10 @@ if(CONFIG_OPENTHREAD_ENABLED)
             "openthread/src/core/thread/announce_sender.cpp"
             "openthread/src/core/thread/address_resolver.cpp"
             "openthread/src/core/thread/child_supervision.cpp"
+            "openthread/src/core/thread/csl_tx_scheduler.cpp"
             "openthread/src/core/thread/discover_scanner.cpp"
             "openthread/src/core/thread/energy_scan_server.cpp"
+            "openthread/src/core/thread/indirect_sender.cpp"
             "openthread/src/core/thread/key_manager.cpp"
             "openthread/src/core/thread/link_metrics.cpp"
             "openthread/src/core/thread/lowpan.cpp"
@@ -168,7 +171,7 @@ if(CONFIG_OPENTHREAD_ENABLED)
     if(CONFIG_OPENTHREAD_NCP_VENDOR_HOOK)
         list(APPEND src_dirs
             "src/ncp")
-        if(CONFIG_OPENTHREAD_RCP_UART)
+        if(CONFIG_OPENTHREAD_RCP_UART OR CONFIG_OPENTHREAD_RCP_USB_SERIAL_JTAG)
             list(APPEND exclude_srcs
                 "src/ncp/esp_openthread_ncp_spi.cpp")
         elseif(CONFIG_OPENTHREAD_RCP_SPI)
@@ -215,6 +218,7 @@ elseif(CONFIG_OPENTHREAD_SPINEL_ONLY)
         "private_include"
         "openthread/src"
         "openthread/src/core"
+        "openthread/src/include"
         "openthread/src/lib"
         "openthread/src/lib/hdlc"
         "openthread/src/lib/spinel")

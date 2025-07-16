@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -156,7 +156,8 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     spi_chan_claimed = spicommon_periph_claim(host, "spi slave");
     SPI_CHECK(spi_chan_claimed, "host already in use", ESP_ERR_INVALID_STATE);
 
-    spihost[host] = malloc(sizeof(spi_slave_t));
+    // spi_slave_t contains atomic variable, memory must be allocated from internal memory
+    spihost[host] = heap_caps_malloc(sizeof(spi_slave_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (spihost[host] == NULL) {
         ret = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -212,8 +213,12 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     }
 
 #ifdef CONFIG_PM_ENABLE
-    err = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "spi_slave",
-                             &spihost[host]->pm_lock);
+#if CONFIG_IDF_TARGET_ESP32P4
+    // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+    err = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "spi_slave", &spihost[host]->pm_lock);
+#else
+    err = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "spi_slave", &spihost[host]->pm_lock);
+#endif
     if (err != ESP_OK) {
         ret = err;
         goto cleanup;
@@ -332,7 +337,7 @@ static esp_err_t SPI_SLAVE_ISR_ATTR spi_slave_setup_priv_trans(spi_host_device_t
 
     if (spihost[host]->dma_enabled && trans->tx_buffer) {
         if ((!esp_ptr_dma_capable(trans->tx_buffer) || ((((uint32_t)trans->tx_buffer) | buffer_byte_len) & (alignment - 1)))) {
-            ESP_RETURN_ON_FALSE_ISR(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, SPI_TAG, "TX buffer addr&len not align to %d, or not dma_capable", alignment);
+            ESP_RETURN_ON_FALSE_ISR(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, SPI_TAG, "TX buffer addr&len not align to %d byte, or not dma_capable", alignment);
             //if txbuf in the desc not DMA-capable, or not align to "alignment", malloc a new one
             ESP_EARLY_LOGD(SPI_TAG, "Allocate TX buffer for DMA");
             buffer_byte_len = (buffer_byte_len + alignment - 1) & (~(alignment - 1));   // up align to "alignment"
@@ -349,7 +354,7 @@ static esp_err_t SPI_SLAVE_ISR_ATTR spi_slave_setup_priv_trans(spi_host_device_t
     }
     if (spihost[host]->dma_enabled && trans->rx_buffer) {
         if ((!esp_ptr_dma_capable(trans->rx_buffer) || ((((uint32_t)trans->rx_buffer) | (trans->length + 7) / 8) & (alignment - 1)))) {
-            ESP_RETURN_ON_FALSE_ISR(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, SPI_TAG, "RX buffer addr&len not align to %d, or not dma_capable", alignment);
+            ESP_RETURN_ON_FALSE_ISR(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, SPI_TAG, "RX buffer addr&len not align to %d byte, or not dma_capable", alignment);
             //if rxbuf in the desc not DMA-capable, or not align to "alignment", malloc a new one
             ESP_EARLY_LOGD(SPI_TAG, "Allocate RX buffer for DMA");
             buffer_byte_len = (buffer_byte_len + alignment - 1) & (~(alignment - 1));   // up align to "alignment"

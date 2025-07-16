@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,6 +19,7 @@
 #include "esp_clk_tree.h"
 #include "soc/soc_caps.h"
 
+#include "esp_private/esp_sleep_internal.h"
 #include "esp_private/crosscore_int.h"
 #include "esp_private/periph_ctrl.h"
 
@@ -49,9 +50,7 @@
 #include "esp_private/sleep_gpio.h"
 #include "esp_private/sleep_modem.h"
 #include "esp_private/uart_share_hw_ctrl.h"
-#if MSPI_TIMING_LL_FLASH_CPU_CLK_SRC_BINDED
-#include "esp_private/mspi_timing_tuning.h"
-#endif
+#include "esp_private/esp_clk_utils.h"
 #include "esp_sleep.h"
 #include "esp_memory_utils.h"
 
@@ -480,6 +479,7 @@ esp_err_t esp_pm_configure(const void* vconfig)
         // Enable the wakeup source here because the `esp_sleep_disable_wakeup_source` in the `else`
         // branch must be called if corresponding wakeup source is already enabled.
         esp_sleep_enable_timer_wakeup(0);
+        esp_sleep_overhead_out_time_refresh();
     } else if (s_light_sleep_en) {
         // Since auto light-sleep will enable the timer wakeup source, to avoid affecting subsequent possible
         // deepsleep requests, disable the timer wakeup source here.
@@ -570,13 +570,6 @@ void IRAM_ATTR esp_pm_impl_switch_mode(pm_mode_t mode,
  */
 static void IRAM_ATTR on_freq_update(uint32_t old_ticks_per_us, uint32_t ticks_per_us)
 {
-    uint32_t old_apb_ticks_per_us = MIN(old_ticks_per_us, 80);
-    uint32_t apb_ticks_per_us = MIN(ticks_per_us, 80);
-    /* Update APB frequency value used by the timer */
-    if (old_apb_ticks_per_us != apb_ticks_per_us) {
-        esp_timer_private_update_apb_freq(apb_ticks_per_us);
-    }
-
 #ifdef CONFIG_FREERTOS_SYSTICK_USES_CCOUNT
 #ifdef XT_RTOS_TIMER_INT
     /* Calculate new tick divisor */
@@ -669,16 +662,15 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
         if (switch_down) {
             on_freq_update(old_ticks_per_us, new_ticks_per_us);
         }
-#if MSPI_TIMING_LL_FLASH_CPU_CLK_SRC_BINDED
-        if (new_config.source_freq_mhz > clk_ll_xtal_load_freq_mhz()) {
-            rtc_clk_cpu_freq_set_config_fast(&new_config);
-            mspi_timing_change_speed_mode_cache_safe(false);
-        } else {
-            mspi_timing_change_speed_mode_cache_safe(true);
-            rtc_clk_cpu_freq_set_config_fast(&new_config);
-        }
-#else
+#if !CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
+        esp_clk_utils_mspi_speed_mode_sync_before_cpu_freq_switching(new_config.source_freq_mhz, new_config.freq_mhz);
+#endif
+        extern portMUX_TYPE s_time_update_lock;
+        portENTER_CRITICAL_SAFE(&s_time_update_lock);
         rtc_clk_cpu_freq_set_config_fast(&new_config);
+        portEXIT_CRITICAL_SAFE(&s_time_update_lock);
+#if !CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
+        esp_clk_utils_mspi_speed_mode_sync_after_cpu_freq_switching(new_config.source_freq_mhz, new_config.freq_mhz);
 #endif
         if (!switch_down) {
             on_freq_update(old_ticks_per_us, new_ticks_per_us);

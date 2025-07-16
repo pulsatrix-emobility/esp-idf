@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -71,6 +71,7 @@
 #include "soc/hp_sys_clkrst_reg.h"
 #endif
 
+#include "esp_private/cache_utils.h"
 #include "esp_private/rtc_clk.h"
 
 #if SOC_INT_CLIC_SUPPORTED
@@ -217,7 +218,9 @@ void IRAM_ATTR call_start_cpu1(void)
      */
     esp_cpu_intr_set_mtvt_addr(&_mtvt_table);
 #endif
-
+#if SOC_CPU_SUPPORT_WFE
+    rv_utils_disable_wfe_mode();
+#endif
     ets_set_appcpu_boot_addr(0);
 
     bootloader_init_mem();
@@ -417,6 +420,9 @@ void IRAM_ATTR call_start_cpu0(void)
      * the CPU jumps to this base address + 4 * interrupt_id.
      */
     esp_cpu_intr_set_mtvt_addr(&_mtvt_table);
+#endif
+#if SOC_CPU_SUPPORT_WFE
+    rv_utils_disable_wfe_mode();
 #endif
 
     rst_reas[0] = esp_rom_get_reset_reason(0);
@@ -680,7 +686,6 @@ void IRAM_ATTR call_start_cpu0(void)
 #if CONFIG_ESP32S2_DATA_CACHE_WRAP || CONFIG_ESP32S3_DATA_CACHE_WRAP
     dcache_wrap_enable = 1;
 #endif
-    extern void esp_enable_cache_wrap(uint32_t icache_wrap_enable, uint32_t dcache_wrap_enable);
     esp_enable_cache_wrap(icache_wrap_enable, dcache_wrap_enable);
 #endif
 
@@ -692,7 +697,6 @@ void IRAM_ATTR call_start_cpu0(void)
 #if CONFIG_IDF_TARGET_ESP32C2
 // TODO : IDF-5020
 #if CONFIG_ESP32C2_INSTRUCTION_CACHE_WRAP
-    extern void esp_enable_cache_wrap(uint32_t icache_wrap_enable);
     esp_enable_cache_wrap(1);
 #endif
 #endif

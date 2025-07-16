@@ -65,10 +65,10 @@ gap_event_cb(struct ble_gap_event *event, void *arg)
     struct ble_gap_ext_disc_desc *disc;
 
     switch (event->type) {
-    case BLE_GAP_EVENT_LINK_ESTAB:
-        if (event->link_estab.status == 0) {
-        ESP_LOGI(TAG, "Connection established, conn_handle = 0x%0x, sync handle= 0x%02x, status = 0x%0x\n",event->link_estab.conn_handle, event->link_estab.sync_handle, event->link_estab.status);
-        rc = ble_gap_conn_find(event->link_estab.conn_handle, &desc);
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+        ESP_LOGI(TAG, "Connection established, conn_handle = 0x%0x, sync handle= 0x%02x, status = 0x%0x\n",event->connect.conn_handle, event->connect.sync_handle, event->connect.status);
+        rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
         if (rc == 0) {
             print_conn_desc(&desc);
         }
@@ -76,7 +76,7 @@ gap_event_cb(struct ble_gap_event *event, void *arg)
             ESP_LOGE(TAG,"Failed to find Conn Information");
         }
         } else{
-            ESP_LOGW(TAG, "[Connection Failed], conn_handle = 0x%02x, sync handle = 0x%0x, status = 0x%0x\n",event->link_estab.conn_handle, event->link_estab.sync_handle, event->link_estab.status);
+            ESP_LOGW(TAG, "[Connection Failed], conn_handle = 0x%02x, sync handle = 0x%0x, status = 0x%0x\n",event->connect.conn_handle, event->connect.sync_handle, event->connect.status);
         }
         return 0;
 
@@ -185,8 +185,8 @@ static int
 create_periodic_sync(struct ble_gap_ext_disc_desc *disc)
 {
     int rc;
-    struct ble_gap_periodic_sync_params params;
-
+    struct ble_gap_periodic_sync_params params = {0};
+    memset(&params, 0, sizeof(params));
     params.skip = 0;
     params.sync_timeout = 4000;
     params.reports_disabled = 0;
@@ -218,6 +218,7 @@ start_scan(void)
     /* Perform a passive scan.  I.e., don't send follow-up scan requests to
      * each advertiser.
      */
+    memset(&disc_params, 0, sizeof(disc_params));
     disc_params.itvl = BLE_GAP_SCAN_ITVL_MS(600);
     disc_params.window = BLE_GAP_SCAN_ITVL_MS(300);
     disc_params.passive = 1;
@@ -237,23 +238,6 @@ on_reset(int reason)
 {
     ESP_LOGE(TAG, "Resetting state; reason=%d\n", reason);
 }
-
-/* Cnnot find `ble_single_xxxx()`, workaround */
-// static void
-// on_sync(void)
-// {
-//     int ble_single_env_init(void);
-//     int ble_single_init(void);
-
-//     int rc;
-
-//     rc = ble_single_env_init();
-//     assert(!rc);
-//     rc = ble_single_init();
-//     assert(!rc);
-
-//     start_scan();
-// }
 
 static void
 on_sync(void)

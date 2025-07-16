@@ -16,7 +16,24 @@
 
 #pragma once
 
+#ifdef __has_include
+#  if __has_include("sdkconfig.h")
+#    include "sdkconfig.h"
+#    define SOC_CAPS_ECO_VER    CONFIG_ESP32H2_REV_MIN_FULL
+#  endif
+#endif
+
+#if !defined(SOC_CAPS_ECO_VER)
+#define SOC_CAPS_ECO_VER    SOC_CAPS_ECO_VER_MAX
+#endif
+
+#ifndef SOC_CAPS_ECO_VER
+#warning ECO version not determined. Some ECO related caps will not be available.
+#warning Define SOC_CAPS_ECO_VER before including this header.
+#endif
+
 /*-------------------------- COMMON CAPS ---------------------------------------*/
+#define SOC_CAPS_ECO_VER_MAX            102
 #define SOC_ADC_SUPPORTED               1
 #define SOC_ANA_CMPR_SUPPORTED          1
 #define SOC_DEDICATED_GPIO_SUPPORTED    1
@@ -76,7 +93,8 @@
 #define SOC_PM_SUPPORTED                1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
-#define SOC_XTAL_SUPPORT_32M            1
+#define SOC_XTAL_SUPPORT_32M                        1
+#define SOC_XTAL_CLOCK_PATH_DEPENDS_ON_TOP_DOMAIN   1
 
 /*-------------------------- AES CAPS -----------------------------------------*/
 #define SOC_AES_SUPPORT_DMA     (1)
@@ -86,6 +104,8 @@
 
 #define SOC_AES_SUPPORT_AES_128 (1)
 #define SOC_AES_SUPPORT_AES_256 (1)
+
+#define SOC_AES_SUPPORT_PSEUDO_ROUND_FUNCTION (1) /*!< Only avliable in chip version above 1.2*/
 
 /*-------------------------- ADC CAPS -------------------------------*/
 /*!< SAR ADC Module*/
@@ -474,7 +494,9 @@
 #define SOC_EFUSE_SOFT_DIS_JTAG 1
 #define SOC_EFUSE_DIS_ICACHE 1
 #define SOC_EFUSE_BLOCK9_KEY_PURPOSE_QUIRK 1  // XTS-AES and ECDSA key purposes not supported for this block
+#if SOC_CAPS_ECO_VER < 102
 #define SOC_EFUSE_ECDSA_USE_HARDWARE_K 1 // Force use hardware TRNG supplied K for ECDSA
+#endif
 #define SOC_EFUSE_ECDSA_KEY 1
 
 /*-------------------------- Secure Boot CAPS----------------------------*/
@@ -488,6 +510,7 @@
 #define SOC_FLASH_ENCRYPTED_XTS_AES_BLOCK_MAX   (64)
 #define SOC_FLASH_ENCRYPTION_XTS_AES        1
 #define SOC_FLASH_ENCRYPTION_XTS_AES_128    1
+#define SOC_FLASH_ENCRYPTION_XTS_AES_SUPPORT_PSEUDO_ROUND  1 /*!< Only avliable in chip version above 1.2*/
 
 /*-------------------------- APM CAPS ----------------------------------------*/
 #define SOC_APM_CTRL_FILTER_SUPPORTED   1 /*!< Support for APM control filter */
@@ -495,9 +518,11 @@
 /*------------------------ Anti DPA (Security) CAPS --------------------------*/
 #define SOC_CRYPTO_DPA_PROTECTION_SUPPORTED     1
 
+/*--------------------------- ECC CAPS ---------------------------------------*/
+#define SOC_ECC_CONSTANT_TIME_POINT_MUL           1
+
 /*------------------------- ECDSA CAPS -------------------------*/
 #define SOC_ECDSA_USES_MPI                  (1)
-
 /*-------------------------- UART CAPS ---------------------------------------*/
 // ESP32-H2 has 2 UARTs
 #define SOC_UART_NUM                (2)
@@ -584,6 +609,7 @@
 #define SOC_BLE_POWER_CONTROL_SUPPORTED (1)    /*!< Support Bluetooth Power Control */
 #define SOC_BLE_MULTI_CONN_OPTIMIZATION (1)    /*!< Support multiple connections optimization */
 #define SOC_BLE_PERIODIC_ADV_ENH_SUPPORTED  (1)    /*!< Support For BLE Periodic Adv Enhancements */
+#define SOC_BLE_CTE_SUPPORTED           (1)    /*!< Support Bluetooth LE Constant Tone Extension (CTE) */
 
 /*------------------------------------- DEBUG CAPS -------------------------------------*/
 #define SOC_DEBUG_HAVE_OCD_STUB_BINS    (1)

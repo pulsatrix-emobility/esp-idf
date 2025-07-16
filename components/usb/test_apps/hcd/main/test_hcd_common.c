@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,6 +21,10 @@
 #include "test_hcd_common.h"
 #include "mock_msc.h"
 #include "unity.h"
+
+// ----------------------------------------------------- Macros --------------------------------------------------------
+
+// --------------------- Constants -------------------------
 
 #define PORT_NUM                1
 #define EVENT_QUEUE_LEN         5
@@ -153,7 +157,11 @@ hcd_port_handle_t test_hcd_setup(void)
     // Initialize the internal USB PHY to connect to the USB OTG peripheral
     usb_phy_config_t phy_config = {
         .controller = USB_PHY_CTRL_OTG,
+#if CONFIG_IDF_TARGET_ESP32P4 // ESP32-P4 has 2 USB-DWC peripherals, each with its dedicated PHY. We support HS+UTMI only ATM.
+        .target = USB_PHY_TARGET_UTMI,
+#else
         .target = USB_PHY_TARGET_INT,
+#endif
         .otg_mode = USB_OTG_MODE_HOST,
         .otg_speed = USB_PHY_SPEED_UNDEFINED,   // In Host mode, the speed is determined by the connected device
         .ext_io_conf = NULL,
@@ -170,7 +178,6 @@ hcd_port_handle_t test_hcd_setup(void)
     TEST_ASSERT_EQUAL(ESP_OK, hcd_install(&hcd_config));
     // Initialize a port
     hcd_port_config_t port_config = {
-        .fifo_bias = HCD_PORT_FIFO_BIAS_BALANCED,
         .callback = port_callback,
         .callback_arg = (void *)port_evt_queue,
         .context = (void *)port_evt_queue,
@@ -274,18 +281,33 @@ void test_hcd_pipe_free(hcd_pipe_handle_t pipe_hdl)
     vQueueDelete(pipe_evt_queue);
 }
 
+#include "esp_private/esp_cache_private.h"
+
+#define ALIGN_UP(num, align)    ((align) == 0 ? (num) : (((num) + ((align) - 1)) & ~((align) - 1)))
+
+#ifdef CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM      // In esp32p4, the USB-DWC internal DMA can access external RAM
+#define DATA_BUFFER_CAPS                     (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM)
+#else
+#define DATA_BUFFER_CAPS                     (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_INTERNAL)
+#endif
+
 urb_t *test_hcd_alloc_urb(int num_isoc_packets, size_t data_buffer_size)
 {
     // Allocate a URB and data buffer
     urb_t *urb = heap_caps_calloc(1, sizeof(urb_t) + (sizeof(usb_isoc_packet_desc_t) * num_isoc_packets), MALLOC_CAP_DEFAULT);
-    void *data_buffer = heap_caps_malloc(data_buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED);
+
+    size_t cache_align = 0;
+    esp_cache_get_alignment(DATA_BUFFER_CAPS, &cache_align);
+    data_buffer_size = ALIGN_UP(data_buffer_size, cache_align);
+    void *data_buffer = heap_caps_malloc(data_buffer_size, DATA_BUFFER_CAPS);
+
     TEST_ASSERT_NOT_NULL_MESSAGE(urb, "Failed to allocate URB");
     TEST_ASSERT_NOT_NULL_MESSAGE(data_buffer, "Failed to allocate transfer buffer");
 
     // Initialize URB and underlying transfer structure. Need to cast to dummy due to const fields
     usb_transfer_dummy_t *transfer_dummy = (usb_transfer_dummy_t *)&urb->transfer;
     transfer_dummy->data_buffer = data_buffer;
-    transfer_dummy->data_buffer_size = heap_caps_get_allocated_size(data_buffer);
+    transfer_dummy->data_buffer_size = data_buffer_size;
     transfer_dummy->num_isoc_packets = num_isoc_packets;
     return urb;
 }

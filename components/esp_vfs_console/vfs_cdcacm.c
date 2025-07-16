@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -146,35 +146,30 @@ static void cdcacm_return_char(int c)
 
 static ssize_t cdcacm_read(int fd, void *data, size_t size)
 {
-    assert(fd == 0);
+    assert(fd == USB_CDC_LOCAL_FD);
     char *data_c = (char *) data;
     ssize_t received = 0;
     _lock_acquire_recursive(&s_read_lock);
 
-    while (cdcacm_data_length_in_buffer() < size) {
-        if (!s_blocking) {
-            errno = EWOULDBLOCK;
-            _lock_release_recursive(&s_read_lock);
-            return -1;
-        }
-        xSemaphoreTake(s_rx_semaphore, portMAX_DELAY);
-    }
-
-    if (s_rx_mode == ESP_LINE_ENDINGS_CR || s_rx_mode == ESP_LINE_ENDINGS_LF) {
-        /* This is easy. Just receive, and if needed replace \r by \n. */
-        received = esp_usb_console_read_buf(data_c, size);
-        if (s_rx_mode == ESP_LINE_ENDINGS_CR) {
-            /* Change CRs to newlines */
-            for (ssize_t i = 0; i < received; i++) {
-                if (data_c[i] == '\r') {
-                    data_c[i] = '\n';
-                }
-            }
+    if (s_blocking) {
+        /* in blocking mode, wait for data. by the POSIX standards,
+         * the amount of available bytes does not need to match the
+         * requested size to return */
+        while (cdcacm_data_length_in_buffer() <= 0) {
+            xSemaphoreTake(s_rx_semaphore, portMAX_DELAY);
         }
     } else {
-        while (received < size) {
-            int c = cdcacm_read_char();
-            if (c == '\r') {
+        /* process pending interrupts before requesting available data */
+        esp_usb_console_poll_interrupts();
+        size = MIN(size, cdcacm_data_length_in_buffer());
+    }
+
+    while (received < size) {
+        int c = cdcacm_read_char();
+        if (c == '\r') {
+            if (s_rx_mode == ESP_LINE_ENDINGS_CR) {
+                c = '\n';
+            } else if (s_rx_mode == ESP_LINE_ENDINGS_CRLF) {
                 /* look ahead */
                 int c2 = cdcacm_read_char();
                 if (c2 == NONE) {
@@ -191,14 +186,12 @@ static ssize_t cdcacm_read(int fd, void *data, size_t size)
                      */
                     cdcacm_return_char(c2);
                 }
-            } else if (c == NONE) {
-                break;
             }
-            data_c[received++] = (char) c;
-            if (c == '\n') {
-                break;
-            }
+
+        } else if (c == NONE) {
+            break;
         }
+        data_c[received++] = (char) c;
     }
     _lock_release_recursive(&s_read_lock);
     if (received > 0) {

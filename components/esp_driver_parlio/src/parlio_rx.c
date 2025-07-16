@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -256,7 +256,6 @@ static esp_err_t s_parlio_rx_unit_set_gpio(parlio_rx_unit_handle_t rx_unit, cons
     if (config->clk_src == PARLIO_CLK_SRC_EXTERNAL) {
         ESP_RETURN_ON_FALSE(config->clk_in_gpio_num >= 0, ESP_ERR_INVALID_ARG, TAG, "clk_in_gpio_num must be set while the clock input from external");
         /* Connect the clock in signal to the GPIO matrix if it is set */
-        gpio_func_sel(config->clk_in_gpio_num, PIN_FUNC_GPIO);
         gpio_input_enable(config->clk_in_gpio_num);
 
         // deprecated, to be removed in in esp-idf v6.0
@@ -288,7 +287,6 @@ static esp_err_t s_parlio_rx_unit_set_gpio(parlio_rx_unit_handle_t rx_unit, cons
 
     /* Initialize the valid GPIO as input */
     if (config->valid_gpio_num >= 0) {
-        gpio_func_sel(config->valid_gpio_num, PIN_FUNC_GPIO);
         gpio_input_enable(config->valid_gpio_num);
 
         // deprecated, to be removed in in esp-idf v6.0
@@ -303,7 +301,6 @@ static esp_err_t s_parlio_rx_unit_set_gpio(parlio_rx_unit_handle_t rx_unit, cons
     for (int i = 0; i < config->data_width; i++) {
         /* Loop the data_gpio_nums to connect data and valid signals via GPIO matrix */
         if (config->data_gpio_nums[i] >= 0) {
-            gpio_func_sel(config->data_gpio_nums[i], PIN_FUNC_GPIO);
             gpio_input_enable(config->data_gpio_nums[i]);
 
             // deprecated, to be removed in in esp-idf v6.0
@@ -476,6 +473,9 @@ static esp_err_t s_parlio_rx_unit_init_dma(parlio_rx_unit_handle_t rx_unit)
     /* Allocate and connect the GDMA channel */
     gdma_channel_alloc_config_t dma_chan_config = {
         .direction = GDMA_CHANNEL_DIRECTION_RX,
+#if CONFIG_PARLIO_ISR_IRAM_SAFE
+        .flags.isr_cache_safe = true,
+#endif
     };
     ESP_RETURN_ON_ERROR(PARLIO_GDMA_NEW_CHANNEL(&dma_chan_config, &rx_unit->dma_chan), TAG, "allocate RX DMA channel failed");
     gdma_connect(rx_unit->dma_chan, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_PARLIO, 0));
@@ -534,10 +534,15 @@ static esp_err_t s_parlio_select_periph_clock(parlio_rx_unit_handle_t rx_unit, c
 
 #if CONFIG_PM_ENABLE
     if (clk_src != PARLIO_CLK_SRC_EXTERNAL) {
-        /* XTAL and PLL clock source will be turned off in light sleep, so we need to create a NO_LIGHT_SLEEP lock */
+        // XTAL and PLL clock source will be turned off in light sleep, so basically a NO_LIGHT_SLEEP lock is sufficient
+        esp_pm_lock_type_t lock_type = ESP_PM_NO_LIGHT_SLEEP;
         sprintf(rx_unit->pm_lock_name, "parlio_rx_%d_%d", rx_unit->base.group->group_id, rx_unit->base.unit_id); // e.g. parlio_rx_0_0
-        esp_err_t ret  = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, rx_unit->pm_lock_name, &rx_unit->pm_lock);
-        ESP_RETURN_ON_ERROR(ret, TAG, "create NO_LIGHT_SLEEP lock failed");
+#if CONFIG_IDF_TARGET_ESP32P4
+        // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+        lock_type = ESP_PM_CPU_FREQ_MAX;
+#endif
+        esp_err_t ret  = esp_pm_lock_create(lock_type, 0, rx_unit->pm_lock_name, &rx_unit->pm_lock);
+        ESP_RETURN_ON_ERROR(ret, TAG, "create pm lock failed");
     }
 #endif
 
@@ -969,7 +974,7 @@ esp_err_t parlio_rx_unit_receive(parlio_rx_unit_handle_t rx_unit,
         ESP_RETURN_ON_FALSE(payload_size >= 2 * alignment, ESP_ERR_INVALID_ARG, TAG, "The payload size should greater than %"PRIu32, 2 * alignment);
     }
 #endif
-#if CONFIG_GDMA_ISR_IRAM_SAFE
+#if CONFIG_PARLIO_ISR_IRAM_SAFE
     ESP_RETURN_ON_FALSE(esp_ptr_internal(payload), ESP_ERR_INVALID_ARG, TAG, "payload not in internal RAM");
 #else
     ESP_RETURN_ON_FALSE(recv_cfg->flags.indirect_mount || esp_ptr_internal(payload), ESP_ERR_INVALID_ARG, TAG, "payload not in internal RAM");

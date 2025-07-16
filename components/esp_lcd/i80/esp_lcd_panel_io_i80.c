@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -33,6 +33,7 @@
 #include "esp_private/gpio.h"
 #include "esp_private/gdma.h"
 #include "esp_private/gdma_link.h"
+#include "esp_private/esp_dma_utils.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_lcd_common.h"
 #include "soc/lcd_periph.h"
@@ -87,7 +88,7 @@ struct esp_lcd_i80_bus_t {
     uint8_t *format_buffer;  // The driver allocates an internal buffer for DMA to do data format transformer
     uint8_t *format_buffer_nc; // Non-cacheable version of format buffer
     size_t resolution_hz;    // LCD_CLK resolution, determined by selected clock source
-    size_t num_dma_nodes;    // Number of DMA nodes (descriptors)
+    size_t max_transfer_bytes; // Maximum number of bytes that can be transferred in one transaction
     gdma_channel_handle_t dma_chan; // DMA channel handle
     gdma_link_list_handle_t dma_link; // DMA link list handle
     size_t int_mem_align; // Alignment for internal memory
@@ -196,9 +197,12 @@ esp_err_t esp_lcd_new_i80_bus(const esp_lcd_i80_bus_config_t *bus_config, esp_lc
                                     (uint32_t)lcd_ll_get_interrupt_status_reg(bus->hal.dev),
                                     LCD_LL_EVENT_TRANS_DONE, i80_lcd_default_isr_handler, bus, &bus->intr);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "install interrupt failed");
-    lcd_ll_enable_interrupt(bus->hal.dev, LCD_LL_EVENT_TRANS_DONE, false); // disable all interrupts
+    PERIPH_RCC_ATOMIC() {
+        lcd_ll_enable_interrupt(bus->hal.dev, LCD_LL_EVENT_TRANS_DONE, false); // disable all interrupts
+    }
     lcd_ll_clear_interrupt_status(bus->hal.dev, UINT32_MAX); // clear pending interrupt
     // install DMA service
+    bus->max_transfer_bytes = bus_config->max_transfer_bytes;
     ret = lcd_i80_init_dma_link(bus, bus_config);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "install DMA failed");
     // disable RGB-LCD mode
@@ -211,8 +215,10 @@ esp_err_t esp_lcd_new_i80_bus(const esp_lcd_i80_bus_config_t *bus_config, esp_lc
     lcd_ll_set_swizzle_mode(bus->hal.dev, LCD_LL_SWIZZLE_AB2BA);
     // number of data cycles is controlled by DMA buffer size
     lcd_ll_enable_output_always_on(bus->hal.dev, true);
-    // enable trans done interrupt
-    lcd_ll_enable_interrupt(bus->hal.dev, LCD_LL_EVENT_TRANS_DONE, true);
+    PERIPH_RCC_ATOMIC() {
+        // enable trans done interrupt
+        lcd_ll_enable_interrupt(bus->hal.dev, LCD_LL_EVENT_TRANS_DONE, true);
+    }
     // trigger a quick "trans done" event, and wait for the interrupt line goes active
     // this could ensure we go into ISR handler next time we call `esp_intr_enable`
     lcd_periph_trigger_quick_trans_done_event(bus);
@@ -223,7 +229,7 @@ esp_err_t esp_lcd_new_i80_bus(const esp_lcd_i80_bus_config_t *bus_config, esp_lc
     LIST_INIT(&bus->device_list); // initialize device list head
     bus->spinlock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     *ret_bus = bus;
-    ESP_LOGD(TAG, "new i80 bus(%d) @%p, %zu dma nodes", bus_id, bus, bus->num_dma_nodes);
+    ESP_LOGD(TAG, "new i80 bus(%d) @%p", bus_id, bus);
     return ESP_OK;
 
 err:
@@ -449,7 +455,7 @@ static esp_err_t panel_io_i80_tx_param(esp_lcd_panel_io_t *io, int lcd_cmd, cons
     esp_lcd_i80_bus_t *bus = next_device->bus;
     lcd_panel_io_i80_t *cur_device = bus->cur_device;
     lcd_i80_trans_descriptor_t *trans_desc = NULL;
-    assert(param_size <= (bus->num_dma_nodes * LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE) && "parameter bytes too long, enlarge max_transfer_bytes");
+    assert(param_size <= bus->max_transfer_bytes && "parameter bytes too long, enlarge max_transfer_bytes");
     assert(param_size <= LCD_I80_IO_FORMAT_BUF_SIZE && "format buffer too small, increase LCD_I80_IO_FORMAT_BUF_SIZE");
     uint32_t cmd_cycles = next_device->lcd_cmd_bits / bus->bus_width;
     // in case bus_width=16 and cmd_bits=8, we still need 1 cmd_cycle
@@ -514,7 +520,7 @@ static esp_err_t panel_io_i80_tx_color(esp_lcd_panel_io_t *io, int lcd_cmd, cons
     lcd_panel_io_i80_t *i80_device = __containerof(io, lcd_panel_io_i80_t, base);
     esp_lcd_i80_bus_t *bus = i80_device->bus;
     lcd_i80_trans_descriptor_t *trans_desc = NULL;
-    assert(color_size <= (bus->num_dma_nodes * LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE) && "color bytes too long, enlarge max_transfer_bytes");
+    assert(color_size <= bus->max_transfer_bytes && "color bytes too long, enlarge max_transfer_bytes");
     uint32_t cache_line_size = 0;
     if (esp_ptr_external_ram(color)) {
         // check alignment
@@ -580,9 +586,14 @@ static esp_err_t lcd_i80_select_periph_clock(esp_lcd_i80_bus_handle_t bus, lcd_c
     // save the resolution of the i80 bus
     bus->resolution_hz = src_clk_hz / LCD_PERIPH_CLOCK_PRE_SCALE;
     // create pm lock based on different clock source
-    // clock sources like PLL and XTAL will be turned off in light sleep
 #if CONFIG_PM_ENABLE
-    ESP_RETURN_ON_ERROR(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "i80_bus_lcd", &bus->pm_lock), TAG, "create pm lock failed");
+    // clock sources like PLL and XTAL will be turned off in light sleep, so basically a NO_LIGHT_SLEEP lock is sufficient
+    esp_pm_lock_type_t lock_type = ESP_PM_NO_LIGHT_SLEEP;
+#if CONFIG_IDF_TARGET_ESP32P4
+    // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+    lock_type = ESP_PM_CPU_FREQ_MAX;
+#endif
+    ESP_RETURN_ON_ERROR(esp_pm_lock_create(lock_type, 0, "i80_bus_lcd", &bus->pm_lock), TAG, "create pm lock failed");
 #endif
     return ESP_OK;
 }
@@ -610,10 +621,11 @@ static esp_err_t lcd_i80_init_dma_link(esp_lcd_i80_bus_handle_t bus, const esp_l
     ESP_RETURN_ON_ERROR(gdma_config_transfer(bus->dma_chan, &trans_cfg), TAG, "config DMA transfer failed");
     gdma_get_alignment_constraints(bus->dma_chan, &bus->int_mem_align, &bus->ext_mem_align);
 
-    size_t num_dma_nodes = bus_config->max_transfer_bytes / LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE + 1;
+    size_t buffer_alignment = MAX(bus->int_mem_align, bus->ext_mem_align);
+    size_t num_dma_nodes = esp_dma_calculate_node_count(bus->max_transfer_bytes, buffer_alignment, LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE);
     // create DMA link list
     gdma_link_list_config_t dma_link_config = {
-        .buffer_alignment = MAX(bus->int_mem_align, bus->ext_mem_align),
+        .buffer_alignment = buffer_alignment,
         .item_alignment = LCD_GDMA_DESCRIPTOR_ALIGN,
         .num_items = num_dma_nodes,
         .flags = {
@@ -621,7 +633,6 @@ static esp_err_t lcd_i80_init_dma_link(esp_lcd_i80_bus_handle_t bus, const esp_l
         },
     };
     ESP_RETURN_ON_ERROR(gdma_new_link_list(&dma_link_config, &bus->dma_link), TAG, "create DMA link list failed");
-    bus->num_dma_nodes = num_dma_nodes;
 
     return ESP_OK;
 }

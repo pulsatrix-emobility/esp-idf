@@ -59,23 +59,69 @@ uint8_t esp_ieee802154_get_channel(void);
 esp_err_t esp_ieee802154_set_channel(uint8_t channel);
 
 /**
- * @brief  Get the transmit power.
+ * @brief  Get the transmission power for the current channel.
  *
- * @return The transmit power in dBm.
+ * @return The transmission power in dBm.
  *
  */
 int8_t esp_ieee802154_get_txpower(void);
 
 /**
- * @brief  Set the transmit power.
+ * @brief  Set the transmission power for all channels.
  *
- * @param[in]  power  The transmit power in dBm.
+ * @param[in]  power  The transmission power in dBm.
  *
  * @return
  *      - ESP_OK on success.
  *      - ESP_FAIL on failure.
  */
 esp_err_t esp_ieee802154_set_txpower(int8_t power);
+
+/**
+ * @brief  Set the transmission power table.
+ *
+ * @param[in]  power_table  The power table.
+ *
+ * @return
+ *        - ESP_OK   Set the transmission power table to successfully.
+ */
+esp_err_t esp_ieee802154_set_power_table(esp_ieee802154_txpower_table_t power_table);
+
+/**
+ * @brief  Get the transmission power table.
+ *
+ * @param[out]  out_power_table  The power table.
+ *
+ * @return
+ *        - ESP_OK                  Get the transmission power table successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ *
+ */
+esp_err_t esp_ieee802154_get_power_table(esp_ieee802154_txpower_table_t *out_power_table);
+
+/**
+ * @brief  Set the transmission power for a specific channel.
+ *
+ * @param[in]  channel  The channel.
+ * @param[in]  power    The power.
+ *
+ * @return
+ *        - ESP_OK                  Set the transmission power for a specific channel successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ */
+esp_err_t esp_ieee802154_set_power_with_channel(uint8_t channel, int8_t power);
+
+/**
+ * @brief  Get the transmission power for a specific channel.
+ *
+ * @param[in]  channel    The channel.
+ * @param[out] out_power  The power.
+ *
+ * @return
+ *        - ESP_OK                  Get the transmission power for a specific channel successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ */
+esp_err_t esp_ieee802154_get_power_with_channel(uint8_t channel, int8_t *out_power);
 
 /**
  * @brief  Get the promiscuous mode.
@@ -542,18 +588,24 @@ extern void esp_ieee802154_transmit_sfd_done(uint8_t *frame);
 extern void esp_ieee802154_energy_detect_done(int8_t power);
 
 /**
- * @brief  Set the IEEE 802.15.4 Radio to receive state at a specific time.
+ * @brief  The receive window for receive_at has finished.
  *
- * @note   Radio will start receiving after the timestamp, and continue receiving until it receives a valid frame.
- *         Refer to `esp_ieee802154_receive_done()`.
+ */
+extern void esp_ieee802154_receive_at_done(void);
+
+/**
+ * @brief  Set the IEEE 802.15.4 Radio to receive state at a specific time, for a specific duration.
  *
- * @param[in]  time  A specific timestamp for starting receiving.
+ * @note   Radio will start receiving after the timestamp, and continue receiving for the specific duration.
+ *
+ * @param[in]  time      A specific timestamp for starting receiving.
+ * @param[in]  duration  A specific duration after which to stop receiving. Set duration = 0 to rx indefinitely.
  * @return
  *      - ESP_OK on success
  *      - ESP_FAIL on failure due to invalid state.
  *
  */
-esp_err_t esp_ieee802154_receive_at(uint32_t time);
+esp_err_t esp_ieee802154_receive_at(uint32_t time, uint32_t duration);
 
 /**
  * @brief  Transmit the given frame at a specific time.

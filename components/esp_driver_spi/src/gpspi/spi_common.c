@@ -1,12 +1,12 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
+#include <stdatomic.h>
 #include "sdkconfig.h"
-#include "stdatomic.h"
 #include "esp_types.h"
 #include "esp_attr.h"
 #include "esp_check.h"
@@ -27,6 +27,12 @@
 #include "hal/gpio_hal.h"
 #if CONFIG_IDF_TARGET_ESP32
 #include "soc/dport_reg.h"
+#endif
+
+#if CONFIG_SPI_MASTER_ISR_IN_IRAM || CONFIG_SPI_SLAVE_ISR_IN_IRAM
+#define SPI_COMMON_MALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#else
+#define SPI_COMMON_MALLOC_CAPS    (MALLOC_CAP_DEFAULT)
 #endif
 
 static const char *SPI_TAG = "spi";
@@ -222,6 +228,9 @@ static esp_err_t alloc_dma_chan(spi_host_device_t host_id, spi_dma_chan_t dma_ch
     if (dma_chan == SPI_DMA_CH_AUTO) {
         gdma_channel_alloc_config_t tx_alloc_config = {
             .flags.reserve_sibling = 1,
+#if CONFIG_SPI_MASTER_ISR_IN_IRAM
+            .flags.isr_cache_safe = true,
+#endif
             .direction = GDMA_CHANNEL_DIRECTION_TX,
         };
         ESP_RETURN_ON_ERROR(SPI_GDMA_NEW_CHANNEL(&tx_alloc_config, &dma_ctx->tx_dma_chan), SPI_TAG, "alloc gdma tx failed");
@@ -229,6 +238,9 @@ static esp_err_t alloc_dma_chan(spi_host_device_t host_id, spi_dma_chan_t dma_ch
         gdma_channel_alloc_config_t rx_alloc_config = {
             .direction = GDMA_CHANNEL_DIRECTION_RX,
             .sibling_chan = dma_ctx->tx_dma_chan,
+#if CONFIG_SPI_MASTER_ISR_IN_IRAM
+            .flags.isr_cache_safe = true,
+#endif
         };
         ESP_RETURN_ON_ERROR(SPI_GDMA_NEW_CHANNEL(&rx_alloc_config, &dma_ctx->rx_dma_chan), SPI_TAG, "alloc gdma rx failed");
 
@@ -264,7 +276,7 @@ esp_err_t spicommon_dma_chan_alloc(spi_host_device_t host_id, spi_dma_chan_t dma
 #endif
 
     esp_err_t ret = ESP_OK;
-    spi_dma_ctx_t *dma_ctx = (spi_dma_ctx_t *)calloc(1, sizeof(spi_dma_ctx_t));
+    spi_dma_ctx_t *dma_ctx = (spi_dma_ctx_t *)heap_caps_calloc(1, sizeof(spi_dma_ctx_t), SPI_COMMON_MALLOC_CAPS);
     if (!dma_ctx) {
         ret = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -819,7 +831,7 @@ esp_err_t spi_bus_initialize(spi_host_device_t host_id, const spi_bus_config_t *
     SPI_CHECK(spi_chan_claimed, "host_id already in use", ESP_ERR_INVALID_STATE);
 
     //clean and initialize the context
-    ctx = (spicommon_bus_context_t *)calloc(1, sizeof(spicommon_bus_context_t));
+    ctx = (spicommon_bus_context_t *)heap_caps_calloc(1, sizeof(spicommon_bus_context_t), SPI_COMMON_MALLOC_CAPS);
     if (!ctx) {
         err = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -888,8 +900,14 @@ esp_err_t spi_bus_initialize(spi_host_device_t host_id, const spi_bus_config_t *
 #endif  // SOC_SPI_SUPPORT_SLEEP_RETENTION
 
 #ifdef CONFIG_PM_ENABLE
+#if CONFIG_IDF_TARGET_ESP32P4
+    // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+    err = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "spi_master",
+                             &bus_attr->pm_lock);
+#else
     err = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "spi_master",
                              &bus_attr->pm_lock);
+#endif
     if (err != ESP_OK) {
         goto cleanup;
     }

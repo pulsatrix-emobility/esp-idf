@@ -167,6 +167,10 @@ config SOC_XTAL_SUPPORT_40M
     bool
     default y
 
+config SOC_XTAL_CLOCK_PATH_DEPENDS_ON_TOP_DOMAIN
+    bool
+    default y
+
 config SOC_ADC_PERIPH_NUM
     int
     default 1
@@ -212,6 +216,10 @@ config SOC_CPU_INTR_NUM
     default 32
 
 config SOC_CPU_HAS_FLEXIBLE_INTC
+    bool
+    default y
+
+config SOC_CPU_SUPPORT_WFE
     bool
     default y
 
@@ -376,6 +384,10 @@ config SOC_RTCIO_HOLD_SUPPORTED
     default y
 
 config SOC_RTCIO_WAKE_SUPPORTED
+    bool
+    default y
+
+config SOC_RTCIO_EDGE_WAKE_SUPPORTED
     bool
     default y
 
@@ -991,10 +1003,6 @@ config SOC_EXT_MEM_CACHE_TAG_IN_CPU_DOMAIN
     bool
     default y
 
-config SOC_PM_MMU_TABLE_RETENTION_WHEN_TOP_PD
-    bool
-    default y
-
 config SOC_PM_PAU_LINK_NUM
     int
     default 4
@@ -1008,6 +1016,10 @@ config SOC_PM_PAU_REGDMA_LINK_WIFIMAC
     default y
 
 config SOC_PM_PAU_REGDMA_UPDATE_CACHE_BEFORE_WAIT_COMPARE
+    bool
+    default y
+
+config SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED
     bool
     default y
 
@@ -1071,6 +1083,10 @@ config SOC_WIFI_MAC_VERSION_NUM
     int
     default 3
 
+config SOC_WIFI_NAN_SUPPORT
+    bool
+    default y
+
 config SOC_BLE_SUPPORTED
     bool
     default y
@@ -1104,6 +1120,10 @@ config SOC_BLUFI_SUPPORTED
     default y
 
 config SOC_BLE_MULTI_CONN_OPTIMIZATION
+    bool
+    default y
+
+config SOC_BLE_CTE_SUPPORTED
     bool
     default y
 

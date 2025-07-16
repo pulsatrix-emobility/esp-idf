@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -37,6 +37,7 @@
 #include "esp_private/esp_clk_tree_common.h"
 #include "esp_private/gdma.h"
 #include "esp_private/gdma_link.h"
+#include "esp_private/esp_dma_utils.h"
 
 static const char *TAG = "parlio-tx";
 
@@ -53,7 +54,6 @@ typedef struct parlio_tx_unit_t {
     esp_pm_lock_handle_t pm_lock;   // power management lock
     gdma_channel_handle_t dma_chan; // DMA channel
     gdma_link_list_handle_t dma_link; // DMA link list handle
-    size_t dma_nodes_num;           // number of DMA descriptor nodes
     size_t int_mem_align; // Alignment for internal memory
     size_t ext_mem_align; // Alignment for external memory
 #if CONFIG_PM_ENABLE
@@ -61,6 +61,7 @@ typedef struct parlio_tx_unit_t {
 #endif
     portMUX_TYPE spinlock;     // prevent resource accessing by user and interrupt concurrently
     uint32_t out_clk_freq_hz;  // output clock frequency
+    parlio_clock_source_t clk_src;  // Parallel IO internal clock source
     size_t max_transfer_bits;  // maximum transfer size in bits
     size_t queue_depth;        // size of transaction queue
     size_t num_trans_inflight; // indicates the number of transactions that are undergoing but not recycled to ready_queue
@@ -181,7 +182,6 @@ static esp_err_t parlio_tx_unit_configure_gpio(parlio_tx_unit_t *tx_unit, const 
                                         parlio_periph_signals.groups[group_id].tx_units[unit_id].clk_out_sig, false, false);
     }
     if (config->clk_in_gpio_num >= 0) {
-        gpio_func_sel(config->clk_in_gpio_num, PIN_FUNC_GPIO);
         gpio_input_enable(config->clk_in_gpio_num);
 
         // deprecated, to be removed in in esp-idf v6.0
@@ -199,6 +199,9 @@ static esp_err_t parlio_tx_unit_init_dma(parlio_tx_unit_t *tx_unit, const parlio
 {
     gdma_channel_alloc_config_t dma_chan_config = {
         .direction = GDMA_CHANNEL_DIRECTION_TX,
+#if CONFIG_PARLIO_ISR_IRAM_SAFE
+        .flags.isr_cache_safe = true,
+#endif
     };
     ESP_RETURN_ON_ERROR(PARLIO_GDMA_NEW_CHANNEL(&dma_chan_config, &tx_unit->dma_chan), TAG, "allocate TX DMA channel failed");
     gdma_connect(tx_unit->dma_chan, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_PARLIO, 0));
@@ -217,14 +220,12 @@ static esp_err_t parlio_tx_unit_init_dma(parlio_tx_unit_t *tx_unit, const parlio
     gdma_get_alignment_constraints(tx_unit->dma_chan, &tx_unit->int_mem_align, &tx_unit->ext_mem_align);
 
     // create DMA link list
-    size_t dma_nodes_num = tx_unit->dma_nodes_num;
+    size_t buffer_alignment = MAX(tx_unit->int_mem_align, tx_unit->ext_mem_align);
+    size_t num_dma_nodes = esp_dma_calculate_node_count(config->max_transfer_size, buffer_alignment, DMA_DESCRIPTOR_BUFFER_MAX_SIZE);
     gdma_link_list_config_t dma_link_config = {
-        .buffer_alignment = 1,
+        .buffer_alignment = buffer_alignment,
         .item_alignment = PARLIO_DMA_DESC_ALIGNMENT,
-        .num_items = dma_nodes_num,
-        .flags = {
-            .check_owner = true,
-        },
+        .num_items = num_dma_nodes,
     };
 
     // throw the error to the caller
@@ -248,10 +249,15 @@ static esp_err_t parlio_select_periph_clock(parlio_tx_unit_t *tx_unit, const par
 
 #if CONFIG_PM_ENABLE
     if (clk_src != PARLIO_CLK_SRC_EXTERNAL) {
-        // XTAL and PLL clock source will be turned off in light sleep, so we need to create a NO_LIGHT_SLEEP lock
+        // XTAL and PLL clock source will be turned off in light sleep, so basically a NO_LIGHT_SLEEP lock is sufficient
+        esp_pm_lock_type_t lock_type = ESP_PM_NO_LIGHT_SLEEP;
         sprintf(tx_unit->pm_lock_name, "parlio_tx_%d_%d", tx_unit->base.group->group_id, tx_unit->base.unit_id); // e.g. parlio_tx_0_0
-        esp_err_t ret  = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, tx_unit->pm_lock_name, &tx_unit->pm_lock);
-        ESP_RETURN_ON_ERROR(ret, TAG, "create NO_LIGHT_SLEEP lock failed");
+#if CONFIG_IDF_TARGET_ESP32P4
+        // use CPU_MAX lock to ensure PSRAM bandwidth and usability during DFS
+        lock_type = ESP_PM_CPU_FREQ_MAX;
+#endif
+        esp_err_t ret  = esp_pm_lock_create(lock_type, 0, tx_unit->pm_lock_name, &tx_unit->pm_lock);
+        ESP_RETURN_ON_ERROR(ret, TAG, "create pm lock failed");
     }
 #endif
     hal_utils_clk_div_t clk_div = {};
@@ -280,6 +286,7 @@ static esp_err_t parlio_select_periph_clock(parlio_tx_unit_t *tx_unit, const par
     if (tx_unit->out_clk_freq_hz != config->output_clk_freq_hz) {
         ESP_LOGW(TAG, "precision loss, real output frequency: %"PRIu32, tx_unit->out_clk_freq_hz);
     }
+    tx_unit->clk_src = clk_src;
 
     return ESP_OK;
 }
@@ -313,20 +320,14 @@ esp_err_t parlio_new_tx_unit(const parlio_tx_unit_config_t *config, parlio_tx_un
     ESP_RETURN_ON_FALSE(config->flags.allow_pd == 0, ESP_ERR_NOT_SUPPORTED, TAG, "register back up is not supported");
 #endif // SOC_PARLIO_SUPPORT_SLEEP_RETENTION
 
-    // malloc unit memory
-    uint32_t mem_caps = PARLIO_MEM_ALLOC_CAPS;
-    unit = heap_caps_calloc(1, sizeof(parlio_tx_unit_t) + sizeof(parlio_tx_trans_desc_t) * config->trans_queue_depth, mem_caps);
+    // allocate unit from internal memory because it contains atomic member
+    unit = heap_caps_calloc(1, sizeof(parlio_tx_unit_t) + sizeof(parlio_tx_trans_desc_t) * config->trans_queue_depth, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_GOTO_ON_FALSE(unit, ESP_ERR_NO_MEM, err, TAG, "no memory for tx unit");
-
-    // create DMA descriptors
-    // DMA descriptors must be placed in internal SRAM
-    size_t dma_nodes_num = config->max_transfer_size / DMA_DESCRIPTOR_BUFFER_MAX_SIZE + 1;
-    unit->dma_nodes_num = dma_nodes_num;
 
     unit->max_transfer_bits = config->max_transfer_size * 8;
     unit->base.dir = PARLIO_DIR_TX;
     unit->data_width = data_width;
-    //create transaction queue
+    // create transaction queue
     ESP_GOTO_ON_ERROR(parlio_tx_create_trans_queue(unit, config), err, TAG, "create transaction queue failed");
 
     // register the unit to a group
@@ -455,6 +456,18 @@ static void IRAM_ATTR parlio_tx_do_transaction(parlio_tx_unit_t *tx_unit, parlio
 
     tx_unit->cur_trans = t;
 
+    // If the external clock is a non-free-running clock, it needs to be switched to the internal free-running clock first.
+    // And then switched back to the actual clock after the reset is completed.
+    bool switch_clk = tx_unit->clk_src == PARLIO_CLK_SRC_EXTERNAL ? true : false;
+    if (switch_clk) {
+        PARLIO_CLOCK_SRC_ATOMIC() {
+            parlio_ll_tx_set_clock_source(hal->regs, PARLIO_CLK_SRC_XTAL);
+        }
+    }
+    PARLIO_RCC_ATOMIC() {
+        parlio_ll_tx_reset_clock(hal->regs);
+    }
+
     // DMA transfer data based on bytes not bits, so convert the bit length to bytes, round up
     gdma_buffer_mount_config_t mount_config = {
         .buffer = (void *)t->payload,
@@ -464,12 +477,21 @@ static void IRAM_ATTR parlio_tx_do_transaction(parlio_tx_unit_t *tx_unit, parlio
             .mark_final = true, // singly link list, mark final descriptor
         }
     };
+    // Since the threshold of the clock divider counter is not updated simultaneously with the clock source switching.
+    // The update of the threshold relies on the moment when the counter reaches the threshold each time.
+    // We place gdma_link_mount_buffers between reset clock and disable clock to ensure enough time for updating the threshold of the clock divider counter.
     gdma_link_mount_buffers(tx_unit->dma_link, 0, &mount_config, 1, NULL);
 
-    parlio_ll_tx_reset_fifo(hal->regs);
-    PARLIO_RCC_ATOMIC() {
-        parlio_ll_tx_reset_clock(hal->regs);
+    if (switch_clk) {
+        PARLIO_CLOCK_SRC_ATOMIC() {
+            parlio_ll_tx_set_clock_source(hal->regs, PARLIO_CLK_SRC_EXTERNAL);
+        }
     }
+    PARLIO_CLOCK_SRC_ATOMIC() {
+        parlio_ll_tx_enable_clock(hal->regs, false);
+    }
+    // reset tx fifo after disabling tx core clk to avoid unexpected rempty interrupt
+    parlio_ll_tx_reset_fifo(hal->regs);
     parlio_ll_tx_set_idle_data_value(hal->regs, t->idle_value);
     parlio_ll_tx_set_trans_bit_len(hal->regs, t->payload_bits);
 
@@ -478,6 +500,9 @@ static void IRAM_ATTR parlio_tx_do_transaction(parlio_tx_unit_t *tx_unit, parlio
     while (parlio_ll_tx_is_ready(hal->regs) == false);
     // turn on the core clock after we start the TX unit
     parlio_ll_tx_start(hal->regs, true);
+    PARLIO_CLOCK_SRC_ATOMIC() {
+        parlio_ll_tx_enable_clock(hal->regs, true);
+    }
 }
 
 esp_err_t parlio_tx_unit_enable(parlio_tx_unit_handle_t tx_unit)
@@ -490,14 +515,13 @@ esp_err_t parlio_tx_unit_enable(parlio_tx_unit_handle_t tx_unit)
         if (tx_unit->pm_lock) {
             esp_pm_lock_acquire(tx_unit->pm_lock);
         }
-        parlio_hal_context_t *hal = &tx_unit->base.group->hal;
         parlio_ll_enable_interrupt(hal->regs, PARLIO_LL_EVENT_TX_MASK, true);
         atomic_store(&tx_unit->fsm, PARLIO_TX_FSM_ENABLE);
     } else {
         ESP_RETURN_ON_FALSE(false, ESP_ERR_INVALID_STATE, TAG, "unit not in init state");
     }
 
-    // enable clock output
+    // the chip may resumes from light-sleep, in which case the register configuration needs to be resynchronized
     PARLIO_CLOCK_SRC_ATOMIC() {
         parlio_ll_tx_enable_clock(hal->regs, true);
     }
@@ -542,13 +566,18 @@ esp_err_t parlio_tx_unit_disable(parlio_tx_unit_handle_t tx_unit)
     }
     ESP_RETURN_ON_FALSE(valid_state, ESP_ERR_INVALID_STATE, TAG, "unit can't be disabled in state %d", expected_fsm);
 
-    // stop the TX engine
+    // stop the DMA engine, reset the peripheral state
     parlio_hal_context_t *hal = &tx_unit->base.group->hal;
-    // disable clock output
+    // to stop the undergoing transaction, disable and reset clock
     PARLIO_CLOCK_SRC_ATOMIC() {
         parlio_ll_tx_enable_clock(hal->regs, false);
     }
+    PARLIO_RCC_ATOMIC() {
+        parlio_ll_tx_reset_clock(hal->regs);
+    }
     gdma_stop(tx_unit->dma_chan);
+    gdma_reset(tx_unit->dma_chan);
+    parlio_ll_tx_reset_fifo(hal->regs);
     parlio_ll_tx_start(hal->regs, false);
     parlio_ll_enable_interrupt(hal->regs, PARLIO_LL_EVENT_TX_MASK, false);
 

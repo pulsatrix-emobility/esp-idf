@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -45,7 +45,8 @@ static esp_err_t i2s_pdm_tx_calculate_clock(i2s_chan_handle_t handle, const i2s_
     clk_info->mclk_div = clk_info->sclk / clk_info->mclk;
 
     /* Check if the configuration is correct. Use float for check in case the mclk division might be carried up in the fine division calculation */
-    ESP_RETURN_ON_FALSE(clk_info->sclk / (float)clk_info->mclk > 1.99, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE((float)clk_info->sclk > clk_info->mclk * 1.99, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE(clk_info->mclk_div < 256, ESP_ERR_INVALID_ARG, TAG, "sample rate is too small");
     /* Set up sampling configuration */
     i2s_ll_tx_set_pdm_fpfs(handle->controller->hal.dev, pdm_tx_clk->up_sample_fp, pdm_tx_clk->up_sample_fs);
     i2s_ll_tx_set_pdm_over_sample_ratio(handle->controller->hal.dev, over_sample_ratio);
@@ -95,9 +96,8 @@ static esp_err_t i2s_pdm_tx_set_slot(i2s_chan_handle_t handle, const i2s_pdm_tx_
     uint32_t buf_size = i2s_get_buf_size(handle, slot_cfg->data_bit_width, handle->dma.frame_num);
     /* The DMA buffer need to re-allocate if the buffer size changed */
     if (handle->dma.buf_size != buf_size) {
-        handle->dma.buf_size = buf_size;
         ESP_RETURN_ON_ERROR(i2s_free_dma_desc(handle), TAG, "failed to free the old dma descriptor");
-        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, handle->dma.desc_num, buf_size),
+        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, buf_size),
                             TAG, "allocate memory for dma descriptor failed");
     }
     /* Share bck and ws signal in full-duplex mode */
@@ -106,6 +106,9 @@ static esp_err_t i2s_pdm_tx_set_slot(i2s_chan_handle_t handle, const i2s_pdm_tx_
     /* Update the mode info: slot configuration */
     i2s_pdm_tx_config_t *pdm_tx_cfg = (i2s_pdm_tx_config_t *)handle->mode_info;
     memcpy(&(pdm_tx_cfg->slot_cfg), slot_cfg, sizeof(i2s_pdm_tx_slot_config_t));
+    /* Update the slot bit width to the actual slot bit width */
+    pdm_tx_cfg->slot_cfg.slot_bit_width = (int)pdm_tx_cfg->slot_cfg.slot_bit_width < (int)pdm_tx_cfg->slot_cfg.data_bit_width ?
+                                          pdm_tx_cfg->slot_cfg.data_bit_width : pdm_tx_cfg->slot_cfg.slot_bit_width;
 
     portENTER_CRITICAL(&g_i2s.spinlock);
     /* Configure the hardware to apply PDM format */
@@ -199,6 +202,13 @@ esp_err_t i2s_channel_init_pdm_tx_mode(i2s_chan_handle_t handle, const i2s_pdm_t
 
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
+    if (pdm_tx_cfg->clk_cfg.clk_src == I2S_CLK_SRC_APLL) {
+        /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+         * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
+        pm_type = ESP_PM_NO_LIGHT_SLEEP;
+    }
+#endif // SOC_I2S_SUPPORTS_APLL
     ESP_RETURN_ON_ERROR(esp_pm_lock_create(pm_type, 0, "i2s_driver", &handle->pm_lock), TAG, "I2S pm lock create failed");
 #endif
 
@@ -246,8 +256,10 @@ esp_err_t i2s_channel_reconfig_pdm_tx_clock(i2s_chan_handle_t handle, const i2s_
     if (pdm_tx_cfg->clk_cfg.clk_src != clk_cfg->clk_src) {
         ESP_GOTO_ON_ERROR(esp_pm_lock_delete(handle->pm_lock), err, TAG, "I2S delete old pm lock failed");
         esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
-#if SOC_I2S_SUPPORTS_APLL
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
         if (clk_cfg->clk_src == I2S_CLK_SRC_APLL) {
+            /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+             * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
             pm_type = ESP_PM_NO_LIGHT_SLEEP;
         }
 #endif // SOC_I2S_SUPPORTS_APLL
@@ -282,7 +294,7 @@ esp_err_t i2s_channel_reconfig_pdm_tx_slot(i2s_chan_handle_t handle, const i2s_p
 
     /* If the slot bit width changed, then need to update the clock */
     uint32_t slot_bits = slot_cfg->slot_bit_width == I2S_SLOT_BIT_WIDTH_AUTO ? slot_cfg->data_bit_width : slot_cfg->slot_bit_width;
-    if (pdm_tx_cfg->slot_cfg.slot_bit_width == slot_bits) {
+    if (pdm_tx_cfg->slot_cfg.slot_bit_width != slot_bits) {
         ESP_GOTO_ON_ERROR(i2s_pdm_tx_set_clock(handle, &pdm_tx_cfg->clk_cfg), err, TAG, "update clock failed");
     }
 
@@ -338,7 +350,8 @@ static esp_err_t i2s_pdm_rx_calculate_clock(i2s_chan_handle_t handle, const i2s_
     clk_info->mclk_div = clk_info->sclk / clk_info->mclk;
 
     /* Check if the configuration is correct. Use float for check in case the mclk division might be carried up in the fine division calculation */
-    ESP_RETURN_ON_FALSE(clk_info->sclk / (float)clk_info->mclk > 1.99, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE((float)clk_info->sclk > clk_info->mclk * 1.99, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE(clk_info->mclk_div < I2S_LL_CLK_FRAC_DIV_N_MAX, ESP_ERR_INVALID_ARG, TAG, "sample rate is too small");
     /* Set down-sampling configuration */
     i2s_ll_rx_set_pdm_dsr(handle->controller->hal.dev, pdm_rx_clk->dn_sample_mode);
     return ESP_OK;
@@ -380,9 +393,8 @@ static esp_err_t i2s_pdm_rx_set_slot(i2s_chan_handle_t handle, const i2s_pdm_rx_
     uint32_t buf_size = i2s_get_buf_size(handle, slot_cfg->data_bit_width, handle->dma.frame_num);
     /* The DMA buffer need to re-allocate if the buffer size changed */
     if (handle->dma.buf_size != buf_size) {
-        handle->dma.buf_size = buf_size;
         ESP_RETURN_ON_ERROR(i2s_free_dma_desc(handle), TAG, "failed to free the old dma descriptor");
-        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, handle->dma.desc_num, buf_size),
+        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, buf_size),
                             TAG, "allocate memory for dma descriptor failed");
     }
     /* Share bck and ws signal in full-duplex mode */
@@ -391,6 +403,9 @@ static esp_err_t i2s_pdm_rx_set_slot(i2s_chan_handle_t handle, const i2s_pdm_rx_
     /* Update the mode info: slot configuration */
     i2s_pdm_rx_config_t *pdm_rx_cfg = (i2s_pdm_rx_config_t *)handle->mode_info;
     memcpy(&(pdm_rx_cfg->slot_cfg), slot_cfg, sizeof(i2s_pdm_rx_slot_config_t));
+    /* Update the slot bit width to the actual slot bit width */
+    pdm_rx_cfg->slot_cfg.slot_bit_width = (int)pdm_rx_cfg->slot_cfg.slot_bit_width < (int)pdm_rx_cfg->slot_cfg.data_bit_width ?
+                                          pdm_rx_cfg->slot_cfg.data_bit_width : pdm_rx_cfg->slot_cfg.slot_bit_width;
 
     portENTER_CRITICAL(&g_i2s.spinlock);
     /* Configure the hardware to apply PDM format */
@@ -482,8 +497,10 @@ esp_err_t i2s_channel_init_pdm_rx_mode(i2s_chan_handle_t handle, const i2s_pdm_r
 
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
-#if SOC_I2S_SUPPORTS_APLL
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
     if (pdm_rx_cfg->clk_cfg.clk_src == I2S_CLK_SRC_APLL) {
+        /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+         * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
         pm_type = ESP_PM_NO_LIGHT_SLEEP;
     }
 #endif // SOC_I2S_SUPPORTS_APLL
@@ -534,8 +551,10 @@ esp_err_t i2s_channel_reconfig_pdm_rx_clock(i2s_chan_handle_t handle, const i2s_
     if (pdm_rx_cfg->clk_cfg.clk_src != clk_cfg->clk_src) {
         ESP_GOTO_ON_ERROR(esp_pm_lock_delete(handle->pm_lock), err, TAG, "I2S delete old pm lock failed");
         esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
-#if SOC_I2S_SUPPORTS_APLL
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
         if (clk_cfg->clk_src == I2S_CLK_SRC_APLL) {
+            /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+             * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
             pm_type = ESP_PM_NO_LIGHT_SLEEP;
         }
 #endif // SOC_I2S_SUPPORTS_APLL
@@ -570,7 +589,7 @@ esp_err_t i2s_channel_reconfig_pdm_rx_slot(i2s_chan_handle_t handle, const i2s_p
 
     /* If the slot bit width changed, then need to update the clock */
     uint32_t slot_bits = slot_cfg->slot_bit_width == I2S_SLOT_BIT_WIDTH_AUTO ? slot_cfg->data_bit_width : slot_cfg->slot_bit_width;
-    if (pdm_rx_cfg->slot_cfg.slot_bit_width == slot_bits) {
+    if (pdm_rx_cfg->slot_cfg.slot_bit_width != slot_bits) {
         ESP_GOTO_ON_ERROR(i2s_pdm_rx_set_clock(handle, &pdm_rx_cfg->clk_cfg), err, TAG, "update clock failed");
     }
 

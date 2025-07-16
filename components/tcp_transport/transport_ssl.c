@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -174,7 +174,10 @@ static int base_poll_read(esp_transport_handle_t t, int timeout_ms)
         return remain;
     }
     ret = select(ssl->sockfd + 1, &readset, NULL, &errset, esp_transport_utils_ms_to_timeval(timeout_ms, &timeout));
-    if (ret > 0 && FD_ISSET(ssl->sockfd, &errset)) {
+    // The select() function monitors the socket for readiness to read or write, and checks for errors.
+    // If both an error (errset) and readiness (readset/writeset) are detected simultaneously,
+    // this code ensures that the pending read data must be handled before we start processing error.
+    if (ret == 1 && FD_ISSET(ssl->sockfd, &errset)) {
         int sock_errno = 0;
         uint32_t optlen = sizeof(sock_errno);
         getsockopt(ssl->sockfd, SOL_SOCKET, SO_ERROR, &sock_errno, &optlen);
@@ -359,6 +362,14 @@ void esp_transport_ssl_enable_global_ca_store(esp_transport_handle_t t)
     ssl->cfg.use_global_ca_store = true;
 }
 
+#if CONFIG_MBEDTLS_DYNAMIC_BUFFER
+void esp_transport_ssl_set_esp_tls_dyn_buf_strategy(esp_transport_handle_t t, esp_tls_dyn_buf_strategy_t strategy)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.esp_tls_dyn_buf_strategy = strategy;
+}
+#endif
+
 void esp_transport_ssl_set_tls_version(esp_transport_handle_t t, esp_tls_proto_ver_t tls_version)
 {
     GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
@@ -392,6 +403,12 @@ void esp_transport_ssl_set_client_cert_data(esp_transport_handle_t t, const char
     GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
     ssl->cfg.clientcert_pem_buf = (void *)data;
     ssl->cfg.clientcert_pem_bytes = len + 1;
+}
+
+void esp_transport_ssl_set_addr_family(esp_transport_handle_t t, esp_tls_addr_family_t addr_family)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.addr_family = addr_family;
 }
 
 #ifdef CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN

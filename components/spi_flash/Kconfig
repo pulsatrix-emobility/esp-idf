@@ -120,6 +120,51 @@ menu "Main Flash configuration"
 
                 For new users, DO NOT enable this config.
 
+        config SPI_FLASH_FORCE_ENABLE_C6_H2_SUSPEND
+            bool "Enable chip suspend feature on c6 or h2 anyway (DO NOT ENABLE FOR NEW USERS OR APPLICATIONS)"
+            default n
+            help
+                Flash suspend has defect on ESP32C6 until v0.2 and ESP32H2 until v1.2. If you already use suspend
+                feature for massive protection, you can enable this for bypassing check after knowing the risk.
+                But if you are new users, or developing new applications, or producing a new batch,
+                please DO NOT enable this config option.
+
+                For more information, please refer to errata or connect to Espressif business support team.
+
+        config SPI_FLASH_SOFTWARE_RESUME
+            bool "Resume flash program/erase form suspend state by software control"
+            default n
+            depends on SPI_FLASH_AUTO_SUSPEND && FREERTOS_UNICORE && IDF_EXPERIMENTAL_FEATURES
+            help
+                Enable this config will disable auto-resume from hardware. Thus the software will resume the chip
+                after any higher priority task/interrupt which suspend the chip. The benefit is that the suspend-resume
+                will not disturb the higher priority task and interrupt.
+
+                This currently is only valid on single core chip.
+
+        config SPI_FLASH_DISABLE_SCHEDULER_IN_SUSPEND
+            bool "Disable task scheduler when suspend is enabled when SPI1 operation is ongoing"
+            default n
+            # Only valid on single core because no protection is supported on multi core
+            depends on SPI_FLASH_AUTO_SUSPEND && FREERTOS_UNICORE
+            help
+                Disable freertos task scheduler when CONFIG_SPI_FLASH_AUTO_SUSPEND is enabled.
+                Thus only interrupt can trigger a suspend. When SPI_FLASH_AUTO_SUSPEND is enabled,
+                default behavior is not disable the task scheduler, so both interrupt and high priority
+                task can suspend the erase/program operation. When this option is enabled, task
+                scheduler is disabled, only interrupt can suspend erase/program operation.
+
+        config SPI_FLASH_AUTO_CHECK_SUSPEND_STATUS
+            bool "Check flash status automatically after flash suspend"
+            default n
+            depends on SPI_FLASH_AUTO_SUSPEND
+            help
+                Majority flash supports to use flash register to judge if flash suspend status is
+                done or not. So enable this config, the behavior would use flash register WIP bit to judge
+                whether suspend is valid instead of waiting for a specific long time, which can save a
+                lot of time and benefit for performance improvement.
+
+
     endmenu
 endmenu
 
@@ -134,6 +179,8 @@ menu "SPI Flash driver"
             If this option is enabled, any time SPI flash is written then the data will be read
             back and verified. This can catch hardware problems with SPI flash, or flash which
             was not erased before verification.
+
+            This will slightly influence the write performance.
 
     config SPI_FLASH_LOG_FAILED_WRITE
         bool "Log errors if verification fails"

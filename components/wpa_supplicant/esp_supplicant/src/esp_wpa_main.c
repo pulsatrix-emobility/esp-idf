@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -40,9 +40,7 @@
 #include "ap/sta_info.h"
 #include "wps/wps_defs.h"
 #include "wps/wps.h"
-#if CONFIG_ESP_WIFI_ENABLE_ROAMING_APP
-#include "esp_roaming.h"
-#endif
+#include "rsn_supp/pmksa_cache.h"
 
 #ifdef CONFIG_DPP
 #include "common/dpp.h"
@@ -52,6 +50,7 @@
 bool g_wpa_pmk_caching_disabled = 0;
 const wifi_osi_funcs_t *wifi_funcs;
 struct wpa_funcs *wpa_cb;
+bool g_wpa_config_changed;
 
 void  wpa_install_key(enum wpa_alg alg, u8 *addr, int key_idx, int set_tx,
                       u8 *seq, size_t seq_len, u8 *key, size_t key_len, enum key_flag key_flag)
@@ -228,11 +227,22 @@ int dpp_connect(uint8_t *bssid, bool pdr_done)
 }
 #endif
 
+static void wpa_config_reload(void)
+{
+    struct wpa_sm *sm = &gWpaSm;
+    wpa_sm_pmksa_cache_flush(sm, NULL);
+}
+
 int wpa_sta_connect(uint8_t *bssid)
 {
     /* use this API to set AP specific IEs during connection */
     int ret = 0;
     ret = wpa_config_profile(bssid);
+
+    if (g_wpa_config_changed) {
+        wpa_config_reload();
+        g_wpa_config_changed = false;
+    }
     if (ret == 0) {
         ret = wpa_config_bss(bssid);
         if (ret) {
@@ -285,6 +295,8 @@ static void wpa_sta_connected_cb(uint8_t *bssid)
 
 static void wpa_sta_disconnected_cb(uint8_t reason_code)
 {
+    struct wpa_sm *sm = &gWpaSm;
+
     switch (reason_code) {
     case WIFI_REASON_AUTH_EXPIRE:
     case WIFI_REASON_CLASS2_FRAME_FROM_NONAUTH_STA:
@@ -295,8 +307,14 @@ static void wpa_sta_disconnected_cb(uint8_t reason_code)
     case WIFI_REASON_ASSOC_FAIL:
     case WIFI_REASON_CONNECTION_FAIL:
     case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_INVALID_MDE:
+    case WIFI_REASON_INVALID_FTE:
         wpa_sta_clear_curr_pmksa();
-        wpa_sm_notify_disassoc(&gWpaSm);
+        wpa_sm_notify_disassoc(sm);
+#if defined(CONFIG_IEEE80211R)
+        /* clear all ft auth related IEs so that next will be open auth */
+        wpa_sta_clear_ft_auth_ie();
+#endif
         break;
     default:
         if (g_wpa_pmk_caching_disabled) {
@@ -304,6 +322,13 @@ static void wpa_sta_disconnected_cb(uint8_t reason_code)
         }
         break;
     }
+
+    sm->rx_replay_counter_set = 0;  //init state not intall replay counter value
+    memset(sm->rx_replay_counter, 0, WPA_REPLAY_COUNTER_LEN);
+    sm->wpa_ptk_rekey = 0;
+    pmksa_cache_clear_current(sm);
+    sm->sae_pk = false;
+    sm->eapol1_count = 0;
 
     struct wps_sm_funcs *wps_sm_cb = wps_get_wps_sm_cb();
     if (wps_sm_cb && wps_sm_cb->wps_sm_notify_deauth) {
@@ -352,7 +377,7 @@ static int check_n_add_wps_sta(struct hostapd_data *hapd, struct sta_info *sta_i
 }
 #endif
 
-static bool hostap_sta_join(void **sta, u8 *bssid, u8 *wpa_ie, u8 wpa_ie_len, u8 *rsnxe, u8 rsnxe_len, bool *pmf_enable, int subtype, uint8_t *pairwise_cipher)
+static bool hostap_sta_join(void **sta, u8 *bssid, u8 *wpa_ie, u8 wpa_ie_len, u8 *rsnxe, u16 rsnxe_len, bool *pmf_enable, int subtype, uint8_t *pairwise_cipher)
 {
     struct sta_info *sta_info = NULL;
     struct hostapd_data *hapd = hostapd_get_hapd_data();
@@ -477,6 +502,7 @@ int esp_supplicant_init(void)
     wpa_cb->wpa_michael_mic_failure = wpa_michael_mic_failure;
     wpa_cb->wpa_config_done = wpa_config_done;
     wpa_cb->wpa_sta_clear_curr_pmksa = wpa_sta_clear_curr_pmksa;
+    wpa_cb->wpa_config_reload = wpa_config_reload;
 
     esp_wifi_register_wpa3_ap_cb(wpa_cb);
     esp_wifi_register_wpa3_cb(wpa_cb);

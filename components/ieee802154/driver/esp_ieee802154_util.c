@@ -13,12 +13,12 @@
 
 uint8_t ieee802154_freq_to_channel(uint8_t freq)
 {
-    return (freq - 3) / 5 + 11;
+    return (freq - 3) / 5 + IEEE802154_OQPSK_2P4G_CHANNEL_MIN;
 }
 
 uint8_t ieee802154_channel_to_freq(uint8_t channel)
 {
-    return (channel - 11) * 5 + 3;
+    return (channel - IEEE802154_OQPSK_2P4G_CHANNEL_MIN) * 5 + 3;
 }
 
 #if !CONFIG_IEEE802154_TEST && (CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_EXTERNAL_COEX_ENABLE)
@@ -66,7 +66,7 @@ void ieee802154_set_txrx_pti(ieee802154_txrx_scene_t txrx_scene)
 // TZ-97: implement these two functions using ETM common interface
 void ieee802154_etm_channel_clear(uint32_t channel)
 {
-    if (!(REG_READ(ETM_CHEN_AD0_REG) & (1 << channel))) {
+    if ((REG_READ(ETM_CHEN_AD0_REG) & (1 << channel))) {
         REG_WRITE(ETM_CHENCLR_AD0_REG, (REG_READ(ETM_CHENCLR_AD0_REG)) | 1 << channel);
     }
 }

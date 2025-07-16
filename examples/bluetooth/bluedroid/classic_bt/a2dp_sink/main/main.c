@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -104,12 +104,12 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 #if (CONFIG_EXAMPLE_A2DP_SINK_SSP_ENABLED == true)
     /* when Security Simple Pairing user confirmation requested, this event comes */
     case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %"PRIu32, param->cfm_req.num_val);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
         esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
         break;
     /* when Security Simple Pairing passkey notified, this event comes */
     case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %"PRIu32, param->key_notif.passkey);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %06"PRIu32, param->key_notif.passkey);
         break;
     /* when Security Simple Pairing passkey requested, this event comes */
     case ESP_BT_GAP_KEY_REQ_EVT:
@@ -153,17 +153,17 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
         esp_bt_dev_register_callback(bt_app_dev_cb);
         esp_bt_gap_register_callback(bt_app_gap_cb);
 
-        assert(esp_avrc_ct_init() == ESP_OK);
         esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
-        assert(esp_avrc_tg_init() == ESP_OK);
+        assert(esp_avrc_ct_init() == ESP_OK);
         esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
+        assert(esp_avrc_tg_init() == ESP_OK);
 
         esp_avrc_rn_evt_cap_mask_t evt_set = {0};
         esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
         assert(esp_avrc_tg_set_rn_evt_cap(&evt_set) == ESP_OK);
 
-        assert(esp_a2d_sink_init() == ESP_OK);
         esp_a2d_register_callback(&bt_app_a2d_cb);
+        assert(esp_a2d_sink_init() == ESP_OK);
         esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
 
         /* Get the default value of the delay value */

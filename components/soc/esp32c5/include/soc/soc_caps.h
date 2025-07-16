@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -85,8 +85,9 @@
 #define SOC_PHY_SUPPORTED               1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
-#define SOC_XTAL_SUPPORT_40M            1
-#define SOC_XTAL_SUPPORT_48M            1
+#define SOC_XTAL_SUPPORT_40M                        1
+#define SOC_XTAL_SUPPORT_48M                        1
+#define SOC_XTAL_CLOCK_PATH_DEPENDS_ON_TOP_DOMAIN   1
 
 /*-------------------------- AES CAPS -----------------------------------------*/
 #define SOC_AES_SUPPORT_DMA     (1)
@@ -153,6 +154,7 @@
 #define SOC_CPU_CORES_NUM               (1U)
 #define SOC_CPU_INTR_NUM                32
 #define SOC_CPU_HAS_FLEXIBLE_INTC       1
+#define SOC_CPU_SUPPORT_WFE             1
 #define SOC_INT_CLIC_SUPPORTED          1
 #define SOC_INT_HW_NESTED_SUPPORTED     1       // Support for hardware interrupts nesting
 #define SOC_BRANCH_PREDICTOR_SUPPORTED  1
@@ -187,6 +189,7 @@
 #define SOC_GDMA_PAIRS_PER_GROUP_MAX    3
 #define SOC_GDMA_SUPPORT_ETM            1
 #define SOC_GDMA_SUPPORT_SLEEP_RETENTION    1
+#define SOC_AHB_GDMA_SUPPORT_PSRAM 1
 
 /*-------------------------- ETM CAPS --------------------------------------*/
 #define SOC_ETM_GROUPS                  1U  // Number of ETM groups
@@ -243,6 +246,7 @@
                                                 */
 #define SOC_RTCIO_HOLD_SUPPORTED            1
 #define SOC_RTCIO_WAKE_SUPPORTED            1
+#define SOC_RTCIO_EDGE_WAKE_SUPPORTED       1
 
 /*-------------------------- Dedicated GPIO CAPS -----------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -585,6 +589,7 @@
 #define SOC_PM_PAU_REGDMA_LINK_IDX_WIFIMAC  (4) // The range of values for the link index is [0, SOC_PM_PAU_LINK_NUM)
 
 #define SOC_PM_PAU_REGDMA_UPDATE_CACHE_BEFORE_WAIT_COMPARE  (1)
+#define SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED    (1)
 
 #define SOC_PM_RETENTION_MODULE_NUM         (32)
 
@@ -614,6 +619,7 @@
 #define SOC_WIFI_HE_SUPPORT                 (1)    /*!< Support Wi-Fi 6 */
 #define SOC_WIFI_SUPPORT_5G                 (1)    /*!< Support 5G */
 #define SOC_WIFI_MAC_VERSION_NUM            (3)    /*!< Wi-Fi MAC version num is 3 */
+#define SOC_WIFI_NAN_SUPPORT                (1)    /*!< Support WIFI Aware (NAN) */
 
 /*---------------------------------- Bluetooth CAPS ----------------------------------*/
 #define SOC_BLE_SUPPORTED                   (1)    /*!< Support Bluetooth Low Energy hardware */

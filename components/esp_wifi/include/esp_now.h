@@ -51,7 +51,7 @@ extern "C" {
 
 #define ESP_NOW_MAX_IE_DATA_LEN      250       /**< Maximum data length in a vendor-specific element */
 #define ESP_NOW_MAX_DATA_LEN  ESP_NOW_MAX_IE_DATA_LEN   /**< Maximum length of data sent in each ESPNOW transmission for v1.0 */
-#define ESP_NOW_MAX_DATA_LEN_V2      1490      /**< Maximum length of data sent in each ESPNOW transmission for v2.0 */
+#define ESP_NOW_MAX_DATA_LEN_V2      1470      /**< Maximum length of data sent in each ESPNOW transmission for v2.0 */
 
 /**
  * @brief Status of sending ESPNOW data .
@@ -94,15 +94,8 @@ typedef struct esp_now_recv_info {
 
 /**
  * @brief ESPNOW rate config
- *
  */
-typedef struct esp_now_rate_config {
-    wifi_phy_mode_t phymode;                 /**< ESPNOW phymode of specified interface */
-    wifi_phy_rate_t rate;                    /**< ESPNOW rate of specified interface */
-    bool ersu;                               /**< ESPNOW using ERSU to send frame, ERSU is a transmission mode related to 802.11 ax.
-                                                  ERSU is always used in long distance transmission, and its frame has lower rate compared with SU mode */
-    bool dcm;                                /**< ESPNOW using dcm rate to send frame */
-} esp_now_rate_config_t;
+typedef wifi_tx_rate_config_t esp_now_rate_config_t;
 
 /**
   * @brief     Callback function of receiving ESPNOW data

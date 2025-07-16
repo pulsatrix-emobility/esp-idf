@@ -23,7 +23,7 @@ pm_check_state = 0x40001b6c;
 pm_dream = 0x40001b78;
 pm_on_beacon_rx = 0x40001ba0;
 //pm_parse_beacon = 0x40001bac;
-pm_process_tim = 0x40001bb0;
+//pm_process_tim = 0x40001bb0;
 pm_rx_beacon_process = 0x40001bb4;
 pm_rx_data_process = 0x40001bb8;
 pm_sleep = 0x40001bbc;
@@ -33,15 +33,15 @@ ppCalTxAMPDULength = 0x40001bd8;
 ppRxFragmentProc = 0x40001c28;
 ppRxPkt = 0x40001c2c;
 pp_coex_tx_request = 0x40001c54;
-rcGetSched = 0x40001c88;
+/* rcGetSched = 0x40001c88; */
 rcTxUpdatePer = 0x40001c94;
 rcUpdateRate = 0x40001c9c;
 wDev_AppendRxBlocks = 0x40001cdc;
 //wDev_IndicateFrame = 0x40001cec;
 wDev_ProcessFiq = 0x40001d08;
-wDev_ProcessRxSucData = 0x40001d0c;
+/*wDev_ProcessRxSucData = 0x40001d0c;*/
 ppProcTxDone = 0x40001d1c;
-pm_tx_data_done_process = 0x40001d20;
+/*pm_tx_data_done_process = 0x40001d20;*/
 ppMapWaitTxq = 0x40001d28;
 lmacDiscardFrameExchangeSequence = 0x40001d70;
 lmacDisableTransmit = 0x40001d74;
@@ -61,7 +61,7 @@ pm_stop = 0x40001e38;
 hal_set_sta_tbtt = 0x40001e4c;
 //pm_update_next_tbtt = 0x40001e50;
 pm_set_sleep_type = 0x40001e54;
-pm_tx_null_data_done_process = 0x40001eb0;
+/*pm_tx_null_data_done_process = 0x40001eb0;*/
 //pm_tx_data_process = 0x40001eb4;
 /*pm_attach = 0x40001eb8;*/
 /*pm_coex_schm_process = 0x40001ebc;*/
@@ -110,7 +110,7 @@ ieee80211_send_nulldata = 0x40002110;
 //ieee80211_mgmt_output = 0x40002118;
 //ieee80211_send_deauth_no_bss = 0x40002120;
 //ieee80211_tx_mgt_cb = 0x4000212c;
-sta_rx_csa = 0x40002134;
+//sta_rx_csa = 0x40002134;
 /*sta_send_sa_query_req = 0x40002138;
 sta_send_sa_query_resp = 0x4000213c;
 sta_recv_sa_query_req = 0x40002140;
@@ -129,19 +129,9 @@ s_trans_id = 0x3fcdfac4;
  ***************************************/
 
 /* Functions */
-coex_core_event_duration_get = 0x40002178;
-coex_core_timer_idx_get = 0x4000218c;
+/* coex_core_event_duration_get = 0x40002178; */
+/* coex_core_timer_idx_get = 0x4000218c; */
 coex_hw_timer_tick_get = 0x400021b8;
-
-
-/***************************************
- Group rom_phy
- ***************************************/
-
-/* Functions */
-phy_xpd_tsens = 0x400021e8;
-bt_track_pll_cap = 0x40002534;
-tx_pwctrl_background = 0x40002548;
 
 
 /***************************************
@@ -212,7 +202,7 @@ pm_beacon_offset_init = 0x400030b0;
 pm_beacon_offset_deinit = 0x400030b4;
 pm_get_tbtt_count = 0x400030b8;
 pm_coex_schm_overall_period_get = 0x400030bc;
-pm_coex_pwr_update = 0x400030c0;
+//pm_coex_pwr_update = 0x400030c0;
 /* Data (.data, .bss, .rodata) */
 s_pm_beacon_offset_ptr = 0x3fcdfa64;
 s_pm_beacon_offset_config_ptr = 0x3fcdfa60;

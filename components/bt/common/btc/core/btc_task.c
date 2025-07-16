@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,6 +24,8 @@
 #include "btc_gattc.h"
 #include "btc_gatt_common.h"
 #include "btc_gap_ble.h"
+#include "btc_iso_ble.h"
+#include "btc_ble_cte.h"
 #include "btc/btc_dm.h"
 #include "bta/bta_gatt_api.h"
 #if CLASSIC_BT_INCLUDED
@@ -210,7 +212,7 @@ static const btc_func_t profile_tab[BTC_PID_NUM] = {
     [BTC_PID_RPR_CLIENT]        = {btc_ble_mesh_rpr_client_call_handler,        btc_ble_mesh_rpr_client_cb_handler       },
 #endif /* CONFIG_BLE_MESH_RPR_CLI */
 #if CONFIG_BLE_MESH_RPR_SRV
-    [BTC_PID_RPR_SERVER]        = {NULL,                                        btc_ble_mesh_rpr_server_cb_handler       },
+    [BTC_PID_RPR_SERVER]        = {btc_ble_mesh_rpr_server_call_handler,        btc_ble_mesh_rpr_server_cb_handler       },
 #endif /* CONFIG_BLE_MESH_RPR_SRV */
 #if CONFIG_BLE_MESH_SAR_CLI
     [BTC_PID_SAR_CLIENT]        = {btc_ble_mesh_sar_client_call_handler,        btc_ble_mesh_sar_client_cb_handler       },
@@ -258,6 +260,12 @@ static const btc_func_t profile_tab[BTC_PID_NUM] = {
     [BTC_PID_BLE_MESH_BLE_COEX] = {btc_ble_mesh_ble_call_handler,               btc_ble_mesh_ble_cb_handler              },
 #endif /* CONFIG_BLE_MESH_BLE_COEX_SUPPORT */
 #endif /* #if CONFIG_BLE_MESH */
+#if (BLE_FEAT_ISO_EN == TRUE)
+    [BTC_PID_ISO_BLE]           = {btc_iso_ble_call_handler,                    btc_iso_ble_cb_handler                   },
+#endif  // #if (BLE_FEAT_ISO_EN == TRUE)
+#if (BLE_FEAT_CTE_EN == TRUE)
+    [BTC_PID_BLE_CTE]           = {btc_ble_cte_call_handler,                    btc_ble_cte_cb_handler                   },
+#endif // #if (BLE_FEAT_CTE_EN == TRUE)
 };
 
 /*****************************************************************************
@@ -383,6 +391,7 @@ static void btc_deinit_mem(void) {
     }
 
 #if (BLE_42_FEATURE_SUPPORT == TRUE)
+#if (BLE_42_ADV_EN == TRUE)
     if (gl_bta_adv_data_ptr) {
         osi_free(gl_bta_adv_data_ptr);
         gl_bta_adv_data_ptr = NULL;
@@ -392,6 +401,7 @@ static void btc_deinit_mem(void) {
         osi_free(gl_bta_scan_rsp_data_ptr);
         gl_bta_scan_rsp_data_ptr = NULL;
     }
+#endif // #if (BLE_42_ADV_EN == TRUE)
 #endif // BLE_42_FEATURE_SUPPORT
 
 #if GATTS_INCLUDED == TRUE && GATT_DYNAMIC_MEMORY == TRUE
@@ -446,6 +456,7 @@ static bt_status_t btc_init_mem(void) {
 
 #if BTC_DYNAMIC_MEMORY == TRUE
 #if (BLE_42_FEATURE_SUPPORT == TRUE)
+#if (BLE_42_ADV_EN == TRUE)
     if ((gl_bta_adv_data_ptr = (tBTA_BLE_ADV_DATA *)osi_malloc(sizeof(tBTA_BLE_ADV_DATA))) == NULL) {
         goto error_exit;
     }
@@ -455,6 +466,7 @@ static bt_status_t btc_init_mem(void) {
         goto error_exit;
     }
     memset((void *)gl_bta_scan_rsp_data_ptr, 0, sizeof(tBTA_BLE_ADV_DATA));
+#endif // #if (BLE_42_ADV_EN == TRUE)
 #endif // (BLE_42_FEATURE_SUPPORT == TRUE)
 #endif // BTC_DYNAMIC_MEMORY == TRUE
 
@@ -518,21 +530,30 @@ bt_status_t btc_init(void)
         return BT_STATUS_NOMEM;
     }
 #endif
+#if BTC_GAP_BT_INCLUDED
+    btc_gap_bt_init();
+#endif
 
 #if (BLE_INCLUDED == TRUE)
     btc_gap_callback_init();
+#if (BLE_FEAT_ISO_EN == TRUE)
+    btc_iso_callback_init();
+#endif // #if (BLE_FEAT_ISO_EN == TRUE)
+#if (BLE_FEAT_CTE_EN == TRUE)
+    btc_cte_callback_init();
+#endif // #if (BLE_FEAT_CTE_EN == TRUE)
     btc_gap_ble_init();
 #endif  ///BLE_INCLUDED == TRUE
 
-#if SCAN_QUEUE_CONGEST_CHECK
-    btc_adv_list_init();
-#endif
     /* TODO: initial the profile_tab */
     return BT_STATUS_SUCCESS;
 }
 
 void btc_deinit(void)
 {
+#if BTC_GAP_BT_INCLUDED
+    btc_gap_bt_deinit();
+#endif
 #if BTC_DYNAMIC_MEMORY
     btc_deinit_mem();
 #endif
@@ -542,18 +563,6 @@ void btc_deinit(void)
 #if (BLE_INCLUDED == TRUE)
     btc_gap_ble_deinit();
 #endif  ///BLE_INCLUDED == TRUE
-#if SCAN_QUEUE_CONGEST_CHECK
-    btc_adv_list_deinit();
-#endif
-}
-
-bool btc_check_queue_is_congest(void)
-{
-    if (osi_thread_queue_wait_size(btc_thread, 0) >= BT_QUEUE_CONGEST_SIZE) {
-        return true;
-    }
-
-    return false;
 }
 
 int get_btc_work_queue_size(void)

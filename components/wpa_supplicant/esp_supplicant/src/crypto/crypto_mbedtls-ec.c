@@ -1134,6 +1134,7 @@ struct wpabuf * crypto_ecdh_get_pubkey(struct crypto_ecdh *ecdh, int y)
 {
     struct wpabuf *public_key = NULL;
     uint8_t *buf = NULL;
+    int ret;
     mbedtls_ecdh_context *ctx = (mbedtls_ecdh_context *)ecdh;
     size_t prime_len = ACCESS_ECDH(ctx, grp).pbits / 8;
 
@@ -1144,8 +1145,13 @@ struct wpabuf * crypto_ecdh_get_pubkey(struct crypto_ecdh *ecdh, int y)
     }
 
     /* Export an MPI into unsigned big endian binary data of fixed size */
-    mbedtls_mpi_write_binary(ACCESS_ECDH(&ctx, Q).MBEDTLS_PRIVATE(X), buf, prime_len);
+    ret = mbedtls_mpi_write_binary(ACCESS_ECDH(&ctx, Q).MBEDTLS_PRIVATE(X), buf, prime_len);
+    if (ret) {
+        goto cleanup;
+    }
     public_key = wpabuf_alloc_copy(buf, 32);
+
+cleanup:
     os_free(buf);
     return public_key;
 }
@@ -1163,6 +1169,10 @@ struct wpabuf * crypto_ecdh_set_peerkey(struct crypto_ecdh *ecdh, int inc_y,
     int secret_key = 0;
 
     mbedtls_ecdh_context *ctx = (mbedtls_ecdh_context *)ecdh;
+    if (!ctx) {
+        wpa_printf(MSG_ERROR, "ECDH Context is NULL");
+        return 0;
+    }
 
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_entropy_context entropy;
@@ -1216,7 +1226,7 @@ struct wpabuf * crypto_ecdh_set_peerkey(struct crypto_ecdh *ecdh, int inc_y,
 
     /* Setup ECDH context from EC key */
     /* Call to mbedtls_ecdh_get_params() will initialize the context when not LEGACY context */
-    if (ctx != NULL && peer != NULL) {
+    if (peer != NULL) {
         mbedtls_ecp_copy(ACCESS_ECDH(&ctx, Qp), &(mbedtls_pk_ec(*peer))->MBEDTLS_PRIVATE(Q));
 #ifndef CONFIG_MBEDTLS_ECDH_LEGACY_CONTEXT
         ctx->MBEDTLS_PRIVATE(var) = MBEDTLS_ECDH_VARIANT_MBEDTLS_2_0;

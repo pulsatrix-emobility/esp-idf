@@ -108,6 +108,7 @@ ENV_MARKERS = {
     'httpbin': 'runner for tests that need to access the httpbin service',
     'flash_4mb': 'C2 runners with 4 MB flash',
     'jtag_re_enable': 'Runner to re-enable jtag which is softly disabled by burning bit SOFT_DIS_JTAG on eFuse',
+    'es8311': 'Development board that carries es8311 codec',
     # multi-dut markers
     'multi_dut_modbus_rs485': 'a pair of runners connected by RS485 bus',
     'ieee802154': 'ieee802154 related tests should run on ieee802154 runners.',
@@ -124,6 +125,8 @@ ENV_MARKERS = {
     'twai_std': 'twai runner with all twai supported targets connect to usb-can adapter',
     'lp_i2s': 'lp_i2s runner tested with hp_i2s',
     'ram_app': 'ram_app runners',
+    'esp32c3eco7': 'esp32c3 major version(v1.1) chips',
+    'esp32c2eco4': 'esp32c2 major version(v2.0) chips',
 }
 
 DEFAULT_CONFIG_RULES_STR = ['sdkconfig.ci=default', 'sdkconfig.ci.*=', '=default']

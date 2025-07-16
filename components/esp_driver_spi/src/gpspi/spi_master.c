@@ -145,6 +145,12 @@ We have two bits to control the interrupt:
 #define SPI_MASTER_ATTR
 #endif
 
+#if CONFIG_SPI_MASTER_IN_IRAM || CONFIG_SPI_MASTER_ISR_IN_IRAM
+#define SPI_MASTER_MALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#else
+#define SPI_MASTER_MALLOC_CAPS    (MALLOC_CAP_DEFAULT)
+#endif
+
 #if SOC_PERIPH_CLK_CTRL_SHARED
 #define SPI_MASTER_PERI_CLOCK_ATOMIC() PERIPH_RCC_ATOMIC()
 #else
@@ -487,9 +493,13 @@ esp_err_t spi_bus_add_device(spi_host_device_t host_id, const spi_device_interfa
     SPI_CHECK(ret == ESP_OK, "assigned clock speed not supported", ret);
     temp_timing_conf.clock_source = clk_src;
     temp_timing_conf.source_pre_div = clock_source_div;
+    temp_timing_conf.rx_sample_point = dev_config->sample_point;
+    if (temp_timing_conf.rx_sample_point == SPI_SAMPLING_POINT_PHASE_1) {
+        SPI_CHECK(spi_ll_master_is_rx_std_sample_supported(), "SPI_SAMPLING_POINT_PHASE_1 is not supported on this chip", ESP_ERR_NOT_SUPPORTED);
+    }
 
     //Allocate memory for device
-    dev = malloc(sizeof(spi_device_t));
+    dev = heap_caps_malloc(sizeof(spi_device_t), SPI_MASTER_MALLOC_CAPS);
     if (dev == NULL) {
         goto nomem;
     }
@@ -580,6 +590,15 @@ esp_err_t spi_bus_remove_device(spi_device_handle_t handle)
 
 #if SOC_SPI_SUPPORT_CLK_RC_FAST
     if (handle->cfg.clock_source == SPI_CLK_SRC_RC_FAST) {
+        // If no transactions from other device, acquire the bus to switch module clock to `SPI_CLK_SRC_DEFAULT`
+        // because `SPI_CLK_SRC_RC_FAST` will be disabled then, which block following transactions
+        if (handle->host->cur_cs == DEV_NUM_MAX) {
+            spi_device_acquire_bus(handle, portMAX_DELAY);
+            SPI_MASTER_PERI_CLOCK_ATOMIC() {
+                spi_ll_set_clk_source(handle->host->hal.hw, SPI_CLK_SRC_DEFAULT);
+            }
+            spi_device_release_bus(handle);
+        }
         periph_rtc_dig_clk8m_disable();
     }
 #endif
@@ -1143,7 +1162,7 @@ static SPI_MASTER_ISR_ATTR esp_err_t setup_priv_desc(spi_host_t *host, spi_trans
 
     if (send_ptr && bus_attr->dma_enabled) {
         if ((!esp_ptr_dma_capable(send_ptr) || tx_unaligned)) {
-            ESP_RETURN_ON_FALSE(!(trans_desc->flags & SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL), ESP_ERR_INVALID_ARG, SPI_TAG, "Set flag SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL but TX buffer addr&len not align to %d, or not dma_capable", alignment);
+            ESP_RETURN_ON_FALSE(!(trans_desc->flags & SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL), ESP_ERR_INVALID_ARG, SPI_TAG, "Set flag SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL but TX buffer addr&len not align to %d byte, or not dma_capable", alignment);
             //if txbuf in the desc not DMA-capable, or not bytes aligned to alignment, malloc a new one
             ESP_EARLY_LOGD(SPI_TAG, "Allocate TX buffer for DMA");
             tx_byte_len = (tx_byte_len + alignment - 1) & (~(alignment - 1));   // up align alignment
@@ -1163,7 +1182,7 @@ static SPI_MASTER_ISR_ATTR esp_err_t setup_priv_desc(spi_host_t *host, spi_trans
 
     if (rcv_ptr && bus_attr->dma_enabled) {
         if ((!esp_ptr_dma_capable(rcv_ptr) || rx_unaligned)) {
-            ESP_RETURN_ON_FALSE(!(trans_desc->flags & SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL), ESP_ERR_INVALID_ARG, SPI_TAG, "Set flag SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL but RX buffer addr&len not align to %d, or not dma_capable", alignment);
+            ESP_RETURN_ON_FALSE(!(trans_desc->flags & SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL), ESP_ERR_INVALID_ARG, SPI_TAG, "Set flag SPI_TRANS_DMA_BUFFER_ALIGN_MANUAL but RX buffer addr&len not align to %d byte, or not dma_capable", alignment);
             //if rxbuf in the desc not DMA-capable, or not aligned to alignment, malloc a new one
             ESP_EARLY_LOGD(SPI_TAG, "Allocate RX buffer for DMA");
             rx_byte_len = (rx_byte_len + alignment - 1) & (~(alignment - 1));   // up align alignment

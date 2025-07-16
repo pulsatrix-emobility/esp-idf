@@ -344,7 +344,6 @@ static esp_err_t i2s_register_channel(i2s_controller_t *i2s_obj, i2s_dir_t dir, 
     new_chan->callbacks.on_send_q_ovf = NULL;
     new_chan->dma.rw_pos = 0;
     new_chan->dma.curr_ptr = NULL;
-    new_chan->dma.curr_desc = NULL;
     new_chan->start = NULL;
     new_chan->stop = NULL;
     new_chan->reserve_gpio_mask = 0;
@@ -456,43 +455,46 @@ uint32_t i2s_get_buf_size(i2s_chan_handle_t handle, uint32_t data_bit_width, uin
 esp_err_t i2s_free_dma_desc(i2s_chan_handle_t handle)
 {
     I2S_NULL_POINTER_CHECK(TAG, handle);
-    if (!handle->dma.desc) {
-        return ESP_OK;
-    }
-    for (int i = 0; i < handle->dma.desc_num; i++) {
-        if (handle->dma.bufs[i]) {
-            free(handle->dma.bufs[i]);
-            handle->dma.bufs[i] = NULL;
-        }
-        if (handle->dma.desc[i]) {
-            free(handle->dma.desc[i]);
-            handle->dma.desc[i] = NULL;
-        }
-    }
-    if (handle->dma.bufs) {
-        free(handle->dma.bufs);
-        handle->dma.bufs = NULL;
-    }
+    handle->dma.buf_size = 0;
+
     if (handle->dma.desc) {
+        for (int i = 0; i < handle->dma.desc_num; i++) {
+            if (handle->dma.desc[i]) {
+                free(handle->dma.desc[i]);
+                handle->dma.desc[i] = NULL;
+            }
+        }
         free(handle->dma.desc);
         handle->dma.desc = NULL;
+    }
+
+    if (handle->dma.bufs) {
+        for (int i = 0; i < handle->dma.desc_num; i++) {
+            if (handle->dma.bufs[i]) {
+                free(handle->dma.bufs[i]);
+                handle->dma.bufs[i] = NULL;
+            }
+        }
+        free(handle->dma.bufs);
+        handle->dma.bufs = NULL;
     }
 
     return ESP_OK;
 }
 
-esp_err_t i2s_alloc_dma_desc(i2s_chan_handle_t handle, uint32_t num, uint32_t bufsize)
+esp_err_t i2s_alloc_dma_desc(i2s_chan_handle_t handle, uint32_t bufsize)
 {
     I2S_NULL_POINTER_CHECK(TAG, handle);
     esp_err_t ret = ESP_OK;
     ESP_RETURN_ON_FALSE(bufsize <= I2S_DMA_BUFFER_MAX_SIZE, ESP_ERR_INVALID_ARG, TAG, "dma buffer can't be bigger than %d", I2S_DMA_BUFFER_MAX_SIZE);
-    handle->dma.desc_num = num;
+    uint32_t num = handle->dma.desc_num;
     handle->dma.buf_size = bufsize;
 
     /* Descriptors must be in the internal RAM */
     handle->dma.desc = (lldesc_t **)heap_caps_calloc(num, sizeof(lldesc_t *), I2S_MEM_ALLOC_CAPS);
     ESP_GOTO_ON_FALSE(handle->dma.desc, ESP_ERR_NO_MEM, err, TAG, "create I2S DMA descriptor array failed");
     handle->dma.bufs = (uint8_t **)heap_caps_calloc(num, sizeof(uint8_t *), I2S_MEM_ALLOC_CAPS);
+    ESP_GOTO_ON_FALSE(handle->dma.bufs, ESP_ERR_NO_MEM, err, TAG, "create I2S DMA buffer array failed");
     for (int i = 0; i < num; i++) {
         /* Allocate DMA descriptor */
         handle->dma.desc[i] = (lldesc_t *) i2s_dma_calloc(handle, 1, sizeof(lldesc_t));
@@ -790,7 +792,11 @@ esp_err_t i2s_init_dma_intr(i2s_chan_handle_t handle, int intr_flag)
     }
 
     /* Set GDMA config */
-    gdma_channel_alloc_config_t dma_cfg = {};
+    gdma_channel_alloc_config_t dma_cfg = {
+#if CONFIG_I2S_ISR_IRAM_SAFE
+        .flags.isr_cache_safe = true,
+#endif
+    };
     if (handle->dir == I2S_DIR_TX) {
         dma_cfg.direction = GDMA_CHANNEL_DIRECTION_TX;
         /* Register a new GDMA tx channel */
@@ -1168,8 +1174,11 @@ esp_err_t i2s_channel_enable(i2s_chan_handle_t handle)
 #endif
     handle->start(handle);
     handle->state = I2S_CHAN_STATE_RUNNING;
-    /* Reset queue */
-    xQueueReset(handle->msg_queue);
+    if (handle->dir == I2S_DIR_RX) {
+        /* RX queue is reset when the channel is enabled
+           In case legacy data received during disable process */
+        xQueueReset(handle->msg_queue);
+    }
     xSemaphoreGive(handle->mutex);
     /* Give the binary semaphore to enable reading / writing task */
     xSemaphoreGive(handle->binary);
@@ -1197,9 +1206,13 @@ esp_err_t i2s_channel_disable(i2s_chan_handle_t handle)
     xSemaphoreTake(handle->binary, portMAX_DELAY);
     /* Reset the descriptor pointer */
     handle->dma.curr_ptr = NULL;
-    handle->dma.curr_desc = NULL;
     handle->dma.rw_pos = 0;
     handle->stop(handle);
+    if (handle->dir == I2S_DIR_TX) {
+        /* TX queue is reset when the channel is disabled
+           In case the queue is wrongly reset after preload the data */
+        xQueueReset(handle->msg_queue);
+    }
 #if CONFIG_PM_ENABLE
     esp_pm_lock_release(handle->pm_lock);
 #endif
@@ -1221,18 +1234,30 @@ esp_err_t i2s_channel_preload_data(i2s_chan_handle_t tx_handle, const void *src,
     uint8_t *data_ptr = (uint8_t *)src;
     size_t remain_bytes = size;
     size_t total_loaded_bytes = 0;
+    esp_err_t ret = ESP_OK;
 
     xSemaphoreTake(tx_handle->mutex, portMAX_DELAY);
 
     /* The pre-load data will be loaded from the first descriptor */
-    if (tx_handle->dma.curr_desc == NULL) {
-        tx_handle->dma.curr_desc = tx_handle->dma.desc[0];
+    if (tx_handle->dma.curr_ptr == NULL) {
+        xQueueReset(tx_handle->msg_queue);
+        /* Push the rest of descriptors to the queue */
+        for (int i = 1; i < tx_handle->dma.desc_num; i++) {
+            ESP_GOTO_ON_FALSE(xQueueSend(tx_handle->msg_queue, &(tx_handle->dma.desc[i]->buf), 0) == pdTRUE,
+                              ESP_FAIL, err, TAG, "Failed to push the descriptor to the queue");
+        }
         tx_handle->dma.curr_ptr = (void *)tx_handle->dma.desc[0]->buf;
         tx_handle->dma.rw_pos = 0;
     }
 
     /* Loop until no bytes in source buff remain or the descriptors are full */
     while (remain_bytes) {
+        if (tx_handle->dma.rw_pos == tx_handle->dma.buf_size) {
+            if (xQueueReceive(tx_handle->msg_queue, &(tx_handle->dma.curr_ptr), 0) == pdFALSE) {
+                break;
+            }
+            tx_handle->dma.rw_pos = 0;
+        }
         size_t bytes_can_load = remain_bytes > (tx_handle->dma.buf_size - tx_handle->dma.rw_pos) ?
                                 (tx_handle->dma.buf_size - tx_handle->dma.rw_pos) : remain_bytes;
         /* When all the descriptors has loaded data, no more bytes can be loaded, break directly */
@@ -1248,25 +1273,13 @@ esp_err_t i2s_channel_preload_data(i2s_chan_handle_t tx_handle, const void *src,
         total_loaded_bytes += bytes_can_load;   // Add to the total loaded bytes
         remain_bytes -= bytes_can_load;         // Update the remaining bytes to be loaded
         tx_handle->dma.rw_pos += bytes_can_load;   // Move forward the dma buffer position
-        /* When the current position reach the end of the dma buffer */
-        if (tx_handle->dma.rw_pos == tx_handle->dma.buf_size) {
-            /* If the next descriptor is not the first descriptor, keep load to the first descriptor
-             * otherwise all descriptor has been loaded, break directly, the dma buffer position
-             * will remain at the end of the last dma buffer */
-            if (STAILQ_NEXT((lldesc_t *)tx_handle->dma.curr_desc, qe) != tx_handle->dma.desc[0]) {
-                tx_handle->dma.curr_desc = STAILQ_NEXT((lldesc_t *)tx_handle->dma.curr_desc, qe);
-                tx_handle->dma.curr_ptr = (void *)(((lldesc_t *)tx_handle->dma.curr_desc)->buf);
-                tx_handle->dma.rw_pos = 0;
-            } else {
-                break;
-            }
-        }
     }
     *bytes_loaded = total_loaded_bytes;
 
+err:
     xSemaphoreGive(tx_handle->mutex);
 
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t i2s_channel_write(i2s_chan_handle_t handle, const void *src, size_t size, size_t *bytes_written, uint32_t timeout_ms)

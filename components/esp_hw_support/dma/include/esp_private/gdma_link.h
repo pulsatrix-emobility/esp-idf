@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -72,6 +72,8 @@ typedef struct {
                                      Note, DMA engine will stop at this item and trigger an interrupt.
                                      If `mark_final` is not set, this list item will point to the next item, and
                                      wrap around to the head item if it's the last one in the list. */
+        uint32_t bypass_buffer_align_check: 1; /*!< Whether to bypass the buffer alignment check.
+                                                    Only enable it when you know what you are doing. */
     } flags; //!< Flags for buffer mount configurations
 } gdma_buffer_mount_config_t;
 
@@ -91,7 +93,7 @@ typedef struct {
  *      - ESP_ERR_INVALID_ARG: Mount the buffer failed because of invalid argument
  *      - ESP_FAIL: Mount the buffer failed because of other error
  */
-esp_err_t gdma_link_mount_buffers(gdma_link_list_handle_t list, uint32_t start_item_index, const gdma_buffer_mount_config_t *buf_config_array, size_t num_buf, uint32_t *end_item_index);
+esp_err_t gdma_link_mount_buffers(gdma_link_list_handle_t list, int start_item_index, const gdma_buffer_mount_config_t *buf_config_array, size_t num_buf, int *end_item_index);
 
 /**
  * @brief Get the address of the head item in the link list
@@ -163,6 +165,16 @@ esp_err_t gdma_link_set_owner(gdma_link_list_handle_t list, int item_index, gdma
  *      - ESP_FAIL: Get the ownership failed because of other error
  */
 esp_err_t gdma_link_get_owner(gdma_link_list_handle_t list, int item_index, gdma_lli_owner_t *owner);
+
+/**
+ * @brief Get the size of the buffer that is mounted to the link list until the eof item (inclusive)
+ *
+ * @param[in] list Link list handle, allocated by `gdma_new_link_list`
+ * @param[in] start_item_index Index of the first item in the link list to be calculated
+ * @return Size of the buffer that is mounted to the link list until the eof item (inclusive).
+ *         If the link list is empty or invalid, return 0.
+ */
+size_t gdma_link_count_buffer_size_till_eof(gdma_link_list_handle_t list, int start_item_index);
 
 #ifdef __cplusplus
 }

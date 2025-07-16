@@ -564,6 +564,7 @@ esp_err_t esp_wifi_get_scan_parameters(wifi_scan_default_params_t *config);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
+  *    - ESP_ERR_WIFI_STATE: WiFi is still connecting when esp_wifi_scan_stop() is invoked.
   */
 esp_err_t esp_wifi_scan_stop(void);
 
@@ -583,7 +584,7 @@ esp_err_t esp_wifi_scan_stop(void);
 esp_err_t esp_wifi_scan_get_ap_num(uint16_t *number);
 
 /**
-  * @brief     Get AP list found in last scan.
+  * @brief     Retrieve the list of APs found during the last scan. The returned AP list is sorted in descending order based on RSSI.
   *
   * @attention  This API will free all memory occupied by scanned AP list.
   *
@@ -1544,6 +1545,7 @@ esp_err_t esp_wifi_get_country_code(char *country);
   * @brief      Config 80211 tx rate of specified interface
   *
   * @attention  1. This API should be called after esp_wifi_init() and before esp_wifi_start().
+  * @attention  2. Can not set 80211 tx rate under 11A/11AC/11AX protocol, you can use esp_wifi_config_80211_tx instead.
   *
   * @param      ifx  Interface to be configured.
   * @param      rate Phy rate to be configured.
@@ -1553,6 +1555,21 @@ esp_err_t esp_wifi_get_country_code(char *country);
   *    - others: failed
   */
 esp_err_t esp_wifi_config_80211_tx_rate(wifi_interface_t ifx, wifi_phy_rate_t rate);
+
+/**
+  * @brief      Config 80211 tx rate and phymode of specified interface
+  *
+  * @attention  1. This API should be called after esp_wifi_init() and before esp_wifi_start().
+
+  *
+  * @param      ifx  Interface to be configured.
+  * @param      config rate_config to be configured.
+  *
+  * @return
+  *    - ESP_OK: succeed
+  *    - others: failed
+  */
+esp_err_t esp_wifi_config_80211_tx(wifi_interface_t ifx, wifi_tx_rate_config_t *config);
 
 /**
   * @brief      Disable PMF configuration for specified interface
@@ -1631,6 +1648,7 @@ esp_err_t esp_wifi_sta_get_rssi(int *rssi);
     * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
+  *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
   *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_set_band(wifi_band_t band);

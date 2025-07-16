@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: CC0-1.0
 import re
 from typing import Any
@@ -120,14 +120,37 @@ def expect_coredump_flash_write_logs(dut: PanicTestDut, config: str) -> None:
         dut.expect_exact('Backing up stack @')
         dut.expect_exact('Restoring stack')
     dut.expect_exact('Core dump has been saved to flash.')
-    dut.expect('Rebooting...')
+    dut.expect(dut.REBOOT)
+
+
+def expect_coredump_uart_write_logs(dut: PanicTestDut, check_cpu_reset: Optional[bool] = True) -> Any:
+    # ================= CORE DUMP START =================
+    # B8AAAMAEgAGAAAAXAEAAAAAAABkAAAA
+    # ...
+    # ================= CORE DUMP END =================
+    # Coredump checksum='9730d7ff'
+    # Rebooting...
+    # ..
+    # rst:0xc (SW_CPU_RESET),boot:
+
+    # Read all uart logs until the end of the reset reason
+    uart_str = dut.expect(',boot:', return_what_before_match=True).decode('utf-8', errors='ignore')
+    coredump_base64 = uart_str.split(dut.COREDUMP_UART_START)[1].split(dut.COREDUMP_UART_END)[0].strip()
+    uart_str = uart_str.split(dut.COREDUMP_UART_END)[1]
+    assert re.search(dut.COREDUMP_CHECKSUM, uart_str)
+    assert re.search(dut.REBOOT, uart_str)
+    if check_cpu_reset:
+        assert re.search(dut.CPU_RESET, uart_str)
+    return coredump_base64
 
 
 def common_test(dut: PanicTestDut, config: str, expected_backtrace: Optional[List[str]] = None, check_cpu_reset: Optional[bool] = True,
                 expected_coredump: Optional[Sequence[Union[str, Pattern[Any]]]] = None) -> None:
     if 'gdbstub' in config:
         if 'coredump' in config:
-            dut.process_coredump_uart(expected_coredump, False)
+            uart_str = dut.expect(dut.COREDUMP_CHECKSUM, return_what_before_match=True).decode('utf-8')
+            coredump_base64 = uart_str.split(dut.COREDUMP_UART_START)[1].split(dut.COREDUMP_UART_END)[0].strip()
+            dut.process_coredump_uart(coredump_base64, expected_coredump)
         dut.expect_exact('Entering gdb stub now.')
         dut.start_gdb_for_gdbstub()
         frames = dut.gdb_backtrace()
@@ -136,17 +159,20 @@ def common_test(dut: PanicTestDut, config: str, expected_backtrace: Optional[Lis
         dut.revert_log_level()
         return  # don't expect "Rebooting" output below
 
-    # We will only perform comparisons for ELF files, as we are not introducing any new fields to the binary file format.
+    # We will only perform comparisons for ELF files,
+    # as we are not introducing any new fields to the binary file format.
     if 'bin' in config:
         expected_coredump = None
 
     if 'uart' in config:
-        dut.process_coredump_uart(expected_coredump)
+        coredump_base64 = expect_coredump_uart_write_logs(dut, check_cpu_reset)
+        dut.process_coredump_uart(coredump_base64, expected_coredump)
+        check_cpu_reset = False  # CPU reset is already checked in expect_coredump_uart_write_logs
     elif 'flash' in config:
         expect_coredump_flash_write_logs(dut, config)
         dut.process_coredump_flash(expected_coredump)
     elif 'panic' in config:
-        dut.expect('Rebooting...', timeout=60)
+        dut.expect(dut.REBOOT, timeout=60)
 
     if check_cpu_reset:
         dut.expect_cpu_reset()
@@ -623,6 +649,74 @@ def test_panic_delay(dut: PanicTestDut) -> None:
     dut.expect_exact('rst:0xc (SW_CPU_RESET)')
 
 
+@pytest.mark.parametrize('config', ['panic'], indirect=True)
+@pytest.mark.supported_targets
+@pytest.mark.generic
+def test_panic_handler_stuck0(dut: PanicTestDut, config: str, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+
+    # Expect a panic handler stuck message
+    dut.expect_exact('Panic handler stuck')
+
+    # Expect a reboot
+    dut.expect_cpu_reset()
+
+
+@pytest.mark.parametrize('config', ['panic'], indirect=True)
+@pytest.mark.esp32
+@pytest.mark.esp32s3
+@pytest.mark.esp32p4
+@pytest.mark.generic
+def test_panic_handler_stuck1(dut: PanicTestDut, config: str, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+
+    # Expect a panic handler stuck message
+    dut.expect_exact('Panic handler stuck')
+
+    # Expect a reboot
+    dut.expect_cpu_reset()
+
+
+@pytest.mark.parametrize('config', ['panic'], indirect=True)
+@pytest.mark.supported_targets
+@pytest.mark.generic
+def test_panic_handler_crash0(dut: PanicTestDut, config: str, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+
+    # Expect a panic handler crash message
+    dut.expect_exact('Panic handler crashed 1 times')
+
+    # Expect a the second panic handler crash message
+    dut.expect_exact('Panic handler crashed 2 times')
+
+    # Expect bailout message
+    dut.expect_exact('Panic handler entered multiple times. Abort panic handling. Rebooting ...')
+
+    # Expect a reboot
+    dut.expect_cpu_reset()
+
+
+@pytest.mark.parametrize('config', ['panic'], indirect=True)
+@pytest.mark.esp32
+@pytest.mark.esp32s3
+@pytest.mark.esp32p4
+@pytest.mark.generic
+def test_panic_handler_crash1(dut: PanicTestDut, config: str, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+
+    # Expect a panic handler crash message
+    dut.expect_exact('Panic handler crashed 1 times')
+
+    # Expect a the second panic handler crash message
+    dut.expect_exact('Panic handler crashed 2 times')
+
+    # Expect bailout message
+    dut.expect_exact('Panic handler entered multiple times. Abort panic handling. Rebooting ...')
+
+    # Expect a reboot
+    dut.expect_cpu_reset()
+
+
 #########################
 # for memprot test only #
 #########################
@@ -663,6 +757,19 @@ CONFIGS_MEMPROT_FLASH_IDROM = [
     pytest.param('memprot_esp32c61', marks=[pytest.mark.esp32c61]),
     pytest.param('memprot_esp32h2', marks=[pytest.mark.esp32h2]),
     pytest.param('memprot_esp32p4', marks=[pytest.mark.esp32p4])
+]
+
+CONFIGS_MEMPROT_SPIRAM_XIP_IROM_ALIGNMENT_HEAP = [
+    pytest.param('memprot_spiram_xip_esp32c5', marks=[pytest.mark.esp32c5]),
+    pytest.param('memprot_spiram_xip_esp32c61', marks=[pytest.mark.esp32c61]),
+    pytest.param('memprot_spiram_xip_esp32p4', marks=[pytest.mark.esp32p4])
+]
+
+CONFIGS_MEMPROT_SPIRAM_XIP_DROM_ALIGNMENT_HEAP = [
+    pytest.param('memprot_spiram_xip_esp32s3', marks=[pytest.mark.esp32s3]),
+    pytest.param('memprot_spiram_xip_esp32c5', marks=[pytest.mark.esp32c5]),
+    pytest.param('memprot_spiram_xip_esp32c61', marks=[pytest.mark.esp32c61]),
+    pytest.param('memprot_spiram_xip_esp32p4', marks=[pytest.mark.esp32p4])
 ]
 
 CONFIGS_MEMPROT_INVALID_REGION_PROTECTION_USING_PMA = [
@@ -936,8 +1043,35 @@ def test_drom_reg_execute_violation(dut: PanicTestDut, test_func_name: str) -> N
     dut.expect_cpu_reset()
 
 
-@pytest.mark.parametrize('config', CONFIGS_MEMPROT_INVALID_REGION_PROTECTION_USING_PMA, indirect=True)
+@pytest.mark.parametrize('config', CONFIGS_MEMPROT_SPIRAM_XIP_IROM_ALIGNMENT_HEAP, indirect=True)
 @pytest.mark.generic
+def test_spiram_xip_irom_alignment_reg_execute_violation(dut: PanicTestDut, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+    try:
+        dut.expect_gme('Instruction access fault')
+    except Exception:
+        dut.expect_exact('SPIRAM (IROM): IROM alignment gap not added into heap')
+    dut.expect_reg_dump(0)
+    dut.expect_cpu_reset()
+
+
+@pytest.mark.parametrize('config', CONFIGS_MEMPROT_SPIRAM_XIP_DROM_ALIGNMENT_HEAP, indirect=True)
+@pytest.mark.generic
+def test_spiram_xip_drom_alignment_reg_execute_violation(dut: PanicTestDut, test_func_name: str) -> None:
+    dut.run_test_func(test_func_name)
+    try:
+        if dut.target == 'esp32s3':
+            dut.expect_gme('InstructionFetchError')
+        else:
+            dut.expect_gme('Instruction access fault')
+    except Exception:
+        dut.expect_exact('SPIRAM (DROM): DROM alignment gap not added into heap')
+    dut.expect_reg_dump(0)
+    dut.expect_cpu_reset()
+
+
+@pytest.mark.generic
+@pytest.mark.parametrize('config', CONFIGS_MEMPROT_INVALID_REGION_PROTECTION_USING_PMA, indirect=True)
 def test_invalid_memory_region_write_violation(dut: PanicTestDut, test_func_name: str) -> None:
     dut.run_test_func(test_func_name)
     dut.expect_gme('Store access fault')

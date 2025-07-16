@@ -12,6 +12,11 @@ set(priv_includes)
 # Thus, always add the (private) requirements, regardless of Kconfig
 set(priv_requires esp_driver_gpio esp_mm)  # usb_phy driver relies on gpio driver API
 
+# Explicitly add psram component for esp32p4, as the USB-DWC internal DMA can access PSRAM on esp32p4
+if(${target} STREQUAL "esp32p4")
+    list(APPEND priv_requires esp_psram)
+endif()
+
 if(CONFIG_SOC_USB_OTG_SUPPORTED)
     list(APPEND srcs "hcd_dwc.c"
                      "enum.c"
@@ -19,12 +24,9 @@ if(CONFIG_SOC_USB_OTG_SUPPORTED)
                      "usb_helpers.c"
                      "usb_host.c"
                      "usb_private.c"
-                     "usbh.c")
-    if(NOT ${target} STREQUAL "esp32p4")
-        list(APPEND srcs "usb_phy.c")
-    else()
-        list(APPEND srcs "usb_phy_p4.c")
-    endif()
+                     "usbh.c"
+                     "usb_phy.c"
+                     )
     list(APPEND include "include")
     list(APPEND priv_includes "private_include")
 endif()

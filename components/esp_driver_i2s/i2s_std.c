@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -59,7 +59,8 @@ static esp_err_t i2s_std_calculate_clock(i2s_chan_handle_t handle, const i2s_std
     clk_info->mclk_div = clk_info->sclk / clk_info->mclk;
 
     /* Check if the configuration is correct. Use float for check in case the mclk division might be carried up in the fine division calculation */
-    ESP_RETURN_ON_FALSE(clk_info->sclk / (float)clk_info->mclk > min_mclk_div, ESP_ERR_INVALID_ARG, TAG, "sample rate or mclk_multiple is too large for the current clock source");
+    ESP_RETURN_ON_FALSE((float)clk_info->sclk > clk_info->mclk * min_mclk_div, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE(clk_info->mclk_div < I2S_LL_CLK_FRAC_DIV_N_MAX, ESP_ERR_INVALID_ARG, TAG, "sample rate is too small");
 
     return ESP_OK;
 }
@@ -106,9 +107,8 @@ static esp_err_t i2s_std_set_slot(i2s_chan_handle_t handle, const i2s_std_slot_c
     uint32_t buf_size = i2s_get_buf_size(handle, slot_cfg->data_bit_width, handle->dma.frame_num);
     /* The DMA buffer need to re-allocate if the buffer size changed */
     if (handle->dma.buf_size != buf_size) {
-        handle->dma.buf_size = buf_size;
         ESP_RETURN_ON_ERROR(i2s_free_dma_desc(handle), TAG, "failed to free the old dma descriptor");
-        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, handle->dma.desc_num, buf_size),
+        ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, buf_size),
                             TAG, "allocate memory for dma descriptor failed");
     }
     bool is_slave = handle->role == I2S_ROLE_SLAVE;
@@ -136,6 +136,9 @@ static esp_err_t i2s_std_set_slot(i2s_chan_handle_t handle, const i2s_std_slot_c
     /* Update the mode info: slot configuration */
     i2s_std_config_t *std_cfg = (i2s_std_config_t *)(handle->mode_info);
     memcpy(&(std_cfg->slot_cfg), slot_cfg, sizeof(i2s_std_slot_config_t));
+    /* Update the slot bit width to the actual slot bit width */
+    std_cfg->slot_cfg.slot_bit_width = (int)std_cfg->slot_cfg.slot_bit_width < (int)std_cfg->slot_cfg.data_bit_width ?
+                                       std_cfg->slot_cfg.data_bit_width : std_cfg->slot_cfg.slot_bit_width;
 
     return ESP_OK;
 }
@@ -242,6 +245,13 @@ esp_err_t i2s_channel_init_std_mode(i2s_chan_handle_t handle, const i2s_std_conf
 
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
+    if (std_cfg->clk_cfg.clk_src == I2S_CLK_SRC_APLL) {
+        /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+         * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
+        pm_type = ESP_PM_NO_LIGHT_SLEEP;
+    }
+#endif // SOC_I2S_SUPPORTS_APLL
     ESP_RETURN_ON_ERROR(esp_pm_lock_create(pm_type, 0, "i2s_driver", &handle->pm_lock), TAG, "I2S pm lock create failed");
 #endif
 
@@ -290,8 +300,10 @@ esp_err_t i2s_channel_reconfig_std_clock(i2s_chan_handle_t handle, const i2s_std
     if (std_cfg->clk_cfg.clk_src != clk_cfg->clk_src) {
         ESP_GOTO_ON_ERROR(esp_pm_lock_delete(handle->pm_lock), err, TAG, "I2S delete old pm lock failed");
         esp_pm_lock_type_t pm_type = ESP_PM_APB_FREQ_MAX;
-#if SOC_I2S_SUPPORTS_APLL
+#if SOC_I2S_SUPPORTS_APLL && SOC_I2S_HW_VERSION_2
         if (clk_cfg->clk_src == I2S_CLK_SRC_APLL) {
+            /* Only I2S HW 2 supports to adjust APB frequency while using APLL clock source
+             * HW 1 will have timing issue because the DMA and I2S are under different clock domains */
             pm_type = ESP_PM_NO_LIGHT_SLEEP;
         }
 #endif // SOC_I2S_SUPPORTS_APLL
@@ -325,7 +337,7 @@ esp_err_t i2s_channel_reconfig_std_slot(i2s_chan_handle_t handle, const i2s_std_
 
     /* If the slot bit width changed, then need to update the clock */
     uint32_t slot_bits = slot_cfg->slot_bit_width == I2S_SLOT_BIT_WIDTH_AUTO ? slot_cfg->data_bit_width : slot_cfg->slot_bit_width;
-    if (std_cfg->slot_cfg.slot_bit_width == slot_bits) {
+    if (std_cfg->slot_cfg.slot_bit_width != slot_bits) {
         ESP_GOTO_ON_ERROR(i2s_std_set_clock(handle, &std_cfg->clk_cfg), err, TAG, "update clock failed");
     }
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
+#include "esp_memory_utils.h"
 #include "esp_clk_tree.h"
 #include "esp_cam_ctlr.h"
 #include "esp_cam_ctlr_csi.h"
@@ -25,7 +26,7 @@
 #include "esp_private/esp_clk_tree_common.h"
 #include "esp_cache.h"
 
-#if CONFIG_CAM_CTLR_MIPI_CSI_ISR_IRAM_SAFE
+#if CONFIG_CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE
 #define CSI_MEM_ALLOC_CAPS   (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #else
 #define CSI_MEM_ALLOC_CAPS   MALLOC_CAP_DEFAULT
@@ -50,6 +51,7 @@ static esp_err_t s_ctlr_csi_start(esp_cam_ctlr_handle_t handle);
 static esp_err_t s_ctlr_csi_stop(esp_cam_ctlr_handle_t handle);
 static esp_err_t s_csi_ctlr_disable(esp_cam_ctlr_handle_t ctlr);
 static esp_err_t s_ctlr_csi_receive(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t *trans, uint32_t timeout_ms);
+static void *s_csi_ctlr_alloc_buffer(esp_cam_ctlr_t *handle, size_t size, uint32_t buf_caps);
 
 static esp_err_t s_csi_claim_controller(csi_controller_t *controller)
 {
@@ -220,6 +222,7 @@ esp_err_t esp_cam_new_csi_ctlr(const esp_cam_ctlr_csi_config_t *config, esp_cam_
     ctlr->base.register_event_callbacks = s_register_event_callbacks;
     ctlr->base.get_internal_buffer = s_csi_ctlr_get_internal_buffer;
     ctlr->base.get_buffer_len = s_csi_ctlr_get_buffer_length;
+    ctlr->base.alloc_buffer = s_csi_ctlr_alloc_buffer;
 
     *ret_handle = &(ctlr->base);
 
@@ -375,7 +378,7 @@ esp_err_t s_register_event_callbacks(esp_cam_ctlr_handle_t handle, const esp_cam
     csi_controller_t *ctlr = __containerof(handle, csi_controller_t, base);
     ESP_RETURN_ON_FALSE(ctlr->csi_fsm == CSI_FSM_INIT, ESP_ERR_INVALID_STATE, TAG, "driver starts already, not allow cbs register");
 
-#if CONFIG_CAM_CTLR_MIPI_CSI_ISR_IRAM_SAFE
+#if CONFIG_CAM_CTLR_MIPI_CSI_ISR_CACHE_SAFE
     if (cbs->on_get_new_trans) {
         ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_get_new_trans), ESP_ERR_INVALID_ARG, TAG, "on_get_new_trans callback not in IRAM");
     }
@@ -516,4 +519,24 @@ esp_err_t s_ctlr_csi_receive(esp_cam_ctlr_handle_t handle, esp_cam_ctlr_trans_t 
     }
 
     return ESP_OK;
+}
+
+static void *s_csi_ctlr_alloc_buffer(esp_cam_ctlr_t *handle, size_t size, uint32_t buf_caps)
+{
+    csi_controller_t *ctlr = __containerof(handle, csi_controller_t, base);
+
+    if (!ctlr) {
+        ESP_LOGE(TAG, "invalid argument: handle is null");
+        return NULL;
+    }
+
+    void *buffer = heap_caps_calloc(1, size, buf_caps);
+    if (!buffer) {
+        ESP_LOGE(TAG, "failed to allocate buffer");
+        return NULL;
+    }
+
+    ESP_LOGD(TAG, "Allocated camera buffer: %p, size: %zu", buffer, size);
+
+    return buffer;
 }
