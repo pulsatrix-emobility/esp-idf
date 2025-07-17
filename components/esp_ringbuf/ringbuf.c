@@ -13,7 +13,14 @@
 #include "freertos/queue.h"
 #include "freertos/ringbuf.h"
 #include "esp_heap_caps.h"
+#include "sdkconfig.h"
 
+// If the UART's main RX interrupt lies in IRAM, then some functions (called by that interrupt) herein must also lie in IRAM
+#ifdef CONFIG_UART_ISR_IN_IRAM
+#define FUNCTION_ATTR     IRAM_ATTR
+#else
+#define FUNCTION_ATTR
+#endif
 // ------------------------------------------------- Macros and Types --------------------------------------------------
 
 //32-bit alignment macros
@@ -92,7 +99,7 @@ static void prvInitializeNewRingbuffer(size_t xBufferSize,
                                        uint8_t *pucRingbufferStorage);
 
 //Calculate current amount of free space (in bytes) in the ring buffer
-static size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer);
+static FUNCTION_ATTR size_t  prvGetFreeSize(Ringbuffer_t *pxRingbuffer);
 
 //Checks if an item/data is currently available for retrieval
 static BaseType_t prvCheckItemAvail(Ringbuffer_t *pxRingbuffer);
@@ -101,7 +108,7 @@ static BaseType_t prvCheckItemAvail(Ringbuffer_t *pxRingbuffer);
 static BaseType_t prvCheckItemFitsDefault(Ringbuffer_t *pxRingbuffer, size_t xItemSize);
 
 //Checks if an item will currently fit in a byte buffer
-static BaseType_t prvCheckItemFitsByteBuffer(Ringbuffer_t *pxRingbuffer, size_t xItemSize);
+static FUNCTION_ATTR BaseType_t prvCheckItemFitsByteBuffer(Ringbuffer_t *pxRingbuffer, size_t xItemSize);
 
 /*
 Copies an item to a no-split ring buffer
@@ -126,7 +133,7 @@ Exit:
 static void prvCopyItemAllowSplit(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize);
 
 //Copies an item to a byte buffer. Only call this function  after calling prvCheckItemFitsByteBuffer()
-static void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize);
+static FUNCTION_ATTR void prvCopyItemByteBuf(Ringbuffer_t *pxRingbuffer, const uint8_t *pucItem, size_t xItemSize);
 
 //Retrieve item from no-split/allow-split ring buffer. *pxIsSplit is set to pdTRUE if the retrieved item is split
 /*
@@ -1058,7 +1065,7 @@ BaseType_t xRingbufferSend(RingbufHandle_t xRingbuffer,
     return prvSendAcquireGeneric(pxRingbuffer, pvItem, NULL, xItemSize, xTicksToWait);
 }
 
-BaseType_t xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
+BaseType_t FUNCTION_ATTR xRingbufferSendFromISR(RingbufHandle_t xRingbuffer,
                                   const void *pvItem,
                                   size_t xItemSize,
                                   BaseType_t *pxHigherPriorityTaskWoken)

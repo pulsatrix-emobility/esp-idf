@@ -155,6 +155,7 @@ static void panic_handler(void *frame, bool pseudo_excause)
     esp_panic_handler_increment_entry_count();
 
     panic_info_t info = { 0 };
+    panic_print_str("Entered 'panic_handler()'\n");
 
     /*
      * Setup environment and perform necessary architecture/chip specific
@@ -291,11 +292,13 @@ void IRAM_ATTR panicHandler(void *frame)
     // kernel exception vector gets used; as well as handling interrupt-based
     // faults cache error, wdt expiry. EXCAUSE register gets written with
     // one of PANIC_RSN_* values.
+    panic_print_str("Entered 'panichandler()'\n");
     panic_handler(frame, true);
 }
 
 void IRAM_ATTR xt_unhandled_exception(void *frame)
 {
+  panic_print_str("Entered 'xt_unhandled_exception()'\n");
 #if !CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
     panic_enable_cache();
 #endif

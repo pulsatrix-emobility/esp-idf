@@ -5,7 +5,7 @@
  */
 
 #pragma once
-
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <inttypes.h>
@@ -58,7 +58,7 @@ void esp_log_write(esp_log_level_t level, const char* tag, const char* format, .
 void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, va_list args);
 
 /** @cond */
-
+#define LOG_FORMAT_NOCOLOR(letter, format)     #letter " (%u) %s: " format "\n"
 #define LOG_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%" PRIu32 ") %s: " format LOG_RESET_COLOR "\n"
 #define LOG_SYSTEM_TIME_FORMAT(letter, format)  LOG_COLOR_ ## letter #letter " (%s) %s: " format LOG_RESET_COLOR "\n"
 
@@ -96,10 +96,24 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 #define ESP_EARLY_LOGV( tag, format, ... ) ESP_LOG_EARLY_IMPL(tag, format, ESP_LOG_VERBOSE, V, ##__VA_ARGS__)
 #endif // !(defined(__cplusplus) && (__cplusplus >  201703L))
 
-#define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...) do {                             \
-        if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                         \
-            esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
-        }} while(0)
+extern void log_CrashLog(bool panic, const char* format, ...);
+void panic_print_str(const char* str);
+
+#ifdef BOOTLOADER_BUILD
+#define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                            \
+do {                                                                                             \
+if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                            \
+esp_rom_printf(LOG_FORMAT(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+}                                                                                              \
+} while (0)
+#else
+#define ESP_LOG_EARLY_IMPL(tag, format, log_level, log_tag_letter, ...)                                        \
+do {                                                                                                         \
+if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                              \
+log_CrashLog(false, LOG_FORMAT_NOCOLOR(log_tag_letter, format), esp_log_timestamp(), tag, ##__VA_ARGS__); \
+}                                                                                                          \
+} while (0)
+#endif
 
 #ifndef NON_OS_BUILD
 #if defined(__cplusplus) && (__cplusplus >  201703L)
@@ -245,7 +259,7 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
 
 /** @cond */
 #define _ESP_LOG_DRAM_LOG_FORMAT(letter, format)  DRAM_STR(#letter " %s: " format "\n")
-
+#ifdef BOOTLOADER_BUILD // log_CrashLog(...) is not intended for bootloader usage
 #if defined(__cplusplus) && (__cplusplus >  201703L)
 #define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                                  \
         if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                             \
@@ -257,6 +271,21 @@ void esp_log_writev(esp_log_level_t level, const char* tag, const char* format, 
             esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__); \
         }} while(0)
 #endif // !(defined(__cplusplus) && (__cplusplus >  201703L))
+#else // (BOOTLOADER_BUILD)
+#if defined(__cplusplus) && (__cplusplus >  201703L)
+#define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                                  \
+  if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                             \
+  esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag __VA_OPT__(,) __VA_ARGS__); \
+  log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);       \
+  }} while(0)
+#else // !(defined(__cplusplus) && (__cplusplus >  201703L))
+#define ESP_DRAM_LOG_IMPL(tag, format, log_level, log_tag_letter, ...) do {                                  \
+  if (_ESP_LOG_EARLY_ENABLED(log_level)) {                                                             \
+  esp_rom_printf(_ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);            \
+  log_CrashLog(false, _ESP_LOG_DRAM_LOG_FORMAT(log_tag_letter, format), tag, ##__VA_ARGS__);       \
+  }} while(0)
+#endif // !(defined(__cplusplus) && (__cplusplus >  201703L))
+#endif // (BOOTLOADER_BUILD)
 /** @endcond */
 
 #ifdef __cplusplus
