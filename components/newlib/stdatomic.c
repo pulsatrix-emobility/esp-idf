@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -36,7 +36,7 @@ ATOMIC_FUNCTIONS(4, unsigned int)
 /* LLVM automatically replaces __atomic_test_and_set -> __atomic_exchange_1 call when compiling */
 bool __atomic_test_and_set(volatile void *ptr, int memorder)
 {
-    return __atomic_exchange_1(ptr, true, memorder);
+  return __atomic_exchange_1(ptr, true, memorder);
 }
 #endif
 
