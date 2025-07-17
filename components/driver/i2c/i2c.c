@@ -82,7 +82,7 @@ static const char *I2C_TAG = "i2c";
 #define I2C_FIFO_FULL_THRESH_VAL       (28)
 #define I2C_FIFO_EMPTY_THRESH_VAL      (5)
 #define I2C_IO_INIT_LEVEL              (1)
-#define I2C_CMD_ALIVE_INTERVAL_TICK    (1000 / portTICK_PERIOD_MS)
+#define I2C_CMD_ALIVE_INTERVAL_TICK    (20 / portTICK_PERIOD_MS)
 #define I2C_CMD_EVT_ALIVE              (0)
 #define I2C_CMD_EVT_DONE               (1)
 #define I2C_EVT_QUEUE_LEN              (1)
