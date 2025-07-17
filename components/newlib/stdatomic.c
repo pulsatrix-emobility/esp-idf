@@ -32,6 +32,14 @@ ATOMIC_FUNCTIONS(1, unsigned char)
 ATOMIC_FUNCTIONS(2, short unsigned int)
 ATOMIC_FUNCTIONS(4, unsigned int)
 
+#ifndef __clang__
+/* LLVM automatically replaces __atomic_test_and_set -> __atomic_exchange_1 call when compiling */
+bool __atomic_test_and_set(volatile void *ptr, int memorder)
+{
+  return __atomic_exchange_1(ptr, true, memorder);
+}
+#endif
+
 #elif __riscv_atomic == 1
 
 bool CLANG_ATOMIC_SUFFIX(__atomic_always_lock_free)(unsigned int size, const volatile void *)
