@@ -15,6 +15,8 @@
 #include "esp_rom_gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_eth_phy_802_3.h"
+# warning need to fix this
+#include "../../../../main/PhyRestWrapper.h"
 
 // Default reset assertion time is selected to be 100us as it is most commonly used value among ESP-IDF supported PHY chips.
 #define PHY_RESET_ASSERTION_TIME_US 100
@@ -439,18 +441,19 @@ esp_err_t esp_eth_phy_802_3_del(phy_802_3_t *phy_802_3)
 
 esp_err_t esp_eth_phy_802_3_reset_hw(phy_802_3_t *phy_802_3, uint32_t reset_assert_us)
 {
-    if (phy_802_3->reset_gpio_num >= 0) {
-        esp_rom_gpio_pad_select_gpio(phy_802_3->reset_gpio_num);
-        gpio_set_direction(phy_802_3->reset_gpio_num, GPIO_MODE_OUTPUT);
-        gpio_set_level(phy_802_3->reset_gpio_num, 0);
-        if (reset_assert_us < 10000) {
-            esp_rom_delay_us(reset_assert_us);
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(reset_assert_us/1000));
-        }
-        gpio_set_level(phy_802_3->reset_gpio_num, 1);
-        return ESP_OK;
-    }
+     eth_phy_wrapper();
+    // if (phy_802_3->reset_gpio_num >= 0) {
+    //     esp_rom_gpio_pad_select_gpio(phy_802_3->reset_gpio_num);
+    //     gpio_set_direction(phy_802_3->reset_gpio_num, GPIO_MODE_OUTPUT);
+    //     gpio_set_level(phy_802_3->reset_gpio_num, 0);
+    //     if (reset_assert_us < 10000) {
+    //         esp_rom_delay_us(reset_assert_us);
+    //     } else {
+    //         vTaskDelay(pdMS_TO_TICKS(reset_assert_us/1000));
+    //     }
+    //     gpio_set_level(phy_802_3->reset_gpio_num, 1);
+    //     return ESP_OK;
+    // }
     return ESP_ERR_NOT_ALLOWED;
 }
 
