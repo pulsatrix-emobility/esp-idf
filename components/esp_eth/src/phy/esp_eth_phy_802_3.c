@@ -15,8 +15,8 @@
 #include "esp_rom_gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_eth_phy_802_3.h"
-# warning need to fix this
-#include "../../../../main/PhyRestWrapper.h"
+// path to wrapper function as main application
+#include "../../../../../main/util/PhyRestWrapper.h"
 
 // Default reset assertion time is selected to be 100us as it is most commonly used value among ESP-IDF supported PHY chips.
 #define PHY_RESET_ASSERTION_TIME_US 100
@@ -441,7 +441,13 @@ esp_err_t esp_eth_phy_802_3_del(phy_802_3_t *phy_802_3)
 
 esp_err_t esp_eth_phy_802_3_reset_hw(phy_802_3_t *phy_802_3, uint32_t reset_assert_us)
 {
-     eth_phy_wrapper();
+  //custom wrapper as the wrapper via compiler is not working in idf v5.4
+  if (phy_802_3){
+     return eth_phy_wrapper();
+  }
+  else {
+    return ESP_ERR_NOT_ALLOWED;
+  }
     // if (phy_802_3->reset_gpio_num >= 0) {
     //     esp_rom_gpio_pad_select_gpio(phy_802_3->reset_gpio_num);
     //     gpio_set_direction(phy_802_3->reset_gpio_num, GPIO_MODE_OUTPUT);
@@ -454,7 +460,7 @@ esp_err_t esp_eth_phy_802_3_reset_hw(phy_802_3_t *phy_802_3, uint32_t reset_asse
     //     gpio_set_level(phy_802_3->reset_gpio_num, 1);
     //     return ESP_OK;
     // }
-    return ESP_ERR_NOT_ALLOWED;
+    // return ESP_ERR_NOT_ALLOWED;
 }
 
 /**
