@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -264,6 +264,7 @@ _hwlp_restore_end:
     esp.vst.128.ip  q0, \frame, 16
     esp.vst.128.ip  q1, \frame, 16
     esp.vst.128.ip  q2, \frame, 16
+    esp.vst.128.ip  q3, \frame, 16
     esp.vst.128.ip  q4, \frame, 16
     esp.vst.128.ip  q5, \frame, 16
     esp.vst.128.ip  q6, \frame, 16
@@ -275,20 +276,57 @@ _hwlp_restore_end:
     esp.st.qacc.h.h.128.ip \frame, 16
     /* UA_STATE register (128 bits) */
     esp.st.ua.state.ip \frame, 16
-    /* XACC register (40 bits) */
-    esp.st.u.xacc.ip \frame, 8
-    /* The following registers will be stored in the same word */
+    /* XACC register (40 bits)
+     *
+     * Bit layout across two 32-bit words (total 64 bits, but only 40 bits are used):
+     *
+     * Word 0 (Lower 32 bits):
+     *  +------+------+------+------+------+------+------+------+ 32
+     *  | res  | res  | res  | res  | res  | res  | res  | res  |
+     *  +------+------+------+------+------+------+------+------+ 24
+     *  | res  | res  | sar  | sar  | sar  | sar  | sar  | sar  |
+     *  +------+------+------+------+------+------+------+------+ 16
+     *  | sarB | sarB | sarB | sarB | fftW | fftW | fftW | fftW |
+     *  +------+------+------+------+------+------+------+------+ 8
+     *  | xacc | xacc | xacc | xacc | xacc | xacc | xacc | xacc |
+     *  +------+------+------+------+------+------+------+------+ 0
+     *
+     * Word 1 (Upper 32 bits, only lower 8 bits used):
+     *  +------+------+------+------+------+------+------+------+ 32
+     *  | xacc | xacc | xacc | xacc | xacc | xacc | xacc | xacc |
+     *  +------+------+------+------+------+------+------+------+ 24
+     *  | xacc | xacc | xacc | xacc | xacc | xacc | xacc | xacc |
+     *  +------+------+------+------+------+------+------+------+ 16
+     *  | xacc | xacc | xacc | xacc | xacc | xacc | xacc | xacc |
+     *  +------+------+------+------+------+------+------+------+ 8
+     *  | xacc | xacc | xacc | xacc | xacc | xacc | xacc | xacc |
+     *  +------+------+------+------+------+------+------+------+ 0
+     *
+     * Legend:
+     *  - `xacc`  = xacc bits
+     *  - `sar`   = sar bits
+     *  - `sarB`  = sar_bytes bits
+     *  - `fftW`  = FFT bit width bits
+     *  - `res`   = Reserved bits
+     *
+     */
+
+    /* Pointer not increased to write data as tightly as possible (minimum increment is 8). */
+    esp.st.u.xacc.ip \frame, 0
+
+    /* SAR_BYTES and FFT_BIT_WIDTH registers
+     * Prepare the 8-bit value: (SAR_BYTES << 4) | FFT_BIT_WIDTH */
+    esp.movx.r.sar.bytes a1      /* Load SAR_BYTES register (4 bits) */
+    slli  a2, a1, 4              /* a2 = (SAR_BYTES << 4) */
+
+    esp.movx.r.fft.bit.width a1  /* Load FFT_BIT_WIDTH register (4 bits) */
+    or    a2, a2, a1             /* a2 |= FFT_BIT_WIDTH */
+
+    sb    a2, 5(\frame)          /* Store byte after the XACC data */
+
     /* SAR register (6 bits) */
     esp.movx.r.sar a1
-    slli a2, a1, 8
-    /* SAR_BYTES register (4 bits) */
-    esp.movx.r.sar.bytes a1
-    slli a1, a1, 4
-    or   a2, a2, a1
-    /* FFT_BIT_WIDTH register (4 bits) */
-    esp.movx.r.fft.bit.width a1
-    or  a2, a2, a1
-    sw  a2, (\frame)
+    sb    a1, 6(\frame)          /* Store byte after the SAR_BYTES and FFT_BIT_WIDTH */
 .endm
 
 
@@ -297,6 +335,7 @@ _hwlp_restore_end:
     esp.vld.128.ip  q0, \frame, 16
     esp.vld.128.ip  q1, \frame, 16
     esp.vld.128.ip  q2, \frame, 16
+    esp.vld.128.ip  q3, \frame, 16
     esp.vld.128.ip  q4, \frame, 16
     esp.vld.128.ip  q5, \frame, 16
     esp.vld.128.ip  q6, \frame, 16
@@ -308,21 +347,31 @@ _hwlp_restore_end:
     esp.ld.qacc.h.h.128.ip \frame, 16
     /* UA_STATE register (128 bits) */
     esp.ld.ua.state.ip \frame, 16
-    /* XACC register (40 bits) */
-    esp.ld.xacc.ip \frame, 8
-    /* The following registers are stored in the same word */
-    lw  a2, (\frame)
+    /* XACC register (40 bits)
+     * Pointer not increased because the minimum step is 8, preventing data loss */
+    esp.ld.xacc.ip \frame, 0
+
+    /* The following registers are packed in the same word (addr: frame + 4):
+     * - XACC (upper byte)  [7..0]
+     * - FFT_BIT_WIDTH      [11..8]
+     * - SAR_BYTES          [15..12]
+     * - SAR                [21..16]
+     *
+     * See pie_save_regs macro for more details.
+     */
+    lbu   a1, 5(\frame) /* Load packed FFT_BIT_WIDTH and SAR_BYTES from offset 5
+                         * (frame points to the start of the 5-byte XACC) */
+
     /* FFT_BIT_WIDTH register (4 bits) */
-    andi a1, a2, 0xf
-    esp.movx.w.sar a1
+    esp.movx.w.fft.bit.width a1 /* FFT_BIT_WIDTH[3:0] = rs1[3:0] */
+
     /* SAR_BYTES register (4 bits) */
-    srli a2, a2, 4
-    andi a1, a2, 0xf
-    esp.movx.w.sar.bytes a1
+    srli  a1, a1, 4
+    esp.movx.w.sar.bytes a1     /* SAR_BYTE[3:0] = rs1[3:0] */
+
     /* SAR register (6 bits) */
-    srli a2, a2, 4
-    andi a1, a2, 0x3f
-    esp.movx.w.fft.bit.width a1
+    lbu   a1, 6(\frame)
+    esp.movx.w.sar a1           /* SAR[5:0] = rs1[5:0] */
 .endm
 
 generate_coprocessor_routine pie, PIE_COPROC_IDX, pie_enable, pie_save_regs, pie_restore_regs
@@ -495,6 +544,29 @@ generate_coprocessor_routine fpu, FPU_COPROC_IDX, fpu_enable, fpu_save_regs, fpu
 
 #endif /* SOC_CPU_COPROC_NUM > 0 */
 
+#if CONFIG_IDF_TARGET_ESP32S31
+
+    /* On the ESP32-S31, the PIE is only available on core 1, so whenever the core 0 uses a PIE instruction, we need to migrate the task to core 1.
+     * If the task ever used the FPU (and is currently the owner), we need to flush the context to the Task's coproc save area. */
+    .extern vPortTaskUsedPIEOnCPU0
+    .global rtos_pie_used_cpu0
+    .type rtos_pie_used_cpu0, @function
+rtos_pie_used_cpu0:
+    /* Task context on core 0 */
+    mv    s0, ra
+    lw    a0, pxCurrentTCBs   // a0 = task
+    mv    a1, sp              // a1 = frame
+    call  vPortTaskUsedPIEOnCPU0
+    /* Returns the context to save the current FPU context, or NULL if the task is not the owner of the FPU on the current core */
+    beqz  a0, rtos_pie_used_cpu0_end
+    /* As a precaution, enable the FPU. It will be restored to the initialize state when exiting
+     * the exception handler (mstatus will be restored) */
+    fpu_enable a1
+    fpu_save_regs a0
+rtos_pie_used_cpu0_end:
+    jr    s0
+    .size rtos_pie_used_cpu0, .-rtos_pie_used_cpu0
+#endif /* CONFIG_IDF_TARGET_ESP32S31 */
 
 /**
  * @brief Get current TCB on current core
@@ -635,7 +707,7 @@ rtos_int_enter:
     mv      a1, sp
     /* esp_hw_stack_guard_set_bounds(xIsrStackBottom[coreID], xIsrStackTop[coreID]);
      */
-    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE a2
+    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE a2 a0 a1
     ESP_HW_STACK_GUARD_MONITOR_START_CUR_CORE a0 a1
 #endif /* CONFIG_ESP_SYSTEM_HW_STACK_GUARD */
 
@@ -792,7 +864,7 @@ restore_stack_pointer:
      */
     lw      a1, PORT_OFFSET_PX_END_OF_STACK(a0)
     lw      a0, PORT_OFFSET_PX_STACK(a0)
-    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE a2
+    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE a2 a0 a1
     /* esp_hw_stack_guard_monitor_start(); */
     ESP_HW_STACK_GUARD_MONITOR_START_CUR_CORE a0 a1
 #endif /* CONFIG_ESP_SYSTEM_HW_STACK_GUARD */

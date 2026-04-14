@@ -6,6 +6,7 @@
 
 #include "soc/soc.h"
 #include "soc/soc_caps.h"
+#include "soc/plic_reg.h"
 
 #include "riscv/encoding.h"
 #include "riscv/rvruntime-frames.h"
@@ -15,6 +16,10 @@
 #include "esp_tee_intr_defs.h"
 #include "sdkconfig.h"
 
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+#include "esp_private/hw_stack_guard.h"
+#endif
+
     .equ SAVE_REGS, 32
     .equ CONTEXT_SIZE, (SAVE_REGS * 4)
     .equ panic_from_exception, tee_panic_from_exc
@@ -23,22 +28,113 @@
     .equ RTNVAL, 0xc0de
     .equ ECALL_U_MODE, 0x8
     .equ ECALL_M_MODE, 0xb
-    .equ TEE_INTR_DELEG_MASK, ~(1U << TEE_SECURE_INUM)
-
+    /* NOTE: INTWDT timeout, Cache error and Stack protection interrupts
+     * trigger the panic handler before reset, so they don't need to be delegated. */
+    .equ TEE_INTR_DELEG_BASE, ((1U << TEE_SECURE_INUM) | (1U << ETS_INT_WDT_INUM) | (1U << ETS_CACHEERR_INUM))
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+    .equ TEE_INTR_DELEG_MASK, ~(TEE_INTR_DELEG_BASE | (1U << ETS_ASSIST_DEBUG_INUM))
+#else
+    .equ TEE_INTR_DELEG_MASK, ~(TEE_INTR_DELEG_BASE)
+#endif
     .global esp_tee_global_interrupt_handler
     .global esp_tee_service_dispatcher
+    .global _tee_s_entry
+    .global syscall_enter_tee
+    .global syscall_exit_tee
 
     .section .data
-    .align 4
+    .balign 4
+
     .global _ns_sp
 _ns_sp:
     .word 0
 
-    .section .data
-    .align 4
     .global _s_sp
 _s_sp:
     .word 0
+
+    .global _s_intr_thresh
+_s_intr_thresh:
+    .word 0
+
+    .global _ns_sp_min
+_ns_sp_min:
+    .word 0
+
+    .global _ns_sp_max
+_ns_sp_max:
+    .word 0
+
+/**
+ * STACK_GUARD_PRE_SWITCH
+ * Stops HW stack-guard monitoring and optionally saves current bounds.
+ *
+ * Args:
+ *   op_reg  – output register for “monitoring enabled” state (must be reused)
+ *   to_save – 1=save bounds to memory, 0=skip saving
+ *   sp_min  – symbol to store lower bound (if to_save=1)
+ *   sp_max  – symbol to store upper bound (if to_save=1)
+ *
+ * Clobbers: t0, t1, t2, op_reg
+ */
+.macro STACK_GUARD_PRE_SWITCH op_reg, to_save, sp_min, sp_max
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+    /* Query if monitoring is enabled: result goes into \op_reg */
+    ESP_HW_STACK_GUARD_MONITOR_QUERY_CUR_CORE t2 \op_reg
+    beqz    \op_reg, 1f
+
+    .if \to_save
+        /* Save current REE/U-mode stack bounds */
+        ESP_HW_STACK_GUARD_GET_BOUNDS_CUR_CORE t2 t0 t1
+        la t2, \sp_min
+        sw t0, 0(t2)
+        la t2, \sp_max
+        sw t1, 0(t2)
+    .endif
+
+    /* Stop monitoring */
+    ESP_HW_STACK_GUARD_MONITOR_STOP_CUR_CORE t0 t1
+    fence
+1:
+#endif
+.endm
+
+/**
+ * STACK_GUARD_POST_SWITCH
+ * Restores or applies new bounds after switching stacks, then restarts monitoring.
+ *
+ * Args:
+ *   op_reg     – saved monitoring state from PRE_SWITCH
+ *   to_restore – 1=restore from memory, 0=set static bounds
+ *   sp_min     – saved bound (restore) or static lower bound (S-mode)
+ *   sp_max     – saved bound (restore) or static upper bound (S-mode)
+ *
+ * Clobbers: t0, t1, t2
+ */
+.macro STACK_GUARD_POST_SWITCH op_reg, to_restore, sp_min, sp_max
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+    /* Check if monitoring was enabled (using saved state from op_reg) */
+    beqz    \op_reg, 1f
+
+    .if \to_restore
+        /* Restore saved REE/U-mode bounds from memory */
+        la  t2, \sp_min
+        lw  t0, 0(t2)
+        la  t2, \sp_max
+        lw  t1, 0(t2)
+    .else
+        /* Use new TEE/S-mode stack bounds (static symbols) */
+        la  t0, \sp_min
+        la  t1, \sp_max
+    .endif
+
+    /* Apply bounds to hardware stack guard */
+    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE t2 t0 t1
+    /* Restart monitoring */
+    ESP_HW_STACK_GUARD_MONITOR_START_CUR_CORE t0 t1
+1:
+#endif
+.endm
 
 /* Macro which first allocates space on the stack to save general
  * purpose registers, and then save them. GP register is excluded.
@@ -91,6 +187,8 @@ _s_sp:
     sw    t0, RV_STK_MTVAL(sp)
     csrr  t0, mhartid
     sw    t0, RV_STK_MHARTID(sp)
+    csrr  t0, mcause
+    sw    t0, RV_STK_MCAUSE(sp)
 .endm
 
 /* Restore the general purpose registers (excluding gp) from the context on
@@ -169,16 +267,18 @@ _s_sp:
     .section .exception_vectors.text, "ax"
 
     /* Exception handler. */
-    .global _panic_handler
-    .type _panic_handler, @function
-_panic_handler:
-    /* Backup t0 on the stack before using it */
+    .global _tee_exception_handler
+    .global _tee_panic_handler
+    .type _tee_exception_handler, @function
+_tee_exception_handler:
+    /* Backup t0, t1 on the stack before using it */
     addi    sp, sp, -16
     sw      t0, 0(sp)
+    sw      t1, 4(sp)
 
     /* Read mcause */
     csrr    t0, mcause
-    li      t1, VECTORS_MCAUSE_INTBIT_MASK | VECTORS_MCAUSE_REASON_MASK
+    li      t1, VECTORS_MCAUSE_REASON_MASK
     and     t0, t0, t1
 
     /* Check whether the exception is an M-mode ecall */
@@ -189,10 +289,12 @@ _panic_handler:
     li      t1, ECALL_U_MODE
     beq     t0, t1, _user_ecall
 
-    /* Restore t0 from the stack */
+    /* Restore t0, t1 from the stack */
     lw      t0, 0(sp)
+    lw      t1, 4(sp)
     addi    sp, sp, 16
 
+_tee_panic_handler:
     /* Not an ecall, proceed to the panic handler */
     /* Allocate space on the stack and store general purpose registers */
     save_general_regs RV_STK_FRMSZ
@@ -245,13 +347,17 @@ _return_from_exception:
     restore_general_regs RV_STK_FRMSZ
     mret
 
-    .size  _panic_handler, .-_panic_handler
+    .size  _tee_exception_handler, .-_tee_exception_handler
 
     /* ECALL handler. */
     .type _ecall_handler, @function
 _ecall_handler:
     /* M-mode ecall handler */
 _machine_ecall:
+    /* Enable the U-mode delegation of all interrupts (except the TEE secure interrupt) */
+    li      t0, TEE_INTR_DELEG_MASK
+    csrs    mideleg, t0
+
     /* Set the privilege mode to transition to after mret to U-mode  */
     li      t0, MSTATUS_MPP
     csrc    mstatus, t0
@@ -260,17 +366,34 @@ _machine_ecall:
     lui     t0, ESP_TEE_M2U_SWITCH_MAGIC
     beq     a1, t0, _skip_ctx_restore
 
+    /* Check if we need to restore the MXINT threshold register */
+    la      t0, _s_intr_thresh
+    lw      t1, 0(t0)
+    beqz    t1, _skip_thresh_restore     # if saved threshold == 0, skip
+
+    /* Restore PLIC_MXINT_THRESH_REG */
+    sw      zero, 0(t0)
+    li      t0, PLIC_MXINT_THRESH_REG
+    sw      t1, 0(t0)
+
+_skip_thresh_restore:
+    STACK_GUARD_PRE_SWITCH t3 0
+
     /* Switching back to the saved REE stack */
     la      t0, _ns_sp
     lw      sp, 0(t0)
+
+    STACK_GUARD_POST_SWITCH t3 1 _ns_sp_min _ns_sp_max
     fence
+
+    call syscall_exit_tee
 
     /* Backup the A0 register
      * This point is reached after an ecall is triggered after executing the secure service.
      * The A0 register contains the return value of the corresponding service.
      * After restoring the entire register context, we assign A0 the value back to the return value. */
     csrw    mscratch, a0
-    restore_general_regs RV_STK_FRMSZ
+    restore_general_regs
     csrrw   a0, mscratch, zero
 
 _skip_ctx_restore:
@@ -284,42 +407,58 @@ _skip_ctx_restore:
 _user_ecall:
     /* Check whether we are returning after servicing an U-mode interrupt */
     lui     t0, RTNVAL
-    csrr    t1, mscratch
+    csrrw   t1, mscratch, zero
     beq     t0, t1, _rtn_from_ns_int
-    csrwi   mscratch, 0
 
-    /* Restore t0 from the stack */
+    /* Restore t0, t1 from the stack */
     lw      t0, 0(sp)
+    lw      t1, 4(sp)
     addi    sp, sp, 16
 
     /* This point is reached when a secure service call is issued from the REE */
     /* Save register context and mepc */
-    save_general_regs RV_STK_FRMSZ
+    save_general_regs
     save_mepc
 
+    # Check if REE is in a critical section
+    li      t0, PLIC_UXINT_THRESH_REG
+    lw      t1, 0(t0)               # t1 = current UXINT threshold
+    li      t2, 1
+    ble     t1, t2, _process_ecall  # if threshold <= 1 -> continue
+
+    # Save current MXINT threshold and mirror UXINT threshold into MXINT
+    li      t0, PLIC_MXINT_THRESH_REG
+    lw      t2, 0(t0)               # t3 = current MXINT threshold
+    la      t3, _s_intr_thresh
+    sw      t2, 0(t3)               # save old MXINT threshold
+    sw      t1, 0(t0)
+
+_process_ecall:
     /* Save the U-mode (i.e. REE) stack pointer */
     la      t0, _ns_sp
     sw      sp, 0(t0)
 
+    STACK_GUARD_PRE_SWITCH t3 1 _ns_sp_min _ns_sp_max
+
     /* Switch to the M-mode (i.e. TEE) stack */
     la      sp, _tee_stack
+
+    STACK_GUARD_POST_SWITCH t3 0 _tee_stack_bottom _tee_stack
+
+    /* Load the TEE entry point (see _tee_s_entry) in the mepc */
+    la      t0, _tee_s_entry
+    csrw    mepc, t0
 
     /* Disable the U-mode delegation of all interrupts */
     csrwi   mideleg, 0
 
-    /* Enable interrupts */
-    csrsi   mstatus, MSTATUS_MIE
+    /* Set the privilege mode to transition to after mret to M-mode  */
+    li      t0, MSTATUS_MPP
+    csrs    mstatus, t0
 
-    /* Jump to the secure service dispatcher */
-    jal     esp_tee_service_dispatcher
+    call syscall_enter_tee
 
-    /* Enable the U-mode delegation of all interrupts (except the TEE secure interrupt) */
-    li      t0, TEE_INTR_DELEG_MASK
-    csrs    mideleg, t0
-
-    /* Fire an M-ecall */
-    mv      a1, zero
-    ecall
+    mret
 
     /* This point is reached after servicing a U-mode interrupt occurred
      * while executing a secure service */
@@ -327,20 +466,23 @@ _rtn_from_ns_int:
     /* Disable the U-mode interrupt delegation */
     csrwi    mideleg, 0
 
+    STACK_GUARD_PRE_SWITCH t3 0
+
     /* Restore the secure stack pointer */
     la      t0, _s_sp
     lw      sp, 0(t0)
 
-    /* Clear the flag set marking the completion of interrupt service */
-    csrwi    mscratch, 0
+    STACK_GUARD_POST_SWITCH t3 0 _tee_stack_bottom _tee_stack
 
     /* Set the privilege mode to transition to after mret to M-mode */
     li      t0, MSTATUS_MPP
     csrs    mstatus, t0
 
+    call syscall_enter_tee
+
     /* Restore register context and resume the secure service */
     restore_mepc
-    restore_general_regs RV_STK_FRMSZ
+    restore_general_regs
 
     mret
 
@@ -354,7 +496,7 @@ _rtn_from_ns_int:
 _tee_ns_intr_handler:
     /* Start by saving the general purpose registers and the PC value before
      * the interrupt happened. */
-    save_general_regs RV_STK_FRMSZ
+    save_general_regs
     save_mepc
 
     /* Though it is not necessary we save GP and SP here.
@@ -364,7 +506,7 @@ _tee_ns_intr_handler:
     /* As gp register is not saved by the macro, save it here */
     sw      gp, RV_STK_GP(sp)
     /* Same goes for the SP value before trapping */
-    addi    t0, sp, RV_STK_FRMSZ /* restore sp with the value when interrupt happened */
+    addi    t0, sp, CONTEXT_SIZE /* restore sp with the value when interrupt happened */
     /* Save SP */
     sw      t0, RV_STK_SP(sp)
 
@@ -390,12 +532,16 @@ _tee_ns_intr_handler:
     li      t1, MSTATUS_MPP
     csrc    mstatus, t1
 
-    /* Save the current secure stack pointer and switch to the U-mode interrupt stack
-     * saved while entering the secure service call routine (see `sec_world_entry`) */
+    /* Save the current secure stack pointer */
     la     t0, _s_sp
     sw     sp, 0(t0)
+
+    STACK_GUARD_PRE_SWITCH t3 0
+
+    /* Switch to the saved U-mode stack */
     la     t1, _ns_sp
     lw     sp, 0(t1)
+    fence
 
     /* Set a flag to identify the next U2M switch would be after handling a U-mode interrupt */
     lui     t0, RTNVAL
@@ -404,6 +550,10 @@ _tee_ns_intr_handler:
     /* Enable the U-mode interrupt delegation (except for the TEE secure interrupt) */
     li      t0, TEE_INTR_DELEG_MASK
     csrs    mideleg, t0
+
+    STACK_GUARD_POST_SWITCH t3 1 _ns_sp_min _ns_sp_max
+
+    call syscall_exit_tee
 
     /* Place magic bytes in all the general registers */
     store_magic_general_regs
@@ -461,8 +611,6 @@ _tee_s_intr_handler:
 _save_reg_ctx:
     /* Save CSR context here */
     save_mcsr
-    csrr    t0, mcause
-    sw      t0, RV_STK_MCAUSE(sp)
     /* NOTE: With ESP-TEE, since APM violations trigger a panic, it's safe to use the mscratch
      * register to pass on the stack pointer to the APM violation handler */
     csrw    mscratch, sp
@@ -471,8 +619,28 @@ _save_reg_ctx:
 _continue:
     /* Before doing anything preserve the stack pointer */
     mv      s11, sp
+
+    /* NOTE: Cannot use the stack-guard macros here because they expect
+     * static symbols, not register-based bounds. */
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+    /* Check if stack monitoring is enabled */
+    ESP_HW_STACK_GUARD_MONITOR_QUERY_CUR_CORE t2 t3
+    beqz    t3, 1f
+
+    /* Save the REE stack guard bounds in s9/s10 (callee-saved registers) */
+    ESP_HW_STACK_GUARD_GET_BOUNDS_CUR_CORE t2 s9 s10
+    /* Stop the stack monitoring */
+    ESP_HW_STACK_GUARD_MONITOR_STOP_CUR_CORE t0 t1
+    fence
+1:
+#endif
+
     /* Switch to the TEE interrupt stack */
     la      sp, _tee_intr_stack
+
+    STACK_GUARD_POST_SWITCH t3 0 _tee_intr_stack_bottom _tee_intr_stack
+    fence
+
     /* If this is a non-nested interrupt, SP now points to the interrupt stack */
 
     /* Before dispatch c handler, restore interrupt to enable nested intr */
@@ -519,7 +687,7 @@ _intr_hdlr_exec:
     mv      a0, sp      /* argument 1, stack pointer */
     mv      a1, s1      /* argument 2, interrupt number (mcause) */
     /* mask off the interrupt flag of mcause */
-    li      t0, 0x7fffffff
+    li      t0, VECTORS_MCAUSE_REASON_MASK
     and     a1, a1, t0
 
     jal     esp_tee_global_interrupt_handler
@@ -537,8 +705,23 @@ _intr_hdlr_exec:
     csrw    mcause, s1
     csrw    mstatus, s2
 
+    STACK_GUARD_PRE_SWITCH t3 0
+
     /* Restoring the stack pointer */
     mv      sp, s11
+
+    /* NOTE: Cannot use the stack-guard macros here because they expect
+     * static symbols, not register-based bounds. */
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
+    /* Check if stack monitoring was enabled (using saved state from t3) */
+    beqz    t3, 2f  # Skip if monitoring was not enabled
+
+    /* Restore the REE stack bounds from s9/s10 (callee-saved registers) */
+    ESP_HW_STACK_GUARD_SET_BOUNDS_CUR_CORE t2 s9 s10
+    /* Resume stack monitoring */
+    ESP_HW_STACK_GUARD_MONITOR_START_CUR_CORE t0 t1
+2:
+#endif
 
     restore_mepc
     restore_general_regs RV_STK_FRMSZ
@@ -546,3 +729,18 @@ _intr_hdlr_exec:
     mret
 
     .size  _tee_s_intr_handler, .-_tee_s_intr_handler
+
+    .section .text, "ax"
+
+    .balign  4
+    .type _tee_s_entry, @function
+_tee_s_entry:
+    /* Jump to the secure service dispatcher */
+    jal     esp_tee_service_dispatcher
+
+    /* Fire an M-ecall */
+    mv      a1, zero
+    ecall
+    fence
+
+    .size  _tee_s_entry, .-_tee_s_entry

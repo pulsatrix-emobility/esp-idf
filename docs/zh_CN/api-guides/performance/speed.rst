@@ -3,7 +3,7 @@
 
 :link_to_translation:`en:[English]`
 
-{IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
+{IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
 {IDF_TARGET_RF_TYPE:default="Wi-Fi/蓝牙", esp32s2="Wi-Fi", esp32c6="Wi-Fi/蓝牙/802.15.4", esp32c61="Wi-Fi/蓝牙", esp32h2="蓝牙/802.15.4", esp32h21="蓝牙/802.15.4", esp32h4="蓝牙/802.15.4", esp32c5="Wi-Fi/蓝牙/802.15.4"}
 
 概述
@@ -204,12 +204,11 @@ ESP-IDF 启动的系统任务预设了固定优先级。启动时，一些任务
         - FreeRTOS 初始化调度器时会创建定时器任务，用于处理 FreeRTOS 定时器的回调函数，优先级最低（1, :ref:`可配置 <CONFIG_FREERTOS_TIMER_TASK_PRIORITY>` ）。
         - 系统任务 :doc:`/api-reference/system/esp_event` 用于管理默认的系统事件循环并执行回调函数，优先级较高 (20, ``ESP_TASK_EVENT_PRIO``)。仅在应用程序调用 :cpp:func:`esp_event_loop_create_default` 时使用此配置。可以调用 :cpp:func:`esp_event_loop_create` 添加自定义任务配置。
         - :doc:`/api-guides/lwip` TCP/IP 任务优先级较高 (18, ``ESP_TASK_TCPIP_PRIO``)。
-        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi` 任务优先级较高 (23).
+        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi-driver/index` 任务优先级较高 (23).
         :SOC_WIFI_SUPPORTED: - 使用 Wi-Fi Protected Setup (WPS)、WPA2 EAP-TLS、Device Provisioning Protocol (DPP) 或 BSS Transition Management (BTM) 等功能时，Wi-Fi wpa_supplicant 组件可能会创建优先级较低的专用任务 (2)。
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/controller_vhci` 任务优先级较高 (23, ``ESP_TASK_BT_CONTROLLER_PRIO``)。蓝牙控制器需要以低延迟响应请求，因此其任务应始终为系统最高优先级的任务之一。
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/nimble/index` 任务优先级较高 (21).
         - 以太网驱动程序会创建一个 MAC 任务，用于接收以太网帧。如果使用默认配置 ``ETH_MAC_DEFAULT_CONFIG`` ，则该任务为中高优先级 (15)。可以在以太网 MAC 初始化时输入自定义 :cpp:class:`eth_mac_config_t` 结构体来更改此设置。
-        - 如果使用 :doc:`/api-reference/protocols/mqtt` 组件，它会创建优先级默认为 5 的任务（ :ref:`可配置 <CONFIG_MQTT_TASK_PRIORITY>` ），可通过 :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG` 调整，也可以在运行时通过 :cpp:class:`esp_mqtt_client_config_t` 结构体中的 ``task_prio`` 字段调整。
         - 关于 ``mDNS`` 服务的任务优先级，参见 `性能优化 <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__ 。
 
 .. only:: SOC_HP_CPU_HAS_MULTIPLE_CORES
@@ -221,7 +220,7 @@ ESP-IDF 启动的系统任务预设了固定优先级。启动时，一些任务
         - FreeRTOS 初始化调度器时会创建定时器任务，用于处理 FreeRTOS 定时器的回调函数，优先级最低（1， :ref:`可配置 <CONFIG_FREERTOS_TIMER_TASK_PRIORITY>` ）且固定在核 0 上执行。
         - 系统任务 :doc:`/api-reference/system/esp_event` 用于管理默认的系统事件循环并执行回调函数，优先级较高 (20, ``ESP_TASK_EVENT_PRIO``) 且固定在核 0 上执行。此配置仅在应用程序调用 :cpp:func:`esp_event_loop_create_default` 时使用。可以调用 :cpp:func:`esp_event_loop_create` 添加自定义任务配置。
         - :doc:`/api-guides/lwip` TCP/IP 任务优先级较高 (18, ``ESP_TASK_TCPIP_PRIO``) 且并未固定在特定内核上执行（ :ref:`可配置 <CONFIG_LWIP_TCPIP_TASK_AFFINITY>` ）。
-        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi` 任务优先级较高 (23) 且默认固定在核 0 上执行（ :ref:`可配置 <CONFIG_ESP_WIFI_TASK_CORE_ID>` ）。
+        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi-driver/index` 任务优先级较高 (23) 且默认固定在核 0 上执行（ :ref:`可配置 <CONFIG_ESP_WIFI_TASK_CORE_ID>` ）。
         :SOC_WIFI_SUPPORTED: - 使用 Wi-Fi Protected Setup (WPS)、WPA2 EAP-TLS、Device Provisioning Protocol (DPP) 或 BSS Transition Management (BTM) 等功能时，Wi-Fi wpa_supplicant 组件可能会创建优先级较低的专用任务 (2)，这些任务并未固定在特定内核上执行。
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/controller_vhci` 任务优先级较高 (23, ``ESP_TASK_BT_CONTROLLER_PRIO``) 且默认固定在核 0 上执行（ :ref:`可配置 <{IDF_TARGET_CONTROLLER_CORE_CONFIG}>` ）。蓝牙控制器需要以低延迟响应请求，因此其任务应始终为最高优先级的任务之一并分配给单个 CPU 执行。
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/nimble/index` 任务优先级较高 (21) 且默认固定在核 0 上执行（ :ref:`可配置 <CONFIG_BT_NIMBLE_PINNED_TO_CORE_CHOICE>` ）.
@@ -233,7 +232,6 @@ ESP-IDF 启动的系统任务预设了固定优先级。启动时，一些任务
                所有 Bluedroid 任务默认固定在同一个核心上执行，即核 0（ :ref:`可配置 <CONFIG_BT_BLUEDROID_PINNED_TO_CORE_CHOICE>` ）。
 
         - 以太网驱动程序会创建一个 MAC 任务，用于接收以太网帧。如果使用默认配置 ``ETH_MAC_DEFAULT_CONFIG`` ，则该任务为中高优先级 (15) 且并未固定在特定内核上执行。可以在以太网 MAC 初始化时输入自定义 :cpp:class:`eth_mac_config_t` 结构体来更改此设置。
-        - 如果使用 :doc:`/api-reference/protocols/mqtt` 组件，它会创建优先级默认为 5 的任务（ :ref:`可配置 <CONFIG_MQTT_TASK_PRIORITY>` ，也可通过 :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG` 调整）。该任务未固定在特定内核上执行（ :ref:`可配置 <CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED>` ）。
         - 关于 ``mDNS`` 服务的任务优先级，参见 `性能优化 <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__ 。
 
 

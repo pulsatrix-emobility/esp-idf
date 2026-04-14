@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -70,6 +70,17 @@ typedef enum {
 #define ESP_SECURE_BOOT_SCHEME ESP_SECURE_BOOT_V2_ECDSA
 #endif
 
+/* Expected ECDSA curve ID from menuconfig "ECDSA key size" (matches ECDSA_CURVE_P192/P256/P384 in ROM) */
+#if CONFIG_SECURE_SIGNED_APPS_ECDSA_V2_SCHEME
+#if CONFIG_SECURE_BOOT_ECDSA_KEY_LEN_192_BITS
+#define ESP_SECURE_BOOT_ECDSA_CURVE_ID  ECDSA_CURVE_P192
+#elif CONFIG_SECURE_BOOT_ECDSA_KEY_LEN_256_BITS
+#define ESP_SECURE_BOOT_ECDSA_CURVE_ID  ECDSA_CURVE_P256
+#elif CONFIG_SECURE_BOOT_ECDSA_KEY_LEN_384_BITS
+#define ESP_SECURE_BOOT_ECDSA_CURVE_ID  ECDSA_CURVE_P384
+#endif
+#endif
+
 #if CONFIG_SECURE_BOOT || CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT
 /** @brief Get the selected secure boot scheme key type
  *
@@ -137,7 +148,7 @@ static inline bool esp_secure_boot_enabled(void)
  * If first boot gets interrupted after calling this function
  * but before esp_secure_boot_permanently_enable() is called, then
  * the key burned on EFUSE will not be regenerated, unless manually
- * done using espefuse.py tool
+ * done using espefuse tool
  *
  * @return ESP_OK if secure boot digest is generated
  * successfully or found to be already present
@@ -224,6 +235,23 @@ typedef struct {
     uint32_t version;
     uint8_t signature[64];
 } esp_secure_boot_sig_block_t;
+
+/** @brief Get the size of the secure boot signature block
+ *
+ * This is the size of the signature block appended to a signed image.
+ *
+ * @return Size of the secure boot signature block in bytes
+ */
+static inline uint32_t esp_secure_boot_sig_block_size()
+{
+#if CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME || CONFIG_SECURE_SIGNED_APPS_ECDSA_V2_SCHEME
+    return sizeof(ets_secure_boot_signature_t);
+#elif defined(CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME)
+    return sizeof(esp_secure_boot_sig_block_t);
+#else
+    return 0;
+#endif
+}
 
 /** @brief Verify the ECDSA secure boot signature block for Secure Boot V1.
  *

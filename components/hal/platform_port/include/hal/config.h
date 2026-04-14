@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -30,7 +30,7 @@ extern "C" {
 /**
  * @brief Enable this to indicate the target is an FPGA.
  */
-#define HAL_CONFIG_EFUSE_ENV_FPGA   CONFIG_IDF_ENV_FPGA
+#define HAL_CONFIG_ENV_FPGA   CONFIG_IDF_ENV_FPGA
 
 /**
  * @brief When the hardware fails in measuring the XTAL frequency, use this value as a hint.
@@ -48,6 +48,11 @@ extern "C" {
  *        This provides enhanced security against timing attacks.
  */
 #define HAL_CONFIG_ECDSA_GEN_SIG_CM CONFIG_HAL_ECDSA_GEN_SIG_CM
+
+/**
+ * @brief The minimum supported chip revision.
+ */
+#define HAL_CONFIG_CHIP_SUPPORT_MIN_REV CONFIG_ESP_REV_MIN_FULL
 
 #ifdef __cplusplus
 }

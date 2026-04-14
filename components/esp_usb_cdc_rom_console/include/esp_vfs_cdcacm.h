@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,12 +7,22 @@
 #pragma once
 
 #include "esp_err.h"
-#include "esp_vfs.h"
 #include "esp_vfs_common.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* TODO IDF-14810:  Rename so esp_console does not appear in the name. */
+/**
+ * @brief Parameters for console device: USB CDC
+ *
+ * @note It's an empty structure for now, reserved for future
+ *
+ */
+typedef struct esp_console_dev_usb_cdc_config {
+
+} esp_console_dev_usb_cdc_config_t;
 
 /**
  * @brief add /dev/cdcacm virtual filesystem driver

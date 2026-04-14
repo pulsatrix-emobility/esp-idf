@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 #include <sys/param.h>
 
 #include "esp_attr.h"
+#include "esp_system.h"
 #include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
@@ -21,7 +22,7 @@
 #include "driver/gpio.h"
 #include "hal/gpio_hal.h"
 #include "hal/rtc_io_hal.h"
-#include "soc/rtc_io_periph.h"
+#include "hal/rtc_io_periph.h"
 #include "soc/uart_pins.h"
 
 #include "hal/rtc_hal.h"
@@ -32,7 +33,7 @@
 #include "esp_private/startup_internal.h"
 #include "bootloader_flash.h"
 
-static const char *TAG = "sleep_gpio";
+ESP_LOG_ATTR_TAG(TAG, "sleep_gpio");
 
 #if CONFIG_IDF_TARGET_ESP32
 /* On ESP32, for IOs with RTC functionality, setting SLP_PU, SLP_PD couldn't change IO status
@@ -97,6 +98,7 @@ void esp_sleep_gpio_pupd_config_workaround_unapply(void)
 }
 #endif
 
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
 void esp_sleep_config_gpio_isolate(void)
 {
     ESP_EARLY_LOGI(TAG, "Configure to isolate all GPIO pins in sleep state");
@@ -169,8 +171,9 @@ void esp_sleep_enable_gpio_switch(bool enable)
         }
     }
 }
+#endif
 
-#if SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#if !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 IRAM_ATTR void esp_sleep_isolate_digital_gpio(void)
 {
     gpio_hal_context_t gpio_hal = {
@@ -225,10 +228,10 @@ IRAM_ATTR void esp_sleep_isolate_digital_gpio(void)
         }
     }
 }
-#endif //SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#endif //!SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 
 #if SOC_DEEP_SLEEP_SUPPORTED
-void esp_deep_sleep_wakeup_io_reset(void)
+static void esp_deep_sleep_wakeup_io_reset(void)
 {
 #if SOC_PM_SUPPORT_EXT1_WAKEUP
     uint32_t rtc_io_mask = rtc_hal_ext1_get_wakeup_pins();
@@ -239,43 +242,75 @@ void esp_deep_sleep_wakeup_io_reset(void)
         if ((rtc_io_mask & BIT(rtcio_num)) == 0) {
             continue;
         }
+#if SOC_RTCIO_HOLD_SUPPORTED
         rtcio_hal_hold_disable(rtcio_num);
+#endif
         rtc_io_mask &= ~BIT(rtcio_num);
     }
 #endif
 
-#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
-    uint32_t dl_io_mask = SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK;
+#if SOC_GPIO_SUPPORT_HP_PERIPH_PD_SLEEP_WAKEUP
+    uint64_t dslp_io_mask = SOC_GPIO_HP_PERIPH_PD_SLEEP_WAKEABLE_MASK;
     gpio_hal_context_t gpio_hal = {
         .dev = GPIO_HAL_GET_HW(GPIO_PORT_0)
     };
-    while (dl_io_mask) {
-        int gpio_num = __builtin_ffs(dl_io_mask) - 1;
-        bool wakeup_io_enabled = gpio_hal_deepsleep_wakeup_is_enabled(&gpio_hal, gpio_num);
+    while (dslp_io_mask) {
+        int gpio_num = __builtin_ctzll(dslp_io_mask);
+        bool wakeup_io_enabled = gpio_hal_wakeup_is_enabled_on_hp_periph_powerdown_sleep(&gpio_hal, gpio_num);
         if (wakeup_io_enabled) {
             // Disable the wakeup before releasing hold, such that wakeup status can reflect the correct wakeup pin
-            gpio_hal_deepsleep_wakeup_disable(&gpio_hal, gpio_num);
+            gpio_hal_wakeup_disable_on_hp_periph_powerdown_sleep(&gpio_hal, gpio_num);
             gpio_hal_hold_dis(&gpio_hal, gpio_num);
         }
-        dl_io_mask &= ~BIT(gpio_num);
+        dslp_io_mask &= dslp_io_mask - 1;
     }
 #endif
 }
 #endif
 
-#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
 ESP_SYSTEM_INIT_FN(esp_sleep_startup_init, SECONDARY, BIT(0), 105)
 {
+#if SOC_DEEP_SLEEP_SUPPORTED
+    // Need to unhold the IOs that were hold right before entering deep sleep, which are used as wakeup pins
+    if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+        esp_deep_sleep_wakeup_io_reset();
+    }
+#endif  //#if SOC_DEEP_SLEEP_SUPPORTED
+
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
     // Configure to isolate (disable the Input/Output/Pullup/Pulldown
     // function of the pin) all GPIO pins in sleep state
     esp_sleep_config_gpio_isolate();
     // Enable automatic switching of GPIO configuration
     esp_sleep_enable_gpio_switch(true);
+#endif
     return ESP_OK;
+}
+
+/**
+ * @brief Convert RTC IO status bit number to GPIO number (for sleep wakeup status translation).
+ *
+ * @param bit RTC IO intr status bit index (0 to SOC_RTCIO_PIN_COUNT-1).
+ * @return GPIO number, or GPIO_NUM_NC if bit is invalid or has no corresponding GPIO.
+ */
+gpio_num_t esp_sleep_wakeup_io_bit2num(uint32_t bit)
+{
+#if SOC_RTCIO_PIN_COUNT > 0
+    if (bit >= SOC_RTCIO_PIN_COUNT) {
+        return GPIO_NUM_NC;
+    }
+    for (int gpio = 0; gpio < SOC_GPIO_PIN_COUNT; gpio++) {
+        if (rtc_io_num_map[gpio] == (int8_t)bit) {
+            return (gpio_num_t)gpio;
+        }
+    }
+#elif (SOC_RTCIO_PIN_COUNT == 0)
+    return (gpio_num_t)bit;
+#endif
+    return GPIO_NUM_NC;
 }
 
 void esp_sleep_gpio_include(void)
 {
     // Linker hook function, exists to make the linker examine this file
 }
-#endif

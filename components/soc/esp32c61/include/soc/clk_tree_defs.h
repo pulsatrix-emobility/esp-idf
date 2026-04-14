@@ -1,7 +1,7 @@
 /*
  * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 #pragma once
 
@@ -180,6 +180,13 @@ typedef enum {
     GPTIMER_CLK_SRC_DEFAULT = SOC_MOD_CLK_PLL_F80M,  /*!< Select PLL_F80M as the default choice */
 } soc_periph_gptimer_clk_src_t;
 
+//////////////////////////////////////////////////ETM///////////////////////////////////////////////////////////////////
+
+/**
+ * @brief Type of ETM clock source
+ */
+typedef int soc_periph_etm_clk_src_t;
+
 //////////////////////////////////////////////////Temp Sensor///////////////////////////////////////////////////////////
 
 /**
@@ -338,6 +345,7 @@ typedef enum {
  * @brief Array initializer for all supported clock sources of LEDC
  */
 #define SOC_LEDC_CLKS {SOC_MOD_CLK_XTAL, SOC_MOD_CLK_PLL_F80M, SOC_MOD_CLK_RC_FAST}
+#define SOC_LEDC_CLK_STRS {"LEDC_USE_XTAL_CLK", "LEDC_USE_PLL_DIV_CLK", "LEDC_USE_RC_FAST_CLK"}
 
 /**
  * @brief Type of LEDC clock source, reserved for the legacy LEDC driver
@@ -367,7 +375,6 @@ typedef enum {
 
 //////////////////////////////////////////////CLOCK OUTPUT///////////////////////////////////////////////////////////
 typedef enum {
-    CLKOUT_SIG_INVALID          = 0,
     CLKOUT_SIG_PLL_F160M        = 1,    /*!< Divided from PLL_F480M */
     CLKOUT_SIG_PLL_F22M         = 2,    /*!< Divided from PLL_F160M */
     CLKOUT_SIG_PLL_F40M         = 3,    /*!< Divided from PLL_F160M */
@@ -383,6 +390,7 @@ typedef enum {
     CLKOUT_SIG_RC_FAST          = 0x17, /*!< RC fast clock, about 17.5MHz */
     CLKOUT_SIG_RC_32K           = 0x18, /*!< Internal slow RC oscillator */
     CLKOUT_SIG_RC_SLOW          = 0x19, /*!< RC slow clock, depends on the RTC_CLK_SRC configuration */
+    CLKOUT_SIG_INVALID          = 0xFF,
 } soc_clkout_sig_id_t;
 
 //////////////////////////////////////CLOCK FREQUENCY CALCULATION////////////////////////////////////////////////////

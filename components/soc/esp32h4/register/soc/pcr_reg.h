@@ -1,11 +1,10 @@
 /**
  * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
  *
- *  SPDX-License-Identifier: Apache-2.0
+ *  SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 #pragma once
 
-#include <stdint.h>
 #include "soc/soc.h"
 #ifdef __cplusplus
 extern "C" {
@@ -571,7 +570,7 @@ extern "C" {
  *  Configures the clock source of LEDC.
  *  0 (default): XTAL_CLK
  *  1: RC_FAST_CLK
- *  2: PLL_F80M_CLK
+ *  2: PLL_F96M_CLK
  */
 #define PCR_LEDC_SCLK_SEL    0x00000003U
 #define PCR_LEDC_SCLK_SEL_M  (PCR_LEDC_SCLK_SEL_V << PCR_LEDC_SCLK_SEL_S)

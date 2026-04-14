@@ -18,12 +18,12 @@
 
     此外，{IDF_TARGET_NAME} 芯片还有一个满足低功耗需求的 LP UART 控制器。LP UART 是原 UART 的功能剪裁版本。它只支持基础 UART 功能，不支持 IrDA 或 RS485 协议，并且只有一块较小的 RAM 存储空间。想要全面了解的 UART 及 LP UART 功能区别，请参考 **{IDF_TARGET_NAME} 技术参考手册** > UART 控制器 (UART) > 主要特性 [`PDF <{IDF_TARGET_TRM_EN_URL}#uart>`__]。
 
-.. toctree::
-    :hidden:
-
-    uhci
-
 .. only:: SOC_UHCI_SUPPORTED
+
+    .. toctree::
+        :hidden:
+
+        uhci
 
     {IDF_TARGET_NAME} 芯片也支持 UART DMA 模式, 请参考 :doc:`uhci` 以获得更多信息.
 
@@ -106,6 +106,8 @@ UART 驱动程序函数通过 :cpp:type:`uart_port_t` 识别不同的 UART 控�
 .. only:: SOC_UART_SUPPORT_SLEEP_RETENTION
 
     此外，置位 :cpp:member:`uart_config_t::allow_pd` 会使能在进入睡眠模式前备份 UART 配置寄存器并在退出睡眠后恢复这些寄存器。这个功能使 UART 能够在系统唤醒后继续正常工作，即使其电源域在睡眠过程中被完全关闭。此选项需要用户在功耗和内存使用之间取得平衡。如果功耗不是一个问题，可以禁用这个选项来节省内存。
+
+如果 RX 信号可能出现抖动，可以设置 :cpp:member:`uart_config_t::rx_glitch_filt_thresh` 来过滤抖动以确保接收到正确的数据（注意：该功能在 ESP32 和 ESP32-S2 上不支持）。:cpp:member:`uart_config_t::rx_glitch_filt_thresh` 的单位是纳秒。默认值为 0，即表示不进行过滤。
 
 分步依次配置每个参数
 """""""""""""""""""""""""""""""
@@ -239,7 +241,7 @@ UART 控制器支持多种通信模式，使用函数 :cpp:func:`uart_set_mode` 
 使用中断
 ^^^^^^^^^^^^^^^^^
 
-根据特定的 UART 状态或检测到的错误，可以生成许多不同的中断。**{IDF_TARGET_NAME} 技术参考手册** > UART 控制器 (UART) > UART 中断 和 UHCI 中断 [`PDF <{IDF_TARGET_TRM_EN_URL}#uart>`__] 中提供了可用中断的完整列表。调用 :cpp:func:`uart_enable_intr_mask` 或 :cpp:func:`uart_disable_intr_mask` 能够分别启用或禁用特定中断。
+根据特定的 UART 状态或检测到的错误，可以生成许多不同的中断。**{IDF_TARGET_NAME} 技术参考手册** > UART 控制器 (UART) > UART 中断 [`PDF <{IDF_TARGET_TRM_EN_URL}#uart>`__] 中提供了可用中断的完整列表。调用 :cpp:func:`uart_enable_intr_mask` 或 :cpp:func:`uart_disable_intr_mask` 能够分别启用或禁用特定中断。
 
 UART 驱动提供了一种便利的方法来处理特定的中断，即将中断包装成相应的事件。这些事件定义在 :cpp:type:`uart_event_type_t` 中，FreeRTOS 队列功能可将这些事件报告给用户应用程序。
 
@@ -445,6 +447,6 @@ API 参考
 GPIO 查找宏指令
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-一些 UART 外设有供直接连接的专用 IO_MUX 管脚。这些管脚可用于需要极高 UART 波特率的场景，即仅可使用 IO_MUX 管脚。在其他情况下，任一 GPIO 管脚都可用于 UART 通信，只需将信号通过 GPIO 矩阵路由即可。当特定的 UART 外设有专用 IO_MUX 管脚时，:c:macro:`UART_NUM_x_TXD_DIRECT_GPIO_NUM` 和 :c:macro:`UART_NUM_x_RXD_DIRECT_GPIO_NUM` 可用于查找对应的 IO_MUX 管脚编号。
+一些 UART 外设有供直接连接的专用 IO_MUX 管脚。这些管脚可用于需要极高 UART 波特率的场景，即仅可使用 IO_MUX 管脚。在其他情况下，任一 GPIO 管脚都可用于 UART 通信，只需将信号通过 GPIO 矩阵路由即可。当特定的 UART 外设有专用 IO_MUX 管脚时，:c:macro:`UxTXD_GPIO_NUM` 和 :c:macro:`UxRXD_GPIO_NUM` 可用于查找对应的 IO_MUX 管脚编号。
 
-.. include-build-file:: inc/uart_channel.inc
+.. include-build-file:: inc/uart_pins.inc

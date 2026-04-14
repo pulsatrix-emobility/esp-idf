@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,12 +16,14 @@
 #include "riscv/interrupt.h"
 #include "esp_rom_serial_output.h"
 #include "soc/gpio_reg.h"
+#include "soc/soc_caps.h"
 #include "esp_cpu.h"
 #include "soc/rtc.h"
 #include "esp_private/rtc_clk.h"
-#include "soc/rtc_periph.h"
 #include "soc/uart_reg.h"
+#if SOC_WDT_SUPPORTED || SOC_RTC_WDT_SUPPORTED
 #include "hal/wdt_hal.h"
+#endif
 #include "hal/uart_ll.h"
 #include "hal/spimem_flash_ll.h"
 #include "hal/uart_ll.h"
@@ -49,6 +51,9 @@ void esp_system_reset_modules_on_exit(void)
     SET_PERI_REG_MASK(PCR_GDMA_CONF_REG, PCR_GDMA_RST_EN);
     SET_PERI_REG_MASK(PCR_MODEM_CONF_REG, PCR_MODEM_RST_EN);
     SET_PERI_REG_MASK(PCR_PWM_CONF_REG, PCR_PWM_RST_EN);
+    //ETM may directly control the GPIO or other peripherals even after CPU reset. Reset to stop these control.
+    SET_PERI_REG_MASK(PCR_ETM_CONF_REG, PCR_ETM_RST_EN);
+    SET_PERI_REG_MASK(PCR_REGDMA_CONF_REG, PCR_REGDMA_RST_EN);
 
     // Clear Peripheral clk rst
     CLEAR_PERI_REG_MASK(PCR_MSPI_CONF_REG, PCR_MSPI_RST_EN);
@@ -58,6 +63,8 @@ void esp_system_reset_modules_on_exit(void)
     CLEAR_PERI_REG_MASK(PCR_GDMA_CONF_REG, PCR_GDMA_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_MODEM_CONF_REG, PCR_MODEM_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_PWM_CONF_REG, PCR_PWM_RST_EN);
+    CLEAR_PERI_REG_MASK(PCR_ETM_CONF_REG, PCR_ETM_RST_EN);
+    CLEAR_PERI_REG_MASK(PCR_REGDMA_CONF_REG, PCR_REGDMA_RST_EN);
 
     // Reset crypto peripherals. This ensures a clean state for the crypto peripherals after a CPU restart
     // and hence avoiding any possibility with crypto failure in ROM security workflows.
@@ -89,6 +96,7 @@ void esp_restart_noos(void)
 {
     // Disable interrupts
     rv_utils_intr_global_disable();
+#if SOC_RTC_WDT_SUPPORTED
     // Enable RTC watchdog for 1 second
     wdt_hal_context_t rtc_wdt_ctx;
     wdt_hal_init(&rtc_wdt_ctx, WDT_RWDT, 0, false);
@@ -99,7 +107,9 @@ void esp_restart_noos(void)
     //Enable flash boot mode so that flash booting after restart is protected by the RTC WDT.
     wdt_hal_set_flashboot_en(&rtc_wdt_ctx, true);
     wdt_hal_write_protect_enable(&rtc_wdt_ctx);
+#endif /* SOC_RTC_WDT_SUPPORTED */
 
+#if SOC_WDT_SUPPORTED
     // Disable TG0/TG1 watchdogs
     wdt_hal_context_t wdt0_context = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
     wdt_hal_write_protect_disable(&wdt0_context);
@@ -110,6 +120,7 @@ void esp_restart_noos(void)
     wdt_hal_write_protect_disable(&wdt1_context);
     wdt_hal_disable(&wdt1_context);
     wdt_hal_write_protect_enable(&wdt1_context);
+#endif /* SOC_WDT_SUPPORTED */
 
     // Disable cache
     Cache_Disable_ICache();

@@ -37,6 +37,7 @@ const int s_test_map[TEST_GPIO_PIN_COUNT] = {
     GPIO_NUM_38,   //GPIO38
     GPIO_NUM_39,   //GPIO39
 };
+#define TEST_RTCIO_INTR_PIN_INDEX       5 // IO25
 #define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 5 // IO25
 #elif defined CONFIG_IDF_TARGET_ESP32S2
 // Has no input-only rtcio pins, all pins support pull-up/down
@@ -66,6 +67,7 @@ const int s_test_map[TEST_GPIO_PIN_COUNT] = {
     GPIO_NUM_20,   //GPIO20
     GPIO_NUM_21,   //GPIO21
 };
+#define TEST_RTCIO_INTR_PIN_INDEX       5 // IO6
 #define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 5 // IO6
 #elif defined CONFIG_IDF_TARGET_ESP32S3
 // Has no input-only rtcio pins, all pins support pull-up/down
@@ -95,8 +97,9 @@ const int s_test_map[TEST_GPIO_PIN_COUNT] = {
     GPIO_NUM_20,   //GPIO20
     GPIO_NUM_21,   //GPIO21
 };
+#define TEST_RTCIO_INTR_PIN_INDEX       5 // IO6
 #define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 5 // IO6
-#elif CONFIG_IDF_TARGET_ESP32C6
+#elif CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32S31
 // Has no input-only rtcio pins, all pins support pull-up/down
 #define RTCIO_SUPPORT_PU_PD(num)    1
 #define TEST_GPIO_PIN_COUNT 8
@@ -126,6 +129,19 @@ const int s_test_map[TEST_GPIO_PIN_COUNT] = {
 };
 #define TEST_RTCIO_INTR_PIN_INDEX       5 // IO12
 #define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 5 // IO12
+#elif CONFIG_IDF_TARGET_ESP32H21
+#define TEST_GPIO_PIN_COUNT 7
+const int s_test_map[TEST_GPIO_PIN_COUNT] = {
+    GPIO_NUM_5,     //GPIO5
+    GPIO_NUM_6,     //GPIO6
+    GPIO_NUM_7,     //GPIO7
+    GPIO_NUM_8,     //GPIO8
+    GPIO_NUM_9,     //GPIO9
+    GPIO_NUM_10,    //GPIO10
+    GPIO_NUM_11,    //GPIO11
+};
+#define TEST_RTCIO_INTR_PIN_INDEX       6 // IO11
+#define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 6 // IO11
 #elif CONFIG_IDF_TARGET_ESP32P4
 // Has no input-only rtcio pins, all pins support pull-up/down
 #define RTCIO_SUPPORT_PU_PD(num)    1
@@ -149,6 +165,7 @@ const int s_test_map[TEST_GPIO_PIN_COUNT] = {
     GPIO_NUM_15,   //GPIO15
 };
 #define TEST_RTCIO_INTR_PIN_INDEX       2 // IO2
+#define TEST_RTCIO_DEEP_SLEEP_PIN_INDEX 5 // IO5
 #elif CONFIG_IDF_TARGET_ESP32C61 || CONFIG_IDF_TARGET_ESP32C5
 // Has no input-only rtcio pins, all pins support pull-up/down
 #define RTCIO_SUPPORT_PU_PD(num)    1

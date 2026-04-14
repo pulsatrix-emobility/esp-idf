@@ -8,9 +8,9 @@
 #include "esp32c6/rom/ets_sys.h"
 #include "soc/rtc.h"
 #include "soc/pcr_reg.h"
-#include "hal/lp_timer_hal.h"
+#include "hal/rtc_timer_hal.h"
 #include "hal/clk_tree_ll.h"
-#include "hal/timer_ll.h"
+#include "hal/timg_ll.h"
 #include "soc/timer_group_reg.h"
 #include "esp_rom_sys.h"
 #include "assert.h"
@@ -18,7 +18,7 @@
 #include "soc/chip_revision.h"
 #include "esp_private/periph_ctrl.h"
 
-__attribute__((unused)) static const char *TAG = "rtc_time";
+ESP_LOG_ATTR_TAG(TAG, "rtc_time");
 
 /**
  * @brief Clock frequency calculation function used by rtc_clk_cal
@@ -231,7 +231,7 @@ uint64_t rtc_time_slowclk_to_us(uint64_t rtc_cycles, uint32_t period)
 
 uint64_t rtc_time_get(void)
 {
-    return lp_timer_hal_get_cycle_count();
+    return rtc_timer_hal_get_cycle_count(0);
 }
 
 uint32_t rtc_clk_freq_cal(uint32_t cal_val)
@@ -251,12 +251,12 @@ static void enable_timer_group0_for_calibration(void)
 #ifndef BOOTLOADER_BUILD
     PERIPH_RCC_ACQUIRE_ATOMIC(PERIPH_TIMG0_MODULE, ref_count) {
         if (ref_count == 0) {
-            timer_ll_enable_bus_clock(0, true);
-            timer_ll_reset_register(0);
+            timg_ll_enable_bus_clock(0, true);
+            timg_ll_reset_register(0);
         }
     }
 #else
-    _timer_ll_enable_bus_clock(0, true);
-    _timer_ll_reset_register(0);
+    _timg_ll_enable_bus_clock(0, true);
+    _timg_ll_reset_register(0);
 #endif
 }

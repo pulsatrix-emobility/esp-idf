@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -42,7 +42,7 @@ typedef enum {
     HTTP_EVENT_ON_HEADERS_COMPLETE, /*!< Occurs when all headers are received on the client side */
     HTTP_EVENT_ON_STATUS_CODE,  /*!< Occurs when receiving the HTTP status code from the server */
     HTTP_EVENT_ON_DATA,         /*!< Occurs when receiving data from the server, possibly multiple portions of the packet */
-    HTTP_EVENT_ON_FINISH,       /*!< Occurs when finish a HTTP session */
+    HTTP_EVENT_ON_FINISH,       /*!< Occurs when complete data is received */
     HTTP_EVENT_DISCONNECTED,    /*!< The connection has been disconnected */
     HTTP_EVENT_REDIRECT,        /*!< Intercepting HTTP redirects to handle them manually */
 } esp_http_client_event_id_t;
@@ -344,6 +344,33 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
 esp_err_t esp_http_client_perform(esp_http_client_handle_t client);
 
 /**
+ * @brief      Prepare HTTP client for a new request
+ *             This function initializes the client state and prepares authentication if needed.
+ *             It should be called before sending a request.
+ *
+ * @param[in]  client  The esp_http_client handle
+ *
+ * @return
+ *  - ESP_OK on successful
+ *  - ESP_FAIL on error
+ */
+esp_err_t esp_http_client_prepare(esp_http_client_handle_t client);
+
+/**
+ * @brief      Send HTTP request headers and data
+ *             This function sends the HTTP request line, headers, and any post data to the server.
+ *
+ * @param[in]  client     The esp_http_client handle
+ * @param[in]  write_len  Length of data to write (for POST/PUT requests)
+ *
+ * @return
+ *  - ESP_OK on successful
+ *  - ESP_FAIL on error
+ *  - ESP_ERR_HTTP_WRITE_DATA if write operation fails
+ */
+esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len);
+
+/**
  * @brief       Cancel an ongoing HTTP request. This API closes the current socket and opens a new socket with the same esp_http_client context.
  *
  * @param       client  The esp_http_client handle
@@ -369,7 +396,8 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
 
 /**
  * @brief      Set post data, this function must be called before `esp_http_client_perform`.
- *             Note: The data parameter passed to this function is a pointer and this function will not copy the data
+ *             Note: Post data persists between requests and must be cleared manually.
+ *             To avoid post data carryover, set the post data to NULL before starting any subsequent requests.
  *
  * @param[in]  client  The esp_http_client handle
  * @param[in]  data    post data pointer
@@ -416,10 +444,36 @@ esp_err_t esp_http_client_set_header(esp_http_client_handle_t client, const char
  * @param[out] value   The header value
  *
  * @return
- *     - ESP_OK
- *     - ESP_FAIL
+ *     - ESP_OK: Header found
+ *     - ESP_ERR_INVALID_ARG: Invalid arguments
+ *     - ESP_ERR_NOT_FOUND: Header not found
  */
 esp_err_t esp_http_client_get_header(esp_http_client_handle_t client, const char *key, char **value);
+
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS || __DOXYGEN__
+/**
+ * @brief Get a response header value by key
+ *        The value parameter will be set to NULL if there is no header which is same as
+ *        the key specified, otherwise the address of header value will be assigned to value parameter.
+ *        This function must be called after `esp_http_client_init`.
+ *
+ * @note Limitations:
+ *       - Only first CONFIG_ESP_HTTP_CLIENT_MAX_SAVED_RESPONSE_HEADERS (default: 10) headers are saved
+ *       - Headers exceeding CONFIG_ESP_HTTP_CLIENT_MAX_RESPONSE_HEADER_SIZE (default: 128) bytes are discarded
+ *       - Multi-value headers (e.g., Set-Cookie) only retain the last value
+ *       - Headers are case-insensitive for lookup but case-preserving for storage
+ *
+ * @param[in]  client  The esp_http_client handle
+ * @param[in]  key     The header key
+ * @param[out] value   Pointer to store the header value. This pointer should not be freed by the user.
+ *
+ * @return
+ *     - ESP_OK: Header found
+ *     - ESP_ERR_INVALID_ARG: Invalid arguments
+ *     - ESP_ERR_NOT_FOUND: Header not found
+ */
+esp_err_t esp_http_client_get_response_header(esp_http_client_handle_t client, const char *key, char **value);
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS || __DOXYGEN__
 
 /**
  * @brief      Get http request username.
@@ -705,6 +759,19 @@ int64_t esp_http_client_get_content_range(esp_http_client_handle_t client);
 esp_err_t esp_http_client_close(esp_http_client_handle_t client);
 
 /**
+ * @brief      Clear cached response buffer (e.g. data received during fetch headers).
+ *             Use this when reusing the same client handle for a new request after
+ *             closing the connection, so the next request does not see stale data.
+ *
+ * @param[in]  client  The esp_http_client handle
+ *
+ * @return
+ *     - ESP_OK
+ *     - ESP_ERR_INVALID_ARG if client is NULL
+ */
+esp_err_t esp_http_client_clear_response_buffer(esp_http_client_handle_t client);
+
+/**
  * @brief      This function must be the last function to call for an session.
  *             It is the opposite of the esp_http_client_init function and must be called with the same handle as input that a esp_http_client_init call returned.
  *             This might close all connections this handle has used and possibly has kept open until now.
@@ -864,6 +931,26 @@ esp_err_t esp_http_client_get_chunk_length(esp_http_client_handle_t client, int 
  * @return     Current state of the HTTP client
  */
 esp_http_state_t esp_http_client_get_state(esp_http_client_handle_t client);
+
+/**
+ * @brief      Check if persistent connection is supported by the server
+ *
+ * @param[in]  client  The HTTP client handle
+ *
+ * @return     true if persistent connection is supported, false otherwise
+ */
+bool esp_http_client_is_persistent_connection(esp_http_client_handle_t client);
+
+/**
+ * @brief       Get the socket from the underlying transport
+ *
+ * @param client The HTTP client handle
+ *
+ * @return
+ *     - -1 if the client is NULL or the transport is not initialized
+ *     - The socket file descriptor if successful
+ */
+int esp_http_client_get_socket(esp_http_client_handle_t client);
 
 #ifdef __cplusplus
 }

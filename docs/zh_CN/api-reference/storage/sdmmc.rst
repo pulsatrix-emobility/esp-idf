@@ -56,6 +56,19 @@ SD/SDIO/MMC 驱动支持 SD 存储器、SDIO 卡和 eMMC 芯片。这是一个�
 
     - 如果不再使用该卡，请调用主机驱动函数，例如 ``sdmmc_host_deinit`` 或 ``sdspi_host_deinit``，以禁用SDMMC 主机外设或 SDSPI 主机外设，并释放驱动程序分配的资源。
 
+未对齐 buffer 性能
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+当传递给 :cpp:func:`sdmmc_read_sectors` 或 :cpp:func:`sdmmc_write_sectors` 的 buffer 不支持 DMA（例如，分配在 PSRAM 中）时，驱动会通过一个临时的支持 DMA 的 buffer 来复制数据。默认情况下，该操作会使用单块传输命令一次传输一个块。
+
+若要在此场景下提升吞吐量，可将 :cpp:member:`sdmmc_host_t::unaligned_multi_block_rw_max_chunk_size` 字段设置为大于 1 的值。驱动将启用多块传输命令 (CMD18/CMD25)，从而显著降低传输开销，但堆内存占用会相应增加（buffer 大小 = N × 块大小，其中 N 为配置值，块大小通常为 512 字节）。当该字段为 0（默认值）时，驱动回退至单块传输模式（等效于 1）。建议将大于 1 的配置值设置为块大小的整数倍（如 2、4、8、16 或 32）以获得最佳性能。
+
+.. note::
+
+    如果你的 SD 卡或配置不支持多块读写命令（CMD18 和 CMD25），请将该选项值保持为 0 或 1。
+
+或者，可以通过 :cpp:member:`sdmmc_host_t::dma_aligned_buffer` 字段提供一个预先分配的、支持 DMA 的 buffer。这样可以避免每次传输时都分配堆内存，驱动也能在多次传输间复用该 buffer。该 buffer 的大小必须至少为一个扇区（通常为 512 字节），理想情况下应为扇区大小的整数倍。
+
 .. only:: not SOC_SDMMC_HOST_SUPPORTED
 
     eMMC 芯片支持
@@ -129,5 +142,7 @@ API 参考
 -------------
 
 .. include-build-file:: inc/sdmmc_cmd.inc
+
+.. include-build-file:: inc/sd_protocol_types.inc
 
 .. include-build-file:: inc/sdmmc_types.inc

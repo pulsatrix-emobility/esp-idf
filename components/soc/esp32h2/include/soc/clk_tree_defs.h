@@ -1,7 +1,7 @@
 /*
  * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 #pragma once
 
@@ -152,6 +152,7 @@ typedef enum {
     SOC_MOD_CLK_RTC_FAST,                      /*!< RTC_FAST_CLK can be sourced from XTAL_D2, RC_FAST, or LP_PLL by configuring soc_rtc_fast_clk_src_t */
     SOC_MOD_CLK_RTC_SLOW,                      /*!< RTC_SLOW_CLK can be sourced from RC_SLOW, XTAL32K, OSC_SLOW, or RC32K by configuring soc_rtc_slow_clk_src_t */
     // For digital domain: peripherals, WIFI, BLE
+    SOC_MOD_CLK_APB,                           /*!< APB_CLK is highly dependent on the CPU_CLK source */
     SOC_MOD_CLK_PLL_F48M,                      /*!< PLL_F48M_CLK is derived from PLL (clock gating + fixed divider of 2), it has a fixed frequency of 48MHz */
     SOC_MOD_CLK_PLL_F64M,                      /*!< PLL_F64M_CLK is derived from FLASH_PLL (clock gating), it has a fixed frequency of 64MHz */
     SOC_MOD_CLK_PLL_F96M,                      /*!< PLL_F96M_CLK is derived from PLL (clock gating), it has a fixed frequency of 96MHz */
@@ -198,6 +199,13 @@ typedef enum {
     GPTIMER_CLK_SRC_DEFAULT = SOC_MOD_CLK_PLL_F48M,  /*!< Select PLL_F48M as the default choice */
 } soc_periph_gptimer_clk_src_t;
 
+//////////////////////////////////////////////////ETM///////////////////////////////////////////////////////////////////
+
+/**
+ * @brief Type of ETM clock source
+ */
+typedef int soc_periph_etm_clk_src_t;
+
 //////////////////////////////////////////////////RMT///////////////////////////////////////////////////////////////////
 
 /**
@@ -214,13 +222,20 @@ typedef enum {
     RMT_CLK_SRC_DEFAULT = SOC_MOD_CLK_XTAL,    /*!< Select XTAL as the default choice */
 } soc_periph_rmt_clk_src_t;
 
+//////////////////////////////////////////////////PCNT//////////////////////////////////////////////////////////////////
+
 /**
- * @brief Type of RMT clock source, reserved for the legacy RMT driver
+ * @brief Array initializer for all supported clock sources of PCNT
+ */
+#define SOC_PCNT_CLKS {SOC_MOD_CLK_APB}
+
+/**
+ * @brief Type of PCNT clock source
  */
 typedef enum {
-    RMT_BASECLK_XTAL = SOC_MOD_CLK_XTAL,    /*!< RMT source clock is XTAL */
-    RMT_BASECLK_DEFAULT = SOC_MOD_CLK_XTAL, /*!< RMT source clock default choice is XTAL */
-} soc_periph_rmt_clk_src_legacy_t;
+    PCNT_CLK_SRC_APB = SOC_MOD_CLK_APB,           /*!< Select APB as the source clock */
+    PCNT_CLK_SRC_DEFAULT = SOC_MOD_CLK_APB,       /*!< Select APB as the default choice */
+} soc_periph_pcnt_clk_src_t;
 
 //////////////////////////////////////////////////Temp Sensor///////////////////////////////////////////////////////////
 
@@ -374,7 +389,7 @@ typedef enum {
 #define SOC_ANA_CMPR_CLKS {SOC_MOD_CLK_PLL_F48M, SOC_MOD_CLK_XTAL}
 
 /**
- * @brief Sigma Delta Modulator clock source
+ * @brief Analog Comparator clock source
  */
 typedef enum {
     ANA_CMPR_CLK_SRC_XTAL = SOC_MOD_CLK_XTAL,                   /*!< Select XTAL clock as the source clock */
@@ -454,6 +469,7 @@ typedef enum {
  * @brief Array initializer for all supported clock sources of LEDC
  */
 #define SOC_LEDC_CLKS {SOC_MOD_CLK_XTAL, SOC_MOD_CLK_PLL_F96M, SOC_MOD_CLK_RC_FAST}
+#define SOC_LEDC_CLK_STRS {"LEDC_USE_XTAL_CLK", "LEDC_USE_PLL_DIV_CLK", "LEDC_USE_RC_FAST_CLK"}
 
 /**
  * @brief Type of LEDC clock source, reserved for the legacy LEDC driver

@@ -32,12 +32,11 @@ static bool rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_event_data_t 
 static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t *tx_channel, const rmt_tx_channel_config_t *config)
 {
     gdma_channel_alloc_config_t dma_chan_config = {
-        .direction = GDMA_CHANNEL_DIRECTION_TX,
 #if CONFIG_RMT_TX_ISR_CACHE_SAFE
         .flags.isr_cache_safe = true,
 #endif
     };
-    ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_chan_config, &tx_channel->base.dma_chan), TAG, "allocate TX DMA channel failed");
+    ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_chan_config, &tx_channel->base.dma_chan, NULL), TAG, "allocate TX DMA channel failed");
     gdma_strategy_config_t gdma_strategy_conf = {
         .auto_update_desc = true,
         .owner_check = true,
@@ -86,7 +85,6 @@ static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t *tx_channel, const rmt_tx
 
     // create DMA link list
     gdma_link_list_config_t dma_link_config = {
-        .buffer_alignment = int_alignment,
         .item_alignment = RMT_DMA_DESC_ALIGN,
         .num_items = RMT_DMA_NODES_PING_PONG,
         .flags = {
@@ -100,12 +98,13 @@ static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t *tx_channel, const rmt_tx
         // each descriptor shares half of the DMA buffer
         mount_configs[i] = (gdma_buffer_mount_config_t) {
             .buffer = tx_channel->dma_mem_base + tx_channel->ping_pong_symbols * i,
+            .buffer_alignment = int_alignment,
             .length = tx_channel->ping_pong_symbols * sizeof(rmt_symbol_word_t),
             .flags = {
                 // each node can generate the DMA eof interrupt, and the driver will do a ping-pong trick in the eof callback
                 .mark_eof = true,
                 // chain the descriptors into a ring, and will break it in `rmt_encode_eof()`
-                .mark_final = false,
+                .mark_final = GDMA_FINAL_LINK_TO_DEFAULT,
             }
         };
     }
@@ -121,12 +120,12 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t *tx_channel, const rm
     // start to search for a free channel
     // a channel can take up its neighbour's memory block, so the neighbour channel won't work, we should skip these "invaded" ones
     int channel_scan_start = RMT_TX_CHANNEL_OFFSET_IN_GROUP;
-    int channel_scan_end = RMT_TX_CHANNEL_OFFSET_IN_GROUP + SOC_RMT_TX_CANDIDATES_PER_GROUP;
+    int channel_scan_end = RMT_TX_CHANNEL_OFFSET_IN_GROUP + RMT_LL_GET(TX_CANDIDATES_PER_INST);
     if (config->flags.with_dma) {
         // for DMA mode, the memory block number is always 1; for non-DMA mode, memory block number is configured by user
         mem_block_num = 1;
         // Only the last channel has the DMA capability
-        channel_scan_start = RMT_TX_CHANNEL_OFFSET_IN_GROUP + SOC_RMT_TX_CANDIDATES_PER_GROUP - 1;
+        channel_scan_start = RMT_TX_CHANNEL_OFFSET_IN_GROUP + RMT_LL_GET(TX_CANDIDATES_PER_INST) - 1;
     } else {
         // one channel can occupy multiple memory blocks
         mem_block_num = config->mem_block_symbols / SOC_RMT_MEM_WORDS_PER_CHANNEL;
@@ -142,7 +141,7 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t *tx_channel, const rm
     uint32_t channel_mask = (1 << mem_block_num) - 1;
     rmt_group_t *group = NULL;
     int channel_id = -1;
-    for (int i = 0; i < SOC_RMT_GROUPS; i++) {
+    for (int i = 0; i < RMT_LL_GET(INST_NUM); i++) {
         group = rmt_acquire_group_handle(i);
         ESP_RETURN_ON_FALSE(group, ESP_ERR_NO_MEM, TAG, "no mem for group (%d)", i);
         portENTER_CRITICAL(&group->spinlock);
@@ -276,9 +275,8 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     ESP_RETURN_ON_FALSE(config->flags.allow_pd == 0, ESP_ERR_NOT_SUPPORTED, TAG, "not able to power down in light sleep");
 #endif // SOC_RMT_SUPPORT_SLEEP_RETENTION
 
-    // malloc channel memory
-    uint32_t mem_caps = RMT_MEM_ALLOC_CAPS;
-    tx_channel = heap_caps_calloc(1, sizeof(rmt_tx_channel_t) + sizeof(rmt_tx_trans_desc_t) * config->trans_queue_depth, mem_caps);
+    // allocate channel memory from internal memory because it contains atomic variable
+    tx_channel = heap_caps_calloc(1, sizeof(rmt_tx_channel_t) + sizeof(rmt_tx_trans_desc_t) * config->trans_queue_depth, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_GOTO_ON_FALSE(tx_channel, ESP_ERR_NO_MEM, err, TAG, "no mem for tx channel");
     // GPIO configuration is not done yet
     tx_channel->base.gpio_num = -1;
@@ -302,18 +300,18 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     rmt_hal_tx_channel_reset(&group->hal, channel_id);
     portEXIT_CRITICAL(&group->spinlock);
     // install tx interrupt
-    // --- install interrupt service
     // interrupt is mandatory to run basic RMT transactions, so it's not lazy installed in `rmt_tx_register_event_callbacks()`
-    // 1-- Set user specified priority to `group->intr_priority`
-    bool priority_conflict = rmt_set_intr_priority_to_group(group, config->intr_priority);
-    ESP_GOTO_ON_FALSE(!priority_conflict, ESP_ERR_INVALID_ARG, err, TAG, "intr_priority conflict");
-    // 2-- Get interrupt allocation flag
-    int isr_flags = rmt_isr_priority_to_flags(group) | RMT_TX_INTR_ALLOC_FLAG;
-    // 3-- Allocate interrupt using isr_flag
-    ret = esp_intr_alloc_intrstatus(rmt_periph_signals.groups[group_id].irq, isr_flags,
-                                    (uint32_t) rmt_ll_get_interrupt_status_reg(hal->regs),
-                                    RMT_LL_EVENT_TX_MASK(channel_id), rmt_tx_default_isr, tx_channel,
-                                    &tx_channel->base.intr);
+    int isr_flags = (config->intr_priority ? (1 << config->intr_priority) : RMT_ALLOW_INTR_PRIORITY_MASK) | RMT_TX_INTR_ALLOC_FLAG;
+    esp_intr_alloc_info_t intr_info = {
+        .source = soc_rmt_signals[group_id].irq,
+        .flags = isr_flags,
+        .intrstatusreg = (uint32_t)rmt_ll_get_interrupt_status_reg(hal->regs),
+        .intrstatusmask = RMT_LL_EVENT_TX_MASK(channel_id),
+        .handler = rmt_tx_default_isr,
+        .arg = tx_channel,
+        .bind_by.name = soc_rmt_signals[group_id].module_name,
+    };
+    ret = esp_intr_alloc_info(&intr_info, &tx_channel->base.intr);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "install tx interrupt failed");
     // install DMA service
 #if SOC_RMT_SUPPORT_DMA
@@ -345,7 +343,7 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     gpio_func_sel(config->gpio_num, PIN_FUNC_GPIO);
     // connect the signal to the GPIO by matrix, it will also enable the output path properly
     esp_rom_gpio_connect_out_signal(config->gpio_num,
-                                    rmt_periph_signals.groups[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
+                                    soc_rmt_signals[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
                                     config->flags.invert_out, false);
     tx_channel->base.gpio_num = config->gpio_num;
 
@@ -387,7 +385,7 @@ static esp_err_t rmt_del_tx_channel(rmt_channel_handle_t channel)
 
 esp_err_t rmt_new_sync_manager(const rmt_sync_manager_config_t *config, rmt_sync_manager_handle_t *ret_synchro)
 {
-#if !SOC_RMT_SUPPORT_TX_SYNCHRO
+#if !RMT_LL_SUPPORT(TX_SYNCHRO)
     ESP_RETURN_ON_FALSE(false, ESP_ERR_NOT_SUPPORTED, TAG, "sync manager not supported");
 #else
     esp_err_t ret = ESP_OK;
@@ -451,12 +449,12 @@ err:
         free(synchro);
     }
     return ret;
-#endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
+#endif // !RMT_LL_SUPPORT(TX_SYNCHRO)
 }
 
 esp_err_t rmt_sync_reset(rmt_sync_manager_handle_t synchro)
 {
-#if !SOC_RMT_SUPPORT_TX_SYNCHRO
+#if !RMT_LL_SUPPORT(TX_SYNCHRO)
     ESP_RETURN_ON_FALSE(false, ESP_ERR_NOT_SUPPORTED, TAG, "sync manager not supported");
 #else
     ESP_RETURN_ON_FALSE(synchro, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
@@ -470,12 +468,12 @@ esp_err_t rmt_sync_reset(rmt_sync_manager_handle_t synchro)
     portEXIT_CRITICAL(&group->spinlock);
 
     return ESP_OK;
-#endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
+#endif // !RMT_LL_SUPPORT(TX_SYNCHRO)
 }
 
 esp_err_t rmt_del_sync_manager(rmt_sync_manager_handle_t synchro)
 {
-#if !SOC_RMT_SUPPORT_TX_SYNCHRO
+#if !RMT_LL_SUPPORT(TX_SYNCHRO)
     ESP_RETURN_ON_FALSE(false, ESP_ERR_NOT_SUPPORTED, TAG, "sync manager not supported");
 #else
     ESP_RETURN_ON_FALSE(synchro, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
@@ -493,7 +491,7 @@ esp_err_t rmt_del_sync_manager(rmt_sync_manager_handle_t synchro)
     ESP_LOGD(TAG, "del sync manager in group(%d)", group_id);
     rmt_release_group_handle(group);
     return ESP_OK;
-#endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
+#endif // !RMT_LL_SUPPORT(TX_SYNCHRO)
 }
 
 esp_err_t rmt_tx_register_event_callbacks(rmt_channel_handle_t channel, const rmt_tx_event_callbacks_t *cbs, void *user_data)
@@ -824,17 +822,17 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel)
         // disable the hardware
         portENTER_CRITICAL(&channel->spinlock);
         rmt_ll_tx_enable_loop(hal->regs, channel->channel_id, false);
-#if SOC_RMT_SUPPORT_ASYNC_STOP
+#if RMT_LL_SUPPORT(ASYNC_STOP)
         rmt_ll_tx_stop(hal->regs, channel->channel_id);
 #endif
         portEXIT_CRITICAL(&channel->spinlock);
 
         portENTER_CRITICAL(&group->spinlock);
         rmt_ll_enable_interrupt(hal->regs, RMT_LL_EVENT_TX_MASK(channel_id), false);
-#if !SOC_RMT_SUPPORT_ASYNC_STOP
+#if !RMT_LL_SUPPORT(ASYNC_STOP)
         // we do a trick to stop the undergoing transmission
         // stop interrupt, insert EOF marker to the RMT memory, polling the trans_done event
-        channel->hw_mem_base[0].val = 0;
+        memset(channel->hw_mem_base, 0, channel->mem_block_num * SOC_RMT_MEM_WORDS_PER_CHANNEL * sizeof(rmt_symbol_word_t));
         while (!(rmt_ll_tx_get_interrupt_status_raw(hal->regs, channel_id) & RMT_LL_EVENT_TX_DONE(channel_id))) {}
 #endif
         rmt_ll_clear_interrupt_status(hal->regs, RMT_LL_EVENT_TX_MASK(channel_id));
@@ -891,9 +889,7 @@ static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, const rmt
         portENTER_CRITICAL(&channel->spinlock);
         rmt_ll_tx_set_carrier_level(hal->regs, channel_id, !config->flags.polarity_active_low);
         rmt_ll_tx_set_carrier_high_low_ticks(hal->regs, channel_id, high_ticks, low_ticks);
-#if SOC_RMT_SUPPORT_TX_CARRIER_DATA_ONLY
         rmt_ll_tx_enable_carrier_always_on(hal->regs, channel_id, config->flags.always_on);
-#endif
         portEXIT_CRITICAL(&channel->spinlock);
         // save real carrier frequency
         real_frequency = group->resolution_hz / total_ticks;
@@ -1157,7 +1153,7 @@ esp_err_t rmt_tx_switch_gpio(rmt_channel_handle_t channel, gpio_num_t gpio_num, 
         // Configure the new GPIO
         gpio_func_sel(gpio_num, PIN_FUNC_GPIO);
         esp_rom_gpio_connect_out_signal(gpio_num,
-                                        rmt_periph_signals.groups[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
+                                        soc_rmt_signals[group_id].channels[channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP].tx_sig,
                                         invert_out, false);
         tx_chan->base.gpio_num = gpio_num;
 

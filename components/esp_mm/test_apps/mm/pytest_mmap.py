@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: CC0-1.0
 import pytest
 from pytest_embedded import Dut
@@ -29,9 +29,11 @@ def test_mmap(dut: Dut) -> None:
         ('psram_release_esp32s2', 'esp32s2'),
         ('psram_release_esp32s3', 'esp32s3'),
         ('psram_release_esp32p4', 'esp32p4'),
+        ('psram_release_esp32s31', 'esp32s31'),
     ],
     indirect=['config', 'target'],
 )
+@pytest.mark.temp_skip_ci(targets=['esp32p4'], reason='p4 rev3 migration')
 def test_mmap_psram(dut: Dut) -> None:
     dut.run_all_single_board_cases(group='mmu')
 
@@ -39,7 +41,14 @@ def test_mmap_psram(dut: Dut) -> None:
 # mmu tests with xip_psram
 @pytest.mark.generic
 @idf_parametrize(
-    'config,target', [('xip_psram_esp32s2', 'esp32s2'), ('xip_psram_esp32s3', 'esp32s3')], indirect=['config', 'target']
+    'config,target',
+    [
+        ('xip_psram_esp32s2', 'esp32s2'),
+        ('xip_psram_esp32s3', 'esp32s3'),
+        ('xip_psram_esp32p4', 'esp32p4'),
+        ('xip_psram_esp32s31', 'esp32s31'),
+    ],
+    indirect=['config', 'target'],
 )
 def test_mmap_xip_psram(dut: Dut) -> None:
     dut.run_all_single_board_cases(group='mmu')
@@ -68,6 +77,7 @@ def test_cache(dut: Dut) -> None:
         ('psram_release_esp32s2', 'esp32s2'),
         ('psram_release_esp32s3', 'esp32s3'),
         ('psram_release_esp32p4', 'esp32p4'),
+        ('psram_release_esp32s31', 'esp32s31'),
     ],
     indirect=['config', 'target'],
 )
@@ -78,7 +88,14 @@ def test_cache_psram(dut: Dut) -> None:
 # cache tests with xip_psram
 @pytest.mark.generic
 @idf_parametrize(
-    'config,target', [('xip_psram_esp32s2', 'esp32s2'), ('xip_psram_esp32s3', 'esp32s3')], indirect=['config', 'target']
+    'config,target',
+    [
+        ('xip_psram_esp32s2', 'esp32s2'),
+        ('xip_psram_esp32s3', 'esp32s3'),
+        ('xip_psram_esp32p4', 'esp32p4'),
+        ('xip_psram_esp32s31', 'esp32s31'),
+    ],
+    indirect=['config', 'target'],
 )
 def test_cache_xip_psram(dut: Dut) -> None:
     dut.run_all_single_board_cases(group='cache')

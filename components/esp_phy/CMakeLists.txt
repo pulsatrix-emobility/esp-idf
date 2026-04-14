@@ -10,6 +10,8 @@ if(IDF_TARGET STREQUAL "esp32p4")
     return()
 endif()
 
+set(embed_files)
+
 if(CONFIG_ESP_PHY_ENABLED)
 
     set(srcs "src/phy_override.c" "src/lib_printf.c" "src/phy_common.c")
@@ -20,6 +22,9 @@ if(CONFIG_ESP_PHY_ENABLED)
     else()
         set(link_binary_libs 1)
         set(ldfragments "linker.lf")
+        if(CONFIG_ESP_PHY_INIT_IRAM)
+            list(APPEND ldfragments "linker_esp32hxx.lf")
+        endif()
     endif()
 
     if(CONFIG_SOC_IEEE802154_BLE_ONLY)
@@ -55,7 +60,8 @@ endif()
 
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS "include" "${idf_target}/include"
-                    PRIV_REQUIRES nvs_flash esp_driver_gpio efuse esp_timer esp_wifi esptool_py
+                    # 'esp_hal_ana_conv' is required by 'phy_common.c' for the temperature sensor hal
+                    PRIV_REQUIRES nvs_flash esp_driver_gpio esp_hal_ana_conv efuse esp_timer esp_wifi esptool_py
                     LDFRAGMENTS "${ldfragments}"
                     EMBED_FILES  ${embed_files}
                     )
@@ -137,14 +143,15 @@ if(CONFIG_ESP_PHY_ENABLED)
             list(APPEND libs_to_link esp_phy_libphy)
         endif()
 
-        # Finally, link the libraries to the component
-        target_link_libraries(${COMPONENT_LIB} INTERFACE ${libs_to_link})
+        # Finally, link the libraries to the component.
+        # PUBLIC is required for linker.lf fragment mappings (e.g. IRAM placement) to work.
+        target_link_libraries(${COMPONENT_LIB} PUBLIC ${libs_to_link})
     endif()
 
    if(CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION)
         idf_component_get_property(esp_common_dir esp_common COMPONENT_DIR)
         idf_component_get_property(esp_rom_dir esp_rom COMPONENT_DIR)
-        idf_component_get_property(newlib_dir newlib COMPONENT_DIR)
+        idf_component_get_property(esp_libc_dir esp_libc COMPONENT_DIR)
         idf_component_get_property(soc_dir soc COMPONENT_DIR)
         idf_component_get_property(log_dir log COMPONENT_DIR)
         partition_table_get_partition_info(phy_partition_offset
@@ -162,10 +169,10 @@ if(CONFIG_ESP_PHY_ENABLED)
             add_custom_command(
                 OUTPUT ${phy_init_data_bin}
                 DEPENDS ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/phy_init_data.c
-                COMMAND ${CMAKE_C_COMPILER} -c ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/phy_init_data.c
+                COMMAND ${CMAKE_C_COMPILER} ${CMAKE_C_FLAGS} -c ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/phy_init_data.c
                 -I ${esp_common_dir}/include -I ${CMAKE_CURRENT_LIST_DIR}/include
                 -I ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/include -I ${esp_rom_dir}/include
-                -I ${soc_dir}/${idf_target}/include -I ${newlib_dir}/platform_include
+                -I ${soc_dir}/${idf_target}/include -I ${esp_libc_dir}/platform_include
                 -I ${log_dir}/include -I ${config_dir} -o phy_init_data.obj
                 COMMAND ${CMAKE_OBJCOPY} -O binary phy_init_data.obj ${phy_init_data_bin}
                 )

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,7 +21,9 @@
 #include "soc/soc.h"
 #include "soc/rtc.h"
 #include "soc/rtc_periph.h"
+#if SOC_WDT_SUPPORTED || SOC_RTC_WDT_SUPPORTED
 #include "hal/wdt_hal.h"
+#endif
 #include "esp_private/periph_ctrl.h"
 #include "bootloader_clock.h"
 #include "soc/syscon_reg.h"
@@ -53,7 +55,7 @@ typedef enum {
 static void select_rtc_slow_clk(slow_clk_sel_t slow_clk);
 static __attribute__((unused)) void recalib_bbpll(void);
 
-static const char *TAG = "clk";
+ESP_LOG_ATTR_TAG(TAG, "clk");
 
 void esp_rtc_init(void)
 {
@@ -86,7 +88,7 @@ __attribute__((weak)) void esp_clk_init(void)
     rtc_clk_fast_src_set(SOC_RTC_FAST_CLK_SRC_RC_FAST);
 #endif
 
-#ifdef CONFIG_BOOTLOADER_WDT_ENABLE
+#if defined(CONFIG_BOOTLOADER_WDT_ENABLE) && SOC_RTC_WDT_SUPPORTED
     // WDT uses a SLOW_CLK clock source. After a function select_rtc_slow_clk a frequency of this source can changed.
     // If the frequency changes from 150kHz to 32kHz, then the timeout set for the WDT will increase 4.6 times.
     // Therefore, for the time of frequency change, set a new lower timeout value (1.6 sec on 40MHz XTAL and 2.5 sec on 26MHz XTAL).
@@ -114,7 +116,7 @@ __attribute__((weak)) void esp_clk_init(void)
     select_rtc_slow_clk(SLOW_CLK_RTC);
 #endif
 
-#ifdef CONFIG_BOOTLOADER_WDT_ENABLE
+#if defined(CONFIG_BOOTLOADER_WDT_ENABLE) && SOC_RTC_WDT_SUPPORTED
     // After changing a frequency WDT timeout needs to be set for new frequency.
     stage_timeout_ticks = (uint32_t)((uint64_t)CONFIG_BOOTLOADER_WDT_TIME_MS * rtc_clk_slow_freq_get_hz() / 1000);
     wdt_hal_write_protect_disable(&rtc_wdt_ctx);
@@ -154,7 +156,9 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
      */
     int retry_ext_clk = 3;
 
+    soc_rtc_slow_clk_src_t old_rtc_slow_clk_src = rtc_clk_slow_src_get();
     do {
+        bool revoke_32k_enable = false;
         if (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) {
             /* external clock needs to be connected to PIN0 before it can
              * be used. Here we use rtc_clk_cal function to count
@@ -174,13 +178,15 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
                     }
                     ESP_EARLY_LOGW(TAG, "external clock connected to pin0 not found, switching to internal 150 kHz oscillator");
                     rtc_slow_clk_src = SOC_RTC_SLOW_CLK_SRC_RC_SLOW;
+                    revoke_32k_enable = true;
                 }
             }
         } else if (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_RC_FAST_D256) {
             rtc_clk_8m_enable(true, true);
         }
         rtc_clk_slow_src_set(rtc_slow_clk_src);
-        if (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) {
+        if (revoke_32k_enable || \
+                ((old_rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) && (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_OSC_SLOW))) {
             rtc_clk_32k_disable_external();
         }
         if (SLOW_CLK_CAL_CYCLES > 0) {

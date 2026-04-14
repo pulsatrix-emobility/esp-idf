@@ -1,5 +1,5 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- |
+| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 |
+| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | --------- |
 
 # Blink Example With Coverage Info (Gcov)
 
@@ -28,7 +28,7 @@ dependencies:
 
 To run this example, you need a supported dev board connected to a JTAG adapter, which can come in the following forms:
 
-* [ESP-WROVER-KIT](https://docs.espressif.com/projects/esp-idf/en/latest/hw-reference/modules-and-boards.html#esp-wrover-kit-v4-1) which integrates an on-board JTAG adapter. Ensure that the [required jumpers to enable JTAG are connected](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/get-started-wrover-kit.html#setup-options) on the WROVER-KIT.
+* [ESP-WROVER-KIT](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32/esp-wrover-kit/index.html) which integrates an on-board JTAG adapter. Ensure that the [required jumpers to enable JTAG are connected](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/get-started-wrover-kit.html#setup-options) on the WROVER-KIT.
 * ESP core board (e.g. ESP32-DevKitC) can also work as long as you connect it to an external JTAG adapter (e.g. FT2232H, J-LINK).
 
 This example will assume that that an ESP-WROVER-KIT is used.

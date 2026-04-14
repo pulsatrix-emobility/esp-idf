@@ -61,6 +61,7 @@ typedef int sdspi_dev_handle_t;
     .input_delay_phase = SDMMC_DELAY_PHASE_0, \
     .set_input_delay = NULL, \
     .set_input_delayline = NULL, \
+    .unaligned_multi_block_rw_max_chunk_size = 16, \
     .dma_aligned_buffer = NULL, \
     .pwr_ctrl_handle = NULL, \
     .check_buffer_alignment = sdspi_host_check_buffer_alignment, \
@@ -225,7 +226,7 @@ esp_err_t sdspi_host_io_int_enable(sdspi_dev_handle_t handle);
  * @return
  *      - ESP_OK on success
  */
-esp_err_t sdspi_host_io_int_wait(sdspi_dev_handle_t handle, TickType_t timeout_ticks);
+esp_err_t sdspi_host_io_int_wait(sdspi_dev_handle_t handle, uint32_t timeout_ticks);
 
 /**
  * @brief Check if the buffer meets the alignment requirements

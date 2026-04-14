@@ -25,6 +25,7 @@ set(common_include_dirs
     common/btc/profile/esp/include
     common/hci_log/include
     common/ble_log/include
+    common/ble_log/deprecated/include
 )
 
 set(ble_mesh_include_dirs
@@ -41,15 +42,14 @@ set(ble_mesh_include_dirs
     "esp_ble_mesh/api"
 )
 
-set(ble_mesh_tinycrypt_dirs
-    "esp_ble_mesh/common/tinycrypt/include"
-)
-
 set(ble_mesh_v11_include_dirs
     "esp_ble_mesh/lib/include"
     "esp_ble_mesh/v1.1/api/core/include"
     "esp_ble_mesh/v1.1/api/models/include"
     "esp_ble_mesh/v1.1/btc/include"
+    "esp_ble_mesh/v1.1/include"
+    "esp_ble_mesh/v1.1/dfu"
+    "esp_ble_mesh/v1.1/mbt"
 )
 
 if(CONFIG_IDF_DOC_BUILD)
@@ -90,12 +90,12 @@ if(CONFIG_BT_ENABLED)
             list(APPEND ldscripts "linker_rw_bt_controller.lf")
         elseif(CONFIG_IDF_TARGET_ESP32C2)
             list(APPEND srcs "controller/${target_name}/ble.c")
-            if(CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY)
-                list(APPEND srcs "controller/esp32c2/dummy.c")
-            endif()
+            list(APPEND srcs "controller/esp32c2/dummy.c")
             set(ldscripts "linker_esp32c2.lf")
         else()
-            list(APPEND srcs "controller/${target_name}/ble.c")
+            if(NOT CONFIG_BT_DUAL_MODE_ARCH)
+                list(APPEND srcs "controller/${target_name}/ble.c")
+            endif()
             list(APPEND ldscripts "linker_esp_ble_controller.lf")
         endif()
 
@@ -108,9 +108,15 @@ if(CONFIG_BT_ENABLED)
     list(APPEND priv_include_dirs
             common/btc/include
             common/include
+        )
+
+    if(NOT CONFIG_BT_DUAL_MODE_ARCH)
+        list(APPEND priv_include_dirs
             porting/mem/
             porting/include
         )
+    endif()
+
     list(APPEND include_dirs ${common_include_dirs})
 
     list(APPEND srcs "common/btc/core/btc_alarm.c"
@@ -136,9 +142,44 @@ if(CONFIG_BT_ENABLED)
          "common/osi/osi.c"
          "common/osi/semaphore.c"
          "porting/mem/bt_osi_mem.c"
-         "common/ble_log/ble_log_spi_out.c"
-         "common/ble_log/ble_log_uhci_out.c"
+         "common/ble_log/deprecated/ble_log_spi_out.c"
          )
+
+    # BLE Log Module
+    if(CONFIG_BLE_LOG_ENABLED)
+        # Core source files
+        list(APPEND srcs
+             common/ble_log/src/ble_log.c
+             common/ble_log/src/ble_log_lbm.c
+             common/ble_log/src/ble_log_rt.c
+             common/ble_log/src/ble_log_util.c
+        )
+
+        # Includes
+        list(APPEND include_dirs
+             common/ble_log/include
+        )
+
+        # Private includes
+        list(APPEND priv_include_dirs
+             common/ble_log/src/internal_include
+             common/ble_log/src/internal_include/prph
+        )
+
+        # Timestamp synchronization extension
+        if(CONFIG_BLE_LOG_TS_ENABLED)
+            list(APPEND srcs common/ble_log/src/ble_log_ts.c)
+        endif()
+
+        # Peripheral interface implementation
+        if(CONFIG_BLE_LOG_PRPH_DUMMY)
+            list(APPEND srcs common/ble_log/src/prph/ble_log_prph_dummy.c)
+        elseif(CONFIG_BLE_LOG_PRPH_SPI_MASTER_DMA)
+            list(APPEND srcs common/ble_log/src/prph/ble_log_prph_spi_master_dma.c)
+        elseif(CONFIG_BLE_LOG_PRPH_UART_DMA)
+            list(APPEND srcs common/ble_log/src/prph/ble_log_prph_uart_dma.c)
+        endif()
+    endif()
 
     # Host Bluedroid
     if(CONFIG_BT_BLUEDROID_ENABLED)
@@ -365,6 +406,7 @@ if(CONFIG_BT_ENABLED)
                    "host/bluedroid/stack/btm/btm_dev.c"
                    "host/bluedroid/stack/btm/btm_devctl.c"
                    "host/bluedroid/stack/btm/btm_inq.c"
+                   "host/bluedroid/stack/btm/btm_bredr_pwr_ctrl.c"
                    "host/bluedroid/stack/btm/btm_main.c"
                    "host/bluedroid/stack/btm/btm_pm.c"
                    "host/bluedroid/stack/btm/btm_sco.c"
@@ -487,6 +529,13 @@ if(CONFIG_BT_ENABLED)
     endif()
 
     if(CONFIG_BLE_MESH)
+
+        if(CONFIG_BLE_MESH_USE_UNIFIED_CRYPTO)
+            message(WARNING "This configuration path is deprecated and will be removed"
+                            "in a future version. Please use the corresponding Kconfig"
+                            "options under $IDF_PATH/components/bt/common/Kconfig.")
+        endif()
+
         list(APPEND include_dirs ${ble_mesh_include_dirs})
 
         list(APPEND srcs "esp_ble_mesh/api/core/esp_ble_mesh_ble_api.c"
@@ -517,13 +566,24 @@ if(CONFIG_BT_ENABLED)
                     "esp_ble_mesh/common/mutex.c"
                     "esp_ble_mesh/common/queue.c"
                     "esp_ble_mesh/common/timer.c"
-                    "esp_ble_mesh/common/utils.c"
-                    "esp_ble_mesh/core/storage/settings_nvs.c"
+                    "esp_ble_mesh/common/utils.c")
+
+        # Select crypto implementation based on config
+        if(CONFIG_BT_SMP_CRYPTO_STACK_TINYCRYPT)
+            list(APPEND srcs "esp_ble_mesh/common/crypto_tc.c")
+        elseif(CONFIG_BT_SMP_CRYPTO_STACK_MBEDTLS)
+            if(CONFIG_MBEDTLS_VER_4_X_SUPPORT)
+                list(APPEND srcs "esp_ble_mesh/common/crypto_psa.c")
+            else()
+                list(APPEND srcs "esp_ble_mesh/common/crypto_mbedtls.c")
+            endif()
+        endif()
+
+        list(APPEND srcs "esp_ble_mesh/core/storage/settings_nvs.c"
                     "esp_ble_mesh/core/storage/settings_uid.c"
                     "esp_ble_mesh/core/storage/settings.c"
                     "esp_ble_mesh/core/access.c"
                     "esp_ble_mesh/core/adv_common.c"
-                    "esp_ble_mesh/core/ble_adv.c"
                     "esp_ble_mesh/core/beacon.c"
                     "esp_ble_mesh/core/cfg_cli.c"
                     "esp_ble_mesh/core/cfg_srv.c"
@@ -561,25 +621,6 @@ if(CONFIG_BT_ENABLED)
                     "esp_ble_mesh/models/server/state_transition.c"
                     "esp_ble_mesh/models/server/time_scene_server.c")
 
-        if(NOT CONFIG_BLE_MESH_USE_UNIFIED_CRYPTO)
-            list(APPEND include_dirs ${ble_mesh_tinycrypt_dirs})
-                list(APPEND srcs
-                    "esp_ble_mesh/common/tinycrypt/src/aes_decrypt.c"
-                    "esp_ble_mesh/common/tinycrypt/src/aes_encrypt.c"
-                    "esp_ble_mesh/common/tinycrypt/src/cbc_mode.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ccm_mode.c"
-                    "esp_ble_mesh/common/tinycrypt/src/cmac_mode.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ctr_mode.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ctr_prng.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ecc_dh.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ecc_dsa.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ecc_platform_specific.c"
-                    "esp_ble_mesh/common/tinycrypt/src/ecc.c"
-                    "esp_ble_mesh/common/tinycrypt/src/hmac_prng.c"
-                    "esp_ble_mesh/common/tinycrypt/src/hmac.c"
-                    "esp_ble_mesh/common/tinycrypt/src/sha256.c"
-                    "esp_ble_mesh/common/tinycrypt/src/utils.c")
-        endif()
         if(CONFIG_BLE_MESH_V11_SUPPORT)
             list(APPEND include_dirs ${ble_mesh_v11_include_dirs})
 
@@ -595,9 +636,13 @@ if(CONFIG_BT_ENABLED)
                         "esp_ble_mesh/v1.1/api/core/esp_ble_mesh_sar_model_api.c"
                         "esp_ble_mesh/v1.1/api/core/esp_ble_mesh_srpl_model_api.c"
                         "esp_ble_mesh/v1.1/api/models/esp_ble_mesh_mbt_model_api.c"
+                        "esp_ble_mesh/v1.1/api/models/esp_ble_mesh_dfu_model_api.c"
+                        "esp_ble_mesh/v1.1/api/models/esp_ble_mesh_dfu_slot_api.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_agg_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_brc_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_df_model.c"
+                        "esp_ble_mesh/v1.1/btc/btc_ble_mesh_dfu_model.c"
+                        "esp_ble_mesh/v1.1/btc/btc_ble_mesh_dfu_slot.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_lcd_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_mbt_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_odp_model.c"
@@ -605,30 +650,61 @@ if(CONFIG_BT_ENABLED)
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_rpr_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_sar_model.c"
                         "esp_ble_mesh/v1.1/btc/btc_ble_mesh_srpl_model.c"
+                        "esp_ble_mesh/v1.1/mbt/blob_srv.c"
+                        "esp_ble_mesh/v1.1/mbt/blob_cli.c"
+                        "esp_ble_mesh/v1.1/dfu/dfu_cli.c"
+                        "esp_ble_mesh/v1.1/dfu/dfu_srv.c"
+                        "esp_ble_mesh/v1.1/dfu/dfu_slot.c"
+                        "esp_ble_mesh/v1.1/dfu/dfu_metadata.c"
+                        "esp_ble_mesh/v1.1/dfu/dfd_srv.c"
+                        "esp_ble_mesh/v1.1/dfu/dfd_cli.c"
                         "esp_ble_mesh/lib/ext.c")
+
             if(CONFIG_BLE_MESH_SAR_ENHANCEMENT)
                 list(APPEND srcs "esp_ble_mesh/core/transport.enh.c")
             else()
                 list(APPEND srcs "esp_ble_mesh/core/transport.c")
             endif()
         else()
-            list(APPEND srcs
-                        "esp_ble_mesh/core/transport.c")
+            list(APPEND srcs "esp_ble_mesh/core/transport.c")
         endif()
+
         if(CONFIG_BLE_MESH_SUPPORT_MULTI_ADV)
             list(APPEND srcs "esp_ble_mesh/core/ext_adv.c")
         else()
             list(APPEND srcs "esp_ble_mesh/core/adv.c")
         endif()
+
+        if(CONFIG_BLE_MESH_SUPPORT_BLE_ADV)
+            list(APPEND srcs "esp_ble_mesh/core/ble_adv.c")
+        endif()
     endif()
 
+    if(CONFIG_BT_DUAL_MODE_ARCH)
+        add_subdirectory(porting_btdm)
+        list(APPEND srcs
+            ${porting_btdm_srcs}
+        )
 
+        if(CONFIG_BT_NIMBLE_ENABLED)
+            list(APPEND srcs
+                "host/nimble/nimble/nimble/transport/esp_ipc_btdm/src/hci_esp_ipc.c"
+            )
+        endif()
 
-    if(CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT)
+        list(APPEND include_dirs
+            ${porting_btdm_include_dirs}
+        )
+    elseif(CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT)
         list(APPEND srcs
                 "porting/npl/freertos/src/npl_os_freertos.c"
                 "porting/mem/os_msys_init.c"
+                "porting/mem/os_mempool.c"
                 "porting/transport/src/hci_transport.c"
+        )
+
+        list(APPEND include_dirs
+            host/nimble/port/include
         )
 
         if(CONFIG_BT_CONTROLLER_DISABLED)
@@ -671,7 +747,11 @@ if(CONFIG_BT_ENABLED)
         )
     endif()
 
-    if(NOT (CONFIG_BT_LE_CRYPTO_STACK_MBEDTLS OR CONFIG_BT_NIMBLE_CRYPTO_STACK_MBEDTLS))
+    # Compile TinyCrypt if:
+    # 1. Controller uses TinyCrypt (not mbedTLS), OR
+    # 2. NimBLE uses TinyCrypt (not mbedTLS), OR
+    # 3. Bluedroid Host SMP uses TinyCrypt
+    if(CONFIG_BT_SMP_CRYPTO_STACK_TINYCRYPT OR NOT CONFIG_BT_NIMBLE_CRYPTO_STACK_MBEDTLS)
         list(APPEND include_dirs
                 common/tinycrypt/include
                 common/tinycrypt/port
@@ -718,6 +798,7 @@ if(CONFIG_BT_ENABLED)
                     host/nimble/nimble/nimble/host/util/include
                     host/nimble/nimble/nimble/host/store/ram/include
                     host/nimble/nimble/nimble/host/store/config/include
+                    host/nimble/nimble/nimble/host/services/ras/include
                     )
 
         list(APPEND srcs "host/nimble/nimble/nimble/transport/src/transport.c"
@@ -738,6 +819,8 @@ if(CONFIG_BT_ENABLED)
                     "host/nimble/nimble/nimble/host/services/hid/src/ble_svc_hid.c"
                     "host/nimble/nimble/nimble/host/services/sps/src/ble_svc_sps.c"
                     "host/nimble/nimble/nimble/host/services/cte/src/ble_svc_cte.c"
+                    "host/nimble/nimble/nimble/host/services/ras/src/ble_svc_ras.c"
+                    "host/nimble/nimble/nimble/host/src/ble_cs.c"
                     "host/nimble/nimble/nimble/host/src/ble_hs_conn.c"
                     "host/nimble/nimble/nimble/host/src/ble_store_util.c"
                     "host/nimble/nimble/nimble/host/src/ble_sm.c"
@@ -807,9 +890,21 @@ if(CONFIG_BT_ENABLED)
 
             list(APPEND srcs
                 "host/nimble/nimble/porting/nimble/src/nimble_port.c"
-                "host/nimble/nimble/porting/npl/freertos/src/nimble_port_freertos.c"
                 "host/nimble/port/src/nvs_port.c"
+                "host/nimble/port/src/esp_nimble_mem.c"
             )
+            if(CONFIG_BT_DUAL_MODE_ARCH)
+                list(APPEND srcs
+                    "host/nimble/nimble/porting/npl/esp-idf/src/nimble_port_freertos.c"
+                )
+                list(APPEND include_dirs
+                    "host/nimble/nimble/porting/npl/esp-idf/include"
+                )
+            else()
+                list(APPEND srcs
+                    "host/nimble/nimble/porting/npl/freertos/src/nimble_port_freertos.c"
+                )
+            endif()
 
             list(APPEND include_dirs
                 host/nimble/nimble/porting/nimble/include
@@ -824,10 +919,10 @@ if(CONFIG_BT_ENABLED)
                 )
             endif()
 
-        if(NOT CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT)
+        if((NOT CONFIG_BT_LE_CONTROLLER_NPL_OS_PORTING_SUPPORT) AND (NOT CONFIG_BT_DUAL_MODE_ARCH))
             list(APPEND srcs
                     "host/nimble/nimble/porting/nimble/src/endian.c"
-                    "host/nimble/nimble/porting/nimble/src/os_mempool.c"
+                    "porting/mem/os_mempool.c"
                     "host/nimble/nimble/porting/nimble/src/mem.c"
                     "host/nimble/nimble/porting/nimble/src/os_mbuf.c"
                     "host/nimble/nimble/porting/nimble/src/os_msys_init.c"
@@ -927,12 +1022,55 @@ set(bt_priv_requires
     esp_security
 )
 
+if(CONFIG_BLE_COMPRESSED_LOG_ENABLE)
+    set(CODE_BASE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+    # When log compression is enabled, selected logs are replaced
+    # by auto-generated macros that emit pre-encoded data.
+    # This eliminates the original format strings, reducing firmware size and
+    # removing runtime formatting overhead, so logs are produced faster and
+    # with less system impact.
+    add_subdirectory(common/ble_log/extension/log_compression)
+    if(LOG_COMPRESSION_TARGET)
+        set(srcs ${LOG_COMPRESS_SRCS})
+        set(include_dirs ${LOG_COMPRESS_INCLUDE_DIRS})
+        # LOG_COMPRESS_FILES_WITH_FLAGS format: "file_path|compile_flags"
+        if(LOG_COMPRESS_FILES_WITH_FLAGS)
+            foreach(file_entry ${LOG_COMPRESS_FILES_WITH_FLAGS})
+                # Split by '|' to get file path and flags
+                string(REPLACE "|" ";" file_parts "${file_entry}")
+                list(GET file_parts 0 file_path)
+                list(GET file_parts 1 compile_flags)
+                set_source_files_properties(${file_path}
+                    PROPERTIES COMPILE_FLAGS "${compile_flags}")
+            endforeach()
+        endif()
+    else()
+        list(APPEND include_dirs ${LOG_COMPRESS_INCLUDE_DIRS})
+    endif()
+endif()
+
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
                        PRIV_INCLUDE_DIRS "${priv_include_dirs}"
                        REQUIRES esp_timer esp_wifi
                        PRIV_REQUIRES "${bt_priv_requires}"
                        LDFRAGMENTS "${ldscripts}")
+
+# UART redir wrap flags — needed whenever BLE Log uses UART DMA on port 0,
+# regardless of whether BLE controller is enabled.
+if(DEFINED CONFIG_BLE_LOG_PRPH_UART_DMA_PORT)
+    if(CONFIG_BLE_LOG_PRPH_UART_DMA_PORT EQUAL 0)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_tx_chars")
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_write_bytes")
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_write_bytes_with_break")
+    endif()
+endif()
+
+if(CONFIG_BLE_COMPRESSED_LOG_ENABLE)
+    if(LOG_COMPRESSION_TARGET)
+        add_dependencies(${COMPONENT_LIB} ${LOG_COMPRESSION_TARGET})
+    endif()
+endif()
 
 if(CONFIG_BT_ENABLED)
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-implicit-fallthrough -Wno-unused-const-variable)
@@ -962,11 +1100,6 @@ if(CONFIG_BT_ENABLED)
         if(CONFIG_BT_LE_CONTROLLER_LOG_WRAP_PANIC_HANDLER_ENABLE)
             target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
         endif()
-        if(CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED)
-            target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_tx_chars")
-            target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_write_bytes")
-            target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=uart_write_bytes_with_break")
-        endif()
         if(CONFIG_IDF_TARGET_ESP32C6)
             add_prebuilt_library(libble_app
                 "${CMAKE_CURRENT_LIST_DIR}/controller/lib_esp32c6/esp32c6-bt-lib/esp32c6/libble_app.a"
@@ -987,6 +1120,12 @@ if(CONFIG_BT_ENABLED)
             endif()
         endif()
         target_link_libraries(${COMPONENT_LIB} PRIVATE libble_app)
+
+        if(CONFIG_BT_DUAL_MODE_ARCH)
+            add_prebuilt_library(libbtdm_common
+                "controller/lib_${target_name}/${target_name}-bt-lib/libbtdm_common.a")
+            target_link_libraries(${COMPONENT_LIB} PRIVATE libbtdm_common)
+        endif()
     endif()
 
     set_source_files_properties(
@@ -1000,26 +1139,29 @@ if(CONFIG_BT_ENABLED)
 endif()
 
 if(CONFIG_BLE_MESH_V11_SUPPORT)
+
+set(BLE_MESH_LIB_NAME "libble_mesh.a")
+
     if(CONFIG_IDF_TARGET_ESP32)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32S3)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32s3/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32s3/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32C3)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c3/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c3/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32C6)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c6/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c6/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32C61)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c61/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c61/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32H2)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32h2/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32h2/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     elseif(CONFIG_IDF_TARGET_ESP32C5)
-        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c5/libble_mesh.a")
+        add_prebuilt_library(ble_mesh "esp_ble_mesh/lib/lib/esp32c5/${BLE_MESH_LIB_NAME}")
         target_link_libraries(${COMPONENT_LIB} PRIVATE ble_mesh)
     endif()
 endif()

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -33,6 +33,24 @@ extern "C" {
 #define CACHE_LL_LEVEL_ALL                          2   //All of the cache levels, make this value greater than any level
 #define CACHE_LL_LEVEL_NUMS                         1   //Number of cache levels
 #define CACHE_LL_CACHE_AUTOLOAD                     (1<<0)
+
+/**
+ * @brief Preload strategy
+ */
+typedef enum {
+    CACHE_LL_PRELOAD_UNTIL_FETCH_DONE = 0,
+    CACHE_LL_PRELOAD_AFTER_FETCH = 1,
+    CACHE_LL_PRELOAD_ARBITRARY = 2,
+} cache_ll_preload_strategy_t;
+
+/**
+ * @brief Initialize the cache clock
+ */
+__attribute__((always_inline))
+static inline void cache_ll_clk_init(void)
+{
+    //for compatibility
+}
 
 /**
  * @brief Check if L1 ICache autoload is enabled or not
@@ -682,6 +700,72 @@ static inline void cache_ll_unfreeze_cache(uint32_t cache_level, cache_type_t ty
 }
 
 /*------------------------------------------------------------------------------
+ * Cache Preload
+ *----------------------------------------------------------------------------*/
+/**
+ * @brief Set the preload strategy (no-op)
+ */
+__attribute__((always_inline))
+static inline void cache_ll_preload_set_strategy(uint32_t cache_level, cache_type_t type, uint32_t cache_id, cache_ll_preload_strategy_t strategy)
+{
+    (void)cache_level;
+    (void)type;
+    (void)cache_id;
+    (void)strategy;
+}
+
+/**
+ * @brief Preload cache (L1 only)
+ *
+ * Starts preload for the given map and does not wait. Use cache_ll_preload_wait_done() to wait for completion.
+ */
+__attribute__((always_inline))
+static inline void cache_ll_preload(uint32_t cache_level, cache_type_t type, uint32_t cache_id, uint32_t vaddr, uint32_t size, bool ascending)
+{
+    (void)cache_id;
+    HAL_ASSERT(cache_level == CACHE_LL_LEVEL_EXT_MEM);
+    uint32_t map;
+    switch (type) {
+    case CACHE_TYPE_INSTRUCTION:
+        map = CACHE_MAP_ICACHE0 | CACHE_MAP_ICACHE1;
+        break;
+    case CACHE_TYPE_DATA:
+        map = CACHE_MAP_DCACHE;
+        break;
+    case CACHE_TYPE_ALL:
+    default:
+        map = CACHE_MAP_ALL;
+        break;
+    }
+    Cache_Start_Preload(map, vaddr, size, ascending ? 0 : 1);
+}
+
+/**
+ * @brief Wait until cache preload is done (L1 only)
+ */
+__attribute__((always_inline))
+static inline void cache_ll_preload_wait_done(uint32_t cache_level, cache_type_t type, uint32_t cache_id)
+{
+    (void)cache_id;
+    HAL_ASSERT(cache_level == CACHE_LL_LEVEL_EXT_MEM);
+    uint32_t map;
+    switch (type) {
+    case CACHE_TYPE_INSTRUCTION:
+        map = CACHE_MAP_ICACHE0 | CACHE_MAP_ICACHE1;
+        break;
+    case CACHE_TYPE_DATA:
+        map = CACHE_MAP_DCACHE;
+        break;
+    case CACHE_TYPE_ALL:
+    default:
+        map = CACHE_MAP_ALL;
+        break;
+    }
+    while (Cache_Preload_Done(map) == 0) {
+    }
+}
+
+/*------------------------------------------------------------------------------
  * Cache Line Size
  *----------------------------------------------------------------------------*/
 /**
@@ -756,6 +840,35 @@ static inline void cache_ll_l1_enable_bus(uint32_t bus_id, cache_bus_mask_t mask
         dbus_mask = dbus_mask | ((mask & CACHE_BUS_DBUS0) ? CACHE_L1_DCACHE_SHUT_DBUS1 : 0);
     }
     REG_CLR_BIT(CACHE_L1_DCACHE_CTRL_REG, dbus_mask);
+}
+
+/**
+ * Returns enabled buses for a given core
+ *
+ * @param cache_id    cache ID (when l1 cache is per core)
+ *
+ * @return State of enabled buses
+ */
+__attribute__((always_inline))
+static inline cache_bus_mask_t cache_ll_l1_get_enabled_bus(uint32_t cache_id)
+{
+    cache_bus_mask_t mask = (cache_bus_mask_t)0;
+
+    uint32_t ibus_mask = REG_READ(CACHE_L1_ICACHE_CTRL_REG);
+    if (cache_id == 0) {
+        mask = (cache_bus_mask_t)(mask | ((!(ibus_mask & CACHE_L1_ICACHE_SHUT_IBUS0)) ? CACHE_BUS_IBUS0 : 0));
+    } else if (cache_id == 1) {
+        mask = (cache_bus_mask_t)(mask | ((!(ibus_mask & CACHE_L1_ICACHE_SHUT_IBUS1)) ? CACHE_BUS_IBUS0 : 0));
+    }
+
+    uint32_t dbus_mask = REG_READ(CACHE_L1_DCACHE_CTRL_REG);
+    if (cache_id == 0) {
+        mask = (cache_bus_mask_t)(mask | ((!(dbus_mask & CACHE_L1_DCACHE_SHUT_DBUS0)) ? CACHE_BUS_DBUS0 : 0));
+    } else if (cache_id == 1) {
+        mask = (cache_bus_mask_t)(mask | ((!(dbus_mask & CACHE_L1_DCACHE_SHUT_DBUS1)) ? CACHE_BUS_DBUS0 : 0));
+    }
+
+    return mask;
 }
 
 /**

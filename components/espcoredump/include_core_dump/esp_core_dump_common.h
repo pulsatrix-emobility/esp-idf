@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,7 +7,7 @@
 #define ESP_CORE_DUMP_COMMON_H_
 
 #include "freertos/FreeRTOS.h"
-#include "esp_private/freertos_debug.h"
+#include "freertos/freertos_debug.h"
 #include "esp_app_format.h"
 #include "esp_core_dump_types.h"
 
@@ -36,6 +36,13 @@ typedef enum {
 #if SOC_RTC_MEM_SUPPORTED
     COREDUMP_MEMORY_RTC,
     COREDUMP_MEMORY_RTC_FAST,
+#endif
+    COREDUMP_MEMORY_NOINIT,
+#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+    COREDUMP_MEMORY_EXTRAM,
+#endif
+#if CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY
+    COREDUMP_MEMORY_EXTRAM_NOINIT,
 #endif
     COREDUMP_MEMORY_MAX,
     COREDUMP_MEMORY_START = COREDUMP_MEMORY_IRAM

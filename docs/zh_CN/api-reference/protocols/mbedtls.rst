@@ -66,7 +66,7 @@ ESP-IDF 为 Mbed TLS 提供了基于预设的配置系统，用于简化设置�
         • 基本的 X.509 解析
     * - **蓝牙 (BT)**
       - 蓝牙应用
-      - • 针对 BLE 安全性需求进行优化
+      - • 针对低功耗蓝牙安全性需求进行优化
         • 支持 ECC P-256 曲线
         • 最小的 TLS 开销
         • 蓝牙特定算法
@@ -175,14 +175,6 @@ ESP-IDF 中的示例使用 :doc:`/api-reference/protocols/esp_tls`，为访问�
 参考示例 :example:`protocols/https_server/simple` （简单的 HTTPS 服务器）和 :example:`protocols/https_request` （发起 HTTPS 请求）了解更多信息。
 
 如需直接使用 Mbed TLS API，请参考示例 :example:`protocols/https_mbedtls`。该示例演示了如何用 Mbed TLS 创建 HTTPS 连接。具体做法是配置安全的套接字，并使用证书包进行验证。
-
-
-替代方案
---------
-
-:doc:`/api-reference/protocols/esp_tls` 是底层 SSL/TLS 库的抽象层，因此可以选择使用 Mbed TLS 或 wolfSSL 作为底层库。默认情况下，仅 Mbed TLS 可在 ESP-IDF 中使用，而 wolfSSL 在 `<https://github.com/espressif/esp-wolfSSL>`_ 公开，还提供了上游子模块指针的相关信息。
-
-如需了解更多相关信息或比较 Mbed TLS 和 wolfSSL，请参考文档 :ref:`ESP-TLS：底层 SSL/TLS 库选择 <esp_tls_wolfssl>`。
 
 
 重要配置
@@ -311,5 +303,5 @@ Mbed TLS 配置系统支持预设配置。``Component Config`` > ``mbedTLS`` 中
 在 ``Component Config`` > ``mbedTLS`` 配置中，多个 Mbed TLS 功能已默认启用。如无需使用，可以禁用以减小固件大小。详情请参阅 :ref:`最小化固件大小 <minimizing_binary_mbedtls>`。
 
 
-.. _`API Reference`: https://mbed-tls.readthedocs.io/projects/api/en/v3.6.4/
+.. _`API Reference`: https://mbed-tls.readthedocs.io/projects/api/en/v3.6.5/
 .. _`Knowledge Base`: https://mbed-tls.readthedocs.io/en/latest/kb/

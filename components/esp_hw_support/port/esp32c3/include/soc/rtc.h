@@ -154,9 +154,6 @@ typedef struct rtc_cpu_freq_config_s {
 
 #define RTC_CLK_CAL_FRACT  19  //!< Number of fractional bits in values returned by rtc_clk_cal
 
-#define RTC_VDDSDIO_TIEH_1_8V 0 //!< TIEH field value for 1.8V VDDSDIO
-#define RTC_VDDSDIO_TIEH_3_3V 1 //!< TIEH field value for 3.3V VDDSDIO
-
 #define RTC_CAL_RTC_MUX _Pragma ("GCC warning \"'RTC_CAL_RTC_MUX' macro is deprecated\"") CLK_CAL_RTC_SLOW
 #define RTC_CAL_8MD256 _Pragma ("GCC warning \"'RTC_CAL_8MD256' macro is deprecated\"") CLK_CAL_RC_FAST_D256
 #define RTC_CAL_32K_XTAL _Pragma ("GCC warning \"'RTC_CAL_32K_XTAL' macro is deprecated\"") CLK_CAL_32K_XTAL
@@ -595,6 +592,7 @@ typedef struct {
     uint32_t rtc_regulator_fpu  : 1;    //!< keep rtc regulator powered up in sleep
     uint32_t deep_slp_reject : 1;       //!< enable deep sleep reject
     uint32_t light_slp_reject : 1;      //!< enable light sleep reject
+    uint32_t rtc_wdt_en : 1;           //!< enable rtc wdt, in sleep mode
 } rtc_sleep_config_t;
 
 #define RTC_SLEEP_PD_DIG                BIT(0)  //!< Deep sleep (power down digital domain)
@@ -615,6 +613,8 @@ typedef struct {
 #define RTC_SLEEP_USE_ADC_TESEN_MONITOR BIT(17)
 #define RTC_SLEEP_NO_ULTRA_LOW          BIT(18) //!< Avoid using ultra low power in deep sleep, in which RTCIO cannot be used as input, and RTCMEM can't work under high temperature
 #define RTC_SLEEP_XTAL_AS_RTC_FAST      BIT(19)
+#define RTC_SLEEP_FLASH_DPD             BIT(20)
+#define RTC_SLEEP_USE_RTC_WDT           BIT(21)
 
 /**
  * Default initializer for rtc_sleep_config_t

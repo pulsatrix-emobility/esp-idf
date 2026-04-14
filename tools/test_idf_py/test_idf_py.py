@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import json
 import os
@@ -11,6 +11,7 @@ from typing import Any
 from unittest import TestCase
 from unittest import main
 from unittest import mock
+from unittest import skipIf
 
 import jsonschema
 
@@ -47,50 +48,61 @@ class TestWithoutExtensions(TestCase):
 
         super().setUpClass()
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.env_patcher.stop()
+        super().tearDownClass()
+
 
 class TestExtensions(TestWithoutExtensions):
-    def test_extension_loading(self):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Create symlink once for all tests in this class
+        # Handle race conditions with parallel test execution (pytest-xdist)
         try:
             os.symlink(extension_path, link_path)
-            os.environ['IDF_EXTRA_ACTIONS_PATH'] = os.path.join(current_dir, 'extra_path')
-            output = subprocess.check_output([sys.executable, idf_py_path, '--help'], env=os.environ).decode(
-                'utf-8', 'ignore'
-            )
+        except FileExistsError:
+            # Another worker already created it - that's fine
+            pass
+        os.environ['IDF_EXTRA_ACTIONS_PATH'] = os.path.join(current_dir, 'extra_path')
 
-            self.assertIn('--test-extension-option', output)
-            self.assertIn('test_subcommand', output)
-            self.assertIn('--some-extension-option', output)
-            self.assertIn('extra_subcommand', output)
-        finally:
+    @classmethod
+    def tearDownClass(cls):
+        # Clean up symlink after all tests complete
+        # Use try/except to handle race conditions with parallel execution
+        try:
             os.remove(link_path)
+        except FileNotFoundError:
+            # Another worker already removed it - that's fine
+            pass
+        super().tearDownClass()
+
+    def test_extension_loading(self):
+        output = subprocess.check_output([sys.executable, idf_py_path, '--help'], env=os.environ).decode(
+            'utf-8', 'ignore'
+        )
+        self.assertIn('--test-extension-option', output)
+        self.assertIn('test_subcommand', output)
+        self.assertIn('--some-extension-option', output)
+        self.assertIn('extra_subcommand', output)
 
     def test_extension_execution(self):
-        try:
-            os.symlink(extension_path, link_path)
-            os.environ['IDF_EXTRA_ACTIONS_PATH'] = ';'.join([os.path.join(current_dir, 'extra_path')])
-            output = subprocess.check_output(
-                [sys.executable, idf_py_path, '--some-extension-option=awesome', 'test_subcommand', 'extra_subcommand'],
-                env=os.environ,
-            ).decode('utf-8', 'ignore')
-            self.assertIn('!!! From some global callback: awesome', output)
-            self.assertIn('!!! From some subcommand', output)
-            self.assertIn('!!! From test global callback: test', output)
-            self.assertIn('!!! From some subcommand', output)
-        finally:
-            os.remove(link_path)
+        output = subprocess.check_output(
+            [sys.executable, idf_py_path, '--some-extension-option=awesome', 'test_subcommand', 'extra_subcommand'],
+            env=os.environ,
+        ).decode('utf-8', 'ignore')
+        self.assertIn('!!! From some global callback: awesome', output)
+        self.assertIn('!!! From some subcommand', output)
+        self.assertIn('!!! From test global callback: test', output)
+        self.assertIn('!!! From some subcommand', output)
 
     def test_hidden_commands(self):
-        try:
-            os.symlink(extension_path, link_path)
-            os.environ['IDF_EXTRA_ACTIONS_PATH'] = ';'.join([os.path.join(current_dir, 'extra_path')])
-            output = subprocess.check_output([sys.executable, idf_py_path, '--help'], env=os.environ).decode(
-                'utf-8', 'ignore'
-            )
-            self.assertIn('test_subcommand', output)
-            self.assertNotIn('hidden_one', output)
-
-        finally:
-            os.remove(link_path)
+        output = subprocess.check_output([sys.executable, idf_py_path, '--help'], env=os.environ).decode(
+            'utf-8', 'ignore'
+        )
+        self.assertIn('test_subcommand', output)
+        self.assertNotIn('hidden_one', output)
 
 
 class TestDependencyManagement(TestWithoutExtensions):
@@ -99,7 +111,7 @@ class TestDependencyManagement(TestWithoutExtensions):
             args=['--dry-run', 'flash'],
             standalone_mode=False,
         )
-        self.assertEqual(['flash'], list(result.keys()))
+        self.assertEqual(['all', 'flash'], list(result.keys()))
 
     def test_order_only_dependencies(self):
         result = idf.init_cli()(
@@ -120,7 +132,7 @@ class TestDependencyManagement(TestWithoutExtensions):
             args=['--dry-run', 'clean', 'monitor', 'clean', 'fullclean', 'flash'],
             standalone_mode=False,
         )
-        self.assertEqual(['fullclean', 'clean', 'flash', 'monitor'], list(result.keys()))
+        self.assertEqual(['fullclean', 'clean', 'all', 'flash', 'monitor'], list(result.keys()))
 
     def test_dupplicated_commands_warning(self):
         capturedOutput = StringIO()
@@ -204,7 +216,8 @@ class TestDeprecations(TestWithoutExtensions):
                 [sys.executable, idf_py_path, '-C', current_dir, 'test-2'], env=os.environ, stderr=subprocess.STDOUT
             )
         except subprocess.CalledProcessError as e:
-            self.assertIn('Error: Command "test-2" is deprecated and was removed.', e.output.decode('utf-8', 'ignore'))
+            output = e.output.decode('utf-8', 'ignore').replace('\r\n', '\n')
+            self.assertIn('Error: Command "test-2" is deprecated and was removed\n', output)
 
     def test_exit_with_error_for_option(self):
         try:
@@ -239,7 +252,6 @@ class TestDeprecations(TestWithoutExtensions):
             env=os.environ,
             stderr=subprocess.STDOUT,
         ).decode('utf-8', 'ignore')
-
         self.assertIn('Warning: Option "test_sub_1" is deprecated and will be removed in future versions.', output)
         self.assertIn(
             'Warning: Command "test-1" is deprecated and will be removed in future versions. '
@@ -362,6 +374,7 @@ class TestWrapperCommands(TestCase):
             )
             return output
         except subprocess.CalledProcessError as e:
+            print(e.output.decode('utf-8', 'ignore'))
             self.fail(f'Process should have exited normally, but it exited with a return code of {e.returncode}')
 
     @classmethod
@@ -373,9 +386,9 @@ class TestWrapperCommands(TestCase):
 
 class TestEFuseCommands(TestWrapperCommands):
     """
-    Test if wrapper commands for espefuse.py are working as expected.
-    The goal is NOT to test the functionality of espefuse.py, but to test if the wrapper commands
-    are working as expected.
+    Test if wrapper commands for espefuse are working as expected.
+    The goal is NOT to test the functionality of espefuse
+    but to test if the wrapper commands are working as expected.
     """
 
     def test_efuse_summary(self):
@@ -437,9 +450,9 @@ class TestEFuseCommands(TestWrapperCommands):
 
 class TestSecureCommands(TestWrapperCommands):
     """
-    Test if wrapper commands for espsecure.py are working as expected.
-    The goal is NOT to test the functionality of espsecure.py, but to test if the wrapper commands are
-    working as expected.
+    Test if wrapper commands for espsecure are working as expected.
+    The goal is NOT to test the functionality of espsecure
+    but to test if the wrapper commands are working as expected.
     """
 
     @classmethod
@@ -458,7 +471,7 @@ class TestSecureCommands(TestWrapperCommands):
             self.flash_encryption_key,
         ]
         output = self.call_command(generate_key_command)
-        self.assertRegex(output, f'Writing 256 random bits to key file "?{self.flash_encryption_key}"?')
+        self.assertIn(f'Writing 256 random bits to key file "{self.flash_encryption_key}".', output)
 
     def secure_encrypt_flash_data(self):
         self.secure_generate_flash_encryption_key()
@@ -542,7 +555,7 @@ class TestSecureCommands(TestWrapperCommands):
             self.signing_key,
         ]
         output = self.call_command(generate_key_command)
-        self.assertRegex(output, f'RSA 3072 private key in PEM format written to "?{self.signing_key}"?')
+        self.assertIn(f'RSA 3072 private key in PEM format written to "{self.signing_key}".', output)
 
     def test_secure_generate_key_digest(self):
         self.secure_generate_signing_key()
@@ -556,7 +569,7 @@ class TestSecureCommands(TestWrapperCommands):
             'key_digest.bin',
         ]
         output = self.call_command(digest_command)
-        self.assertRegex(output, f'Writing the public key digest of "?{self.signing_key}"? to "?key_digest.bin"?.')
+        self.assertIn(f'Writing the public key digest of "{self.signing_key}" to "key_digest.bin".', output)
 
     def test_secure_generate_nvs_partition_key(self):
         generate_key_command = [
@@ -577,15 +590,15 @@ class TestSecureCommands(TestWrapperCommands):
 class TestMergeBinCommands(TestWrapperCommands):
     """
     Test if merge-bin command is invoked as expected.
-    This test is not testing the functionality of esptool.py merge_bin command, but the invocation of
-    the command from idf.py.
+    This test is not testing the functionality of esptool merge-bin command,
+    but the invocation of the command from idf.py.
     """
 
     def test_merge_bin(self):
         merge_bin_command = [sys.executable, idf_py_path, 'merge-bin']
         merged_binary_name = 'test-merge-binary.bin'
         output = self.call_command(merge_bin_command + ['--output', merged_binary_name])
-        self.assertRegex(output, f"file '?{merged_binary_name}'?, ready to flash to offset 0x0")
+        self.assertIn(f"file '{merged_binary_name}', ready to flash to offset 0x0", output)
         self.assertIn(f'Merged binary {merged_binary_name} will be created in the build directory...', output)
 
 
@@ -620,6 +633,54 @@ class TestUF2Commands(TestWrapperCommands):
         self.test_uf2_app()
         os.environ.pop('ESPBAUD')
         os.environ.pop('ESPPORT')
+
+
+@skipIf(os.name == 'nt', 'Locale handling differs on Windows')
+class TestUserLocale(TestWrapperCommands):
+    """
+    Test if user locale check works as expected.
+    """
+
+    def test_user_locale_no_unicode(self):
+        import locale
+
+        original_locale = locale.getlocale()
+        try:
+            for lcl in locale.locale_alias.items():
+                lcl_encoding = str(lcl[1]).lower().replace('-', '')
+                if 'utf' not in lcl_encoding:
+                    # Try to set any non-unicode locale - break if successful
+                    try:
+                        locale.setlocale(locale.LC_ALL, lcl[1])
+                        os.environ['LC_ALL'] = lcl[1]  # Testing with LC_ALL if it is ignored
+                        os.environ['LC_CTYPE'] = lcl[1]
+                        break
+                    except locale.Error:
+                        pass
+
+            command = [sys.executable, idf_py_path, '--help']
+            try:
+                output = subprocess.check_output(command, env=os.environ, stderr=subprocess.STDOUT).decode(
+                    'utf-8', 'ignore'
+                )
+            except subprocess.CalledProcessError as e:
+                # Process may exit with code 2 if no UTF locale is found, but warning should still be printed
+                output = e.output.decode('utf-8', 'ignore')
+
+                self.assertTrue(
+                    'Your environment is not configured to handle unicode characters' in output
+                    or 'Support for Unicode is required' in output,
+                    'Expected unicode configuration message not found in output',
+                )
+        finally:
+            try:
+                locale.setlocale(locale.LC_ALL, original_locale)
+            except locale.Error:
+                pass
+            if 'LC_ALL' in os.environ:
+                del os.environ['LC_ALL']
+            if 'LC_CTYPE' in os.environ:
+                del os.environ['LC_CTYPE']
 
 
 if __name__ == '__main__':

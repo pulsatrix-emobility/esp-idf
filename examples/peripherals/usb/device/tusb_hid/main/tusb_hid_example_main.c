@@ -9,11 +9,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tinyusb.h"
+#include "tinyusb_default_config.h"
 #include "class/hid/hid_device.h"
 #include "driver/gpio.h"
 
 #define APP_BUTTON (GPIO_NUM_0) // Use BOOT signal by default
 static const char *TAG = "example";
+
+/* Flag to indicate if the host has suspended the USB bus */
+static bool suspended = false;
+/* Flag of possibility to Wakeup Host via Remote Wakeup feature */
+static bool wakeup_host = false;
 
 /************* TinyUSB descriptors ****************/
 
@@ -151,6 +157,24 @@ static void app_send_hid_demo(void)
     }
 }
 
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+    ESP_LOGI(TAG, "USB device suspended");
+    suspended = true;
+    if (remote_wakeup_en) {
+        ESP_LOGI(TAG, "Remote wakeup available, press the button to wake up the Host");
+        wakeup_host = true;
+    } else {
+        ESP_LOGI(TAG, "Remote wakeup not available");
+    }
+}
+
+void tud_resume_cb(void)
+{
+    ESP_LOGI(TAG, "USB device resumed");
+    suspended = false;
+}
+
 void app_main(void)
 {
     // Initialize button that will trigger HID reports
@@ -164,19 +188,15 @@ void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&boot_button_config));
 
     ESP_LOGI(TAG, "USB initialization");
-    const tinyusb_config_t tusb_cfg = {
-        .device_descriptor = NULL,
-        .string_descriptor = hid_string_descriptor,
-        .string_descriptor_count = sizeof(hid_string_descriptor) / sizeof(hid_string_descriptor[0]),
-        .external_phy = false,
+    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+
+    tusb_cfg.descriptor.device = NULL;
+    tusb_cfg.descriptor.full_speed_config = hid_configuration_descriptor;
+    tusb_cfg.descriptor.string = hid_string_descriptor;
+    tusb_cfg.descriptor.string_count = sizeof(hid_string_descriptor) / sizeof(hid_string_descriptor[0]);
 #if (TUD_OPT_HIGH_SPEED)
-        .fs_configuration_descriptor = hid_configuration_descriptor, // HID configuration descriptor for full-speed and high-speed are the same
-        .hs_configuration_descriptor = hid_configuration_descriptor,
-        .qualifier_descriptor = NULL,
-#else
-        .configuration_descriptor = hid_configuration_descriptor,
+    tusb_cfg.descriptor.high_speed_config = hid_configuration_descriptor;
 #endif // TUD_OPT_HIGH_SPEED
-    };
 
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "USB initialization DONE");
@@ -185,7 +205,17 @@ void app_main(void)
         if (tud_mounted()) {
             static bool send_hid_data = true;
             if (send_hid_data) {
-                app_send_hid_demo();
+                if (!suspended) {
+                    app_send_hid_demo();
+                } else {
+                    if (wakeup_host) {
+                        ESP_LOGI(TAG, "Waking up the Host");
+                        tud_remote_wakeup();
+                        wakeup_host = false;
+                    } else {
+                        ESP_LOGI(TAG, "USB Host remote wakeup is not available.");
+                    }
+                }
             }
             send_hid_data = !gpio_get_level(APP_BUTTON);
         }

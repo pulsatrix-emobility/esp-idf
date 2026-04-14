@@ -66,7 +66,7 @@ ESP-IDF provides a preset-based configuration system for Mbed TLS to simplify se
         • Basic X.509 parsing
     * - **Bluetooth (BT)**
       - Bluetooth applications
-      - • Optimized for BLE security
+      - • Optimized for Bluetooth LE security
         • ECC P-256 curve support
         • Minimal TLS overhead
         • Bluetooth-specific algorithms
@@ -175,14 +175,6 @@ Examples in ESP-IDF use :doc:`/api-reference/protocols/esp_tls` which provides a
 Refer to the examples :example:`protocols/https_server/simple` (simple HTTPS server) and :example:`protocols/https_request` (make HTTPS requests) for more information.
 
 If you plan to use the Mbed TLS API directly, refer to the example :example:`protocols/https_mbedtls`. This example demonstrates how to establish an HTTPS connection using Mbed TLS by setting up a secure socket with a certificate bundle for verification.
-
-
-Alternatives
-------------
-
-:doc:`/api-reference/protocols/esp_tls` acts as an abstraction layer over the underlying SSL/TLS library and thus has an option to use Mbed TLS or wolfSSL as the underlying library. By default, only Mbed TLS is available and used in ESP-IDF whereas wolfSSL is available publicly at `<https://github.com/espressif/esp-wolfSSL>`_ with the upstream submodule pointer.
-
-Please refer to :ref:`ESP-TLS: Underlying SSL/TLS Library Options <esp_tls_wolfssl>` documentation for more information on this and comparison of Mbed TLS and wolfSSL.
 
 
 Important Config Options
@@ -311,5 +303,5 @@ Reducing Binary Size
 Under ``Component Config`` > ``mbedTLS``, several Mbed TLS features are enabled by default. These can be disabled if not needed to save code size. More information is available in the :ref:`Minimizing Binary Size <minimizing_binary_mbedtls>` documentation.
 
 
-.. _`API Reference`: https://mbed-tls.readthedocs.io/projects/api/en/v3.6.4/
+.. _`API Reference`: https://mbed-tls.readthedocs.io/projects/api/en/v3.6.5/
 .. _`Knowledge Base`: https://mbed-tls.readthedocs.io/en/latest/kb/

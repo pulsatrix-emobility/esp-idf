@@ -1,7 +1,7 @@
 /*
  * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
 #pragma once
 
@@ -205,14 +205,20 @@ typedef enum {
     RMT_CLK_SRC_DEFAULT = SOC_MOD_CLK_APB,       /*!< Select APB as the default choice */
 } soc_periph_rmt_clk_src_t;
 
+//////////////////////////////////////////////////PCNT//////////////////////////////////////////////////////////////////
+
 /**
- * @brief Type of RMT clock source, reserved for the legacy RMT driver
+ * @brief Array initializer for all supported clock sources of PCNT
+ */
+#define SOC_PCNT_CLKS {SOC_MOD_CLK_APB}
+
+/**
+ * @brief Type of PCNT clock source
  */
 typedef enum {
-    RMT_BASECLK_APB = SOC_MOD_CLK_APB,      /*!< RMT source clock is APB CLK */
-    RMT_BASECLK_REF = SOC_MOD_CLK_REF_TICK, /*!< RMT source clock is REF_TICK */
-    RMT_BASECLK_DEFAULT = SOC_MOD_CLK_APB,  /*!< RMT source clock default choice is APB */
-} soc_periph_rmt_clk_src_legacy_t;
+    PCNT_CLK_SRC_APB = SOC_MOD_CLK_APB,           /*!< Select APB as the source clock */
+    PCNT_CLK_SRC_DEFAULT = SOC_MOD_CLK_APB,       /*!< Select APB as the default choice */
+} soc_periph_pcnt_clk_src_t;
 
 //////////////////////////////////////////////////Temp Sensor///////////////////////////////////////////////////////////
 
@@ -419,6 +425,7 @@ typedef enum {
  * @brief Array initializer for all supported clock sources of LEDC
  */
 #define SOC_LEDC_CLKS {SOC_MOD_CLK_XTAL, SOC_MOD_CLK_APB, SOC_MOD_CLK_RC_FAST, SOC_MOD_CLK_REF_TICK}
+#define SOC_LEDC_CLK_STRS {"LEDC_USE_XTAL_CLK", "LEDC_USE_APB_CLK", "LEDC_USE_RC_FAST_CLK", "LEDC_USE_REF_TICK"}
 
 /**
  * @brief Type of LEDC clock source, reserved for the legacy LEDC driver

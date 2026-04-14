@@ -27,13 +27,13 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "soc/soc_caps.h"
-#include "soc/lcd_periph.h"
+#include "hal/lcd_periph.h"
 #include "hal/gpio_hal.h"
 #include "driver/gpio.h"
 #include "driver/parlio_tx.h"
 #include "driver/parlio_types.h"
 #include "esp_private/gpio.h"
-#include "esp_private/parlio_private.h"
+#include "esp_private/parlio_tx_private.h"
 #include "esp_lcd_panel_io_interface.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_common.h"
@@ -115,7 +115,7 @@ esp_err_t esp_lcd_new_panel_io_parl(const esp_lcd_panel_io_parl_config_t *io_con
         .output_clk_freq_hz = io_config->pclk_hz,
         .trans_queue_depth = io_config->trans_queue_depth ? io_config->trans_queue_depth : 4,
         .max_transfer_size = io_config->max_transfer_bytes,
-        .sample_edge = PARLIO_SAMPLE_EDGE_POS,
+        .shift_edge = PARLIO_SHIFT_EDGE_NEG,
         .bit_pack_order = PARLIO_BIT_PACK_ORDER_MSB,
         .dma_burst_size = io_config->dma_burst_size,
         .flags.invert_valid_out = !io_config->flags.cs_active_high,

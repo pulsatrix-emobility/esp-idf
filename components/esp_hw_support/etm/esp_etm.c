@@ -16,7 +16,7 @@
 #endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "soc/etm_periph.h"
+#include "hal/etm_periph.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -32,30 +32,23 @@
 
 #define ETM_USE_RETENTION_LINK  (SOC_ETM_SUPPORT_SLEEP_RETENTION && CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP)
 
-#if !SOC_RCC_IS_INDEPENDENT
-// Reset and Clock Control registers are mixing with other peripherals, so we need to use a critical section
-#define ETM_RCC_ATOMIC() PERIPH_RCC_ATOMIC()
-#else
-#define ETM_RCC_ATOMIC()
-#endif
-
-#define TAG "etm"
+ESP_LOG_ATTR_TAG(TAG, "etm");
 
 typedef struct etm_platform_t etm_platform_t;
 typedef struct etm_group_t etm_group_t;
 typedef struct esp_etm_channel_t esp_etm_channel_t;
 
 struct etm_platform_t {
-    _lock_t mutex;                                // platform level mutex lock
-    etm_group_t *groups[SOC_ETM_ATTR(INST_NUM)];  // etm group pool
-    int group_ref_counts[SOC_ETM_ATTR(INST_NUM)]; // reference count used to protect group install/uninstall
+    _lock_t mutex;                              // platform level mutex lock
+    etm_group_t *groups[ETM_LL_GET(INST_NUM)];  // etm group pool
+    int group_ref_counts[ETM_LL_GET(INST_NUM)]; // reference count used to protect group install/uninstall
 };
 
 struct etm_group_t {
     int group_id;          // hardware group id
     etm_hal_context_t hal; // hardware abstraction layer context
     portMUX_TYPE spinlock; // to protect per-group light weight resource access
-    esp_etm_channel_t *chans[SOC_ETM_ATTR(CHANS_PER_INST)]; // array of channels in the group
+    esp_etm_channel_t *chans[ETM_LL_GET(CHANS_PER_INST)]; // array of channels in the group
 };
 
 typedef enum {
@@ -117,9 +110,10 @@ static etm_group_t *etm_acquire_group_handle(int group_id)
             group->group_id = group_id;
             group->spinlock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
             // enable bus clock for the ETM registers
-            ETM_RCC_ATOMIC() {
+            PERIPH_RCC_ATOMIC() {
                 etm_ll_enable_bus_clock(group_id, true);
                 etm_ll_reset_register(group_id);
+                etm_ll_enable_function_clock(group_id, true);
             }
 
 #if ETM_USE_RETENTION_LINK
@@ -172,7 +166,7 @@ static void etm_release_group_handle(etm_group_t *group)
         s_platform.groups[group_id] = NULL; // deregister from platform
         etm_hal_deinit(&group->hal);
         // disable the bus clock for the ETM registers
-        ETM_RCC_ATOMIC() {
+        PERIPH_RCC_ATOMIC() {
             etm_ll_enable_bus_clock(group_id, false);
         }
 
@@ -198,12 +192,12 @@ static esp_err_t etm_chan_register_to_group(esp_etm_channel_t *chan)
 {
     etm_group_t *group = NULL;
     int chan_id = -1;
-    for (int i = 0; i < SOC_ETM_ATTR(INST_NUM); i++) {
+    for (int i = 0; i < ETM_LL_GET(INST_NUM); i++) {
         group = etm_acquire_group_handle(i);
         ESP_RETURN_ON_FALSE(group, ESP_ERR_NO_MEM, TAG, "no mem for group (%d)", i);
         // loop to search free channel in the group
         esp_os_enter_critical(&group->spinlock);
-        for (int j = 0; j < SOC_ETM_ATTR(CHANS_PER_INST); j++) {
+        for (int j = 0; j < ETM_LL_GET(CHANS_PER_INST); j++) {
             if (!group->chans[j]) {
                 chan_id = j;
                 group->chans[j] = chan;
@@ -263,6 +257,15 @@ esp_err_t esp_etm_new_channel(const esp_etm_channel_config_t *config, esp_etm_ch
     etm_group_t *group = chan->group;
     int group_id = group->group_id;
     int chan_id = chan->chan_id;
+
+#if ETM_LL_SUPPORT(CLOCK_SRC)
+    // set the clock source for the ETM group
+    etm_clock_source_t clk_src = config->clk_src;
+    if (clk_src == 0) {
+        clk_src = ETM_CLK_SRC_DEFAULT;
+    }
+    etm_ll_set_clock_source(group_id, clk_src);
+#endif
 
     // set the initial state to INIT
     atomic_init(&chan->fsm, ETM_CHAN_FSM_INIT);
@@ -405,11 +408,11 @@ esp_err_t esp_etm_dump(FILE *out_stream)
     fprintf(out_stream, "===========ETM Dump Start==========\r\n");
     char line[80];
     size_t len = sizeof(line);
-    for (int i = 0; i < SOC_ETM_ATTR(INST_NUM); i++) {
+    for (int i = 0; i < ETM_LL_GET(INST_NUM); i++) {
         group = etm_acquire_group_handle(i);
         ESP_RETURN_ON_FALSE(group, ESP_ERR_NO_MEM, TAG, "no mem for group (%d)", i);
         etm_hal_context_t *hal = &group->hal;
-        for (int j = 0; j < SOC_ETM_ATTR(CHANS_PER_INST); j++) {
+        for (int j = 0; j < ETM_LL_GET(CHANS_PER_INST); j++) {
             bool print_line = true;
             esp_os_enter_critical(&group->spinlock);
             etm_chan = group->chans[j];

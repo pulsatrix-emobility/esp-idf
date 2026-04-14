@@ -23,7 +23,7 @@
 #include "esp_private/sar_periph_ctrl.h"
 #endif
 
-static const char *TAG = "rtc_init";
+ESP_HW_LOG_ATTR_TAG(TAG, "rtc_init");
 
 static void set_ocode_by_efuse(int calib_version);
 static void calibrate_ocode(void);
@@ -64,7 +64,7 @@ void rtc_init(rtc_config_t cfg)
     REG_SET_FIELD(RTC_CNTL_TIMER6_REG, RTC_CNTL_DG_PERI_WAIT_TIMER, rtc_init_cfg.dg_peri_wait_cycles);
 
     if (cfg.cali_ocode) {
-        uint32_t rtc_calib_version = efuse_ll_get_blk_version_major(); // IDF-5366
+        uint32_t rtc_calib_version = efuse_ll_get_blk_version_major();
         if (rtc_calib_version == 1) {
             set_ocode_by_efuse(rtc_calib_version);
         } else {

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,14 +11,18 @@
 #include "esp_attr.h"
 #include "soc/soc.h"
 #include "soc/pmu_struct.h"
+#include "soc/pmu_reg.h"
 #include "hal/pmu_hal.h"
 #include "pmu_param.h"
 #include "esp_private/esp_pmu.h"
-#include "soc/regi2c_dcdc.h"
 #include "regi2c_ctrl.h"
+#include "hal/regi2c_ctrl_ll.h"
 #include "esp_rom_sys.h"
+#include "soc/regi2c_ulp.h"
+#include "hal/lp_aon_ll.h"
+#include "esp_hw_log.h"
 
-static __attribute__((unused)) const char *TAG = "pmu_init";
+ESP_HW_LOG_ATTR_TAG(TAG, "pmu_init");
 
 typedef struct {
     const pmu_hp_system_power_param_t     *power;
@@ -93,7 +97,7 @@ void pmu_hp_system_init(pmu_context_t *ctx, pmu_hp_mode_t mode, const pmu_hp_sys
     if (mode == PMU_MODE_HP_ACTIVE) {
         pmu_ll_hp_set_regulator_lp_dbias_voltage(ctx->hal->dev, mode, anlg->regulator0.lp_dbias_vol);
         pmu_ll_hp_set_regulator_hp_dbias_voltage(ctx->hal->dev, mode, anlg->regulator0.hp_dbias_vol);
-        pmu_ll_hp_set_regulator_dbias_sel       (ctx->hal->dev, mode, anlg->regulator0.dbias_sel);
+        pmu_ll_hp_set_regulator_dbias_select    (ctx->hal->dev, mode, anlg->regulator0.dbias_sel);
         pmu_ll_hp_set_regulator_dbias_init      (ctx->hal->dev, mode, anlg->regulator0.dbias_init);
     }
     pmu_ll_hp_set_regulator_power_detect_bypass(ctx->hal->dev, mode, anlg->regulator0.power_det_bypass);
@@ -118,6 +122,22 @@ void pmu_hp_system_init(pmu_context_t *ctx, pmu_hp_mode_t mode, const pmu_hp_sys
 
     /* set dcdc ccm mode software enable */
     pmu_ll_set_dcdc_ccm_sw_en(ctx->hal->dev, true);
+
+    //For dcdc ldo mode when VDD is low than about a certion value, eg 2.6v
+    lp_aon_ll_set_ldo_sw(15);
+
+    /* set ble bandgap ocode */
+    uint32_t ulp_ocode = 0;
+#if !CONFIG_IDF_ENV_FPGA
+    bool ulp_force_flag = REGI2C_READ_MASK(I2C_ULP, I2C_ULP_IR_FORCE_CODE);
+    if (ulp_force_flag) {
+        ulp_ocode = REGI2C_READ_MASK(I2C_ULP, I2C_ULP_EXT_CODE);
+    } else {
+        ulp_ocode = REGI2C_READ_MASK(I2C_ULP, I2C_ULP_OCODE);
+    }
+#endif
+    pmu_ll_set_ble_bandgap_ext_ocode(ctx->hal->dev, ulp_ocode);
+    pmu_ll_set_ble_bandgap_ext_force_ocode(ctx->hal->dev, true);
 }
 
 void pmu_lp_system_init(pmu_context_t *ctx, pmu_lp_mode_t mode, const pmu_lp_system_param_t *param)
@@ -131,6 +151,7 @@ void pmu_lp_system_init(pmu_context_t *ctx, pmu_lp_mode_t mode, const pmu_lp_sys
     pmu_ll_lp_set_clk_power(ctx->hal->dev, mode, power->clk_power.val);
     pmu_ll_lp_set_xtal_xpd (ctx->hal->dev, PMU_MODE_LP_SLEEP, power->xtal.xpd_xtal);
     pmu_ll_lp_set_xtalx2_xpd (ctx->hal->dev, PMU_MODE_LP_SLEEP, power->xtal.xpd_xtalx2);
+
     /* Default configuration of lp-system analog sub-system in active and
      * sleep modes */
     if (mode == PMU_MODE_LP_SLEEP) {
@@ -160,20 +181,23 @@ static inline void pmu_power_domain_force_default(pmu_context_t *ctx)
         PMU_HP_PD_TOP,
         PMU_HP_PD_HP_AON,
         PMU_HP_PD_CPU,
-        PMU_HP_PD_WIFI
+        PMU_HP_PD_BT_154
     };
 
     for (uint8_t idx = 0; idx < (sizeof(pmu_hp_domains) / sizeof(pmu_hp_power_domain_t)); idx++) {
         pmu_ll_hp_set_power_force_power_up  (ctx->hal->dev, pmu_hp_domains[idx], false);
-        pmu_ll_hp_set_power_force_reset     (ctx->hal->dev, pmu_hp_domains[idx], false);
-        pmu_ll_hp_set_power_force_isolate   (ctx->hal->dev, pmu_hp_domains[idx], false);
-        pmu_ll_hp_set_power_force_power_down(ctx->hal->dev, pmu_hp_domains[idx], false);
         pmu_ll_hp_set_power_force_no_isolate(ctx->hal->dev, pmu_hp_domains[idx], false);
         pmu_ll_hp_set_power_force_no_reset  (ctx->hal->dev, pmu_hp_domains[idx], false);
+        pmu_ll_hp_set_power_force_power_down(ctx->hal->dev, pmu_hp_domains[idx], false);
+        pmu_ll_hp_set_power_force_isolate   (ctx->hal->dev, pmu_hp_domains[idx], false);
+        pmu_ll_hp_set_power_force_reset     (ctx->hal->dev, pmu_hp_domains[idx], false);
     }
     /* Isolate all memory banks while sleeping, avoid memory leakage current */
     pmu_ll_hp_set_memory_no_isolate     (ctx->hal->dev, 0);
+    /* Disable memory force pu for memory pd during deep sleep */
     pmu_ll_hp_set_memory_power_up       (ctx->hal->dev, 0);
+    /* Enable VDD flash fast discharge */
+    pmu_ll_hp_set_vdd_flash_tiel_enable (ctx->hal->dev, true);
 
     pmu_ll_lp_set_power_force_power_up  (ctx->hal->dev, false);
     pmu_ll_lp_set_power_force_no_reset  (ctx->hal->dev, false);
@@ -193,7 +217,7 @@ static inline void pmu_hp_system_param_default(pmu_hp_mode_t mode, pmu_hp_system
     param->retent = pmu_hp_system_retention_param_default(mode);
 
     if (mode == PMU_MODE_HP_ACTIVE || mode == PMU_MODE_HP_MODEM) {
-        param->analog->regulator0.dbias = get_act_hp_dbias();
+        param->analog->regulator1.drv_b = get_act_hp_drvb();
     }
 }
 
@@ -215,10 +239,6 @@ static inline void pmu_lp_system_param_default(pmu_lp_mode_t mode, pmu_lp_system
 
     param->power = pmu_lp_system_power_param_default(mode);
     *param->analog = *pmu_lp_system_analog_param_default(mode); //copy default value
-
-    if (mode == PMU_MODE_LP_ACTIVE) {
-        param->analog->regulator0.dbias = get_act_lp_dbias();
-    }
 }
 
 static void pmu_lp_system_init_default(pmu_context_t *ctx)
@@ -235,22 +255,17 @@ static void pmu_lp_system_init_default(pmu_context_t *ctx)
 
 void pmu_init(void)
 {
+    /* Peripheral reg i2c power up */
+    regi2c_ctrl_ll_i2c_sar_periph_enable();
+    regi2c_ctrl_ll_i2c_rftx_periph_enable();
+    regi2c_ctrl_ll_i2c_rfrx_periph_enable();
+
+    //Initialize hp and lp systems
     pmu_hp_system_init_default(PMU_instance());
     pmu_lp_system_init_default(PMU_instance());
 
     pmu_power_domain_force_default(PMU_instance());
-#if !CONFIG_IDF_ENV_FPGA
-    REGI2C_WRITE_MASK(I2C_DCDC, I2C_DCDC_CCM_DREG0, 24);
-    REGI2C_WRITE_MASK(I2C_DCDC, I2C_DCDC_CCM_PCUR_LIMIT0, 4);
 
-    REGI2C_WRITE_MASK(I2C_DCDC, I2C_DCDC_VCM_DREG0, 24);
-    REGI2C_WRITE_MASK(I2C_DCDC, I2C_DCDC_VCM_PCUR_LIMIT0, 2);
-    REGI2C_WRITE_MASK(I2C_DCDC, I2C_DCDC_XPD_TRX, 0);
-#endif
-
-    // close rfpll to decrease mslp_cur
-    REG_SET_FIELD(PMU_RF_PWC_REG, PMU_XPD_FORCE_RFPLL, 1);
-    REG_SET_FIELD(PMU_RF_PWC_REG, PMU_XPD_RFPLL, 0);
 
 #if !CONFIG_IDF_ENV_FPGA
     // TODO: IDF-12313

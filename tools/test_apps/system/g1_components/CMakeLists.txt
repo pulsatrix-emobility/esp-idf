@@ -5,8 +5,30 @@
 cmake_minimum_required(VERSION 3.22)
 
 set(g0_components soc hal esp_common esp_rom)  # also <arch>, i.e. xtensa or riscv, will be added below
-set(g1_components spi_flash freertos log heap newlib esp_system esp_hw_support esp_mm)
-set(COMPONENTS ${g0_components} ${g1_components} main)
+set(g1_components spi_flash freertos log heap esp_libc esp_system esp_hw_support esp_mm esp_stdio)
+# The HAL components that required by G1 components
+# Most of these HAL components are required by `clk.c` in `esp_system` for peripherals clock initialization.
+set(esp_hal_components
+    esp_hal_ana_conv
+    esp_hal_cam
+    esp_hal_dma
+    esp_hal_gpio
+    esp_hal_i2s
+    esp_hal_mspi
+    esp_hal_gpspi
+    esp_hal_timg
+    esp_hal_touch_sens
+    esp_hal_uart
+    esp_hal_usb
+    esp_hal_wdt
+    esp_hal_pmu
+    esp_hal_rtc_timer
+    esp_hal_clock
+    esp_hal_security
+    esp_hal_systimer
+    esp_hal_regi2c
+)
+set(COMPONENTS ${g0_components} ${g1_components} ${esp_hal_components} main)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
@@ -89,11 +111,17 @@ set(extra_components_which_shouldnt_be_included
     # both which should be removed
     esp_partition
 
+    # esp_blockdev is a new component for separated IDF block storage device APIs. Pulled in from esp_partition
+    esp_blockdev
+
     # pthread is required by cxx. See [refactor-todo] about cxx, can it work without pthread?
     pthread
 
     # esp_security is required by mbedtls and spi_flash
     esp_security
+
+    # esp_driver_dma is required by mbedtls
+    esp_driver_dma
 
     # esp_usb_cdc_rom_console is used by the panic handler, will be conditional on cdc console option when
     # the new build-system is implemented

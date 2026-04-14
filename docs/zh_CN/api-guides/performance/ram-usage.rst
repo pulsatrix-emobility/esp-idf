@@ -83,7 +83,7 @@ ESP-IDF 包含一系列堆 API，可以在运行时测量空闲堆内存，请�
 任务运行时确定栈内存大小的方法
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- 调用 :cpp:func:`uxTaskGetStackHighWaterMark` 会返回任务整个生命周期中空闲栈内存的最小值，从而较好地显示出任务未使用的栈内存量。
+- 调用 :cpp:func:`uxTaskGetStackHighWaterMark` 会返回任务整个生命周期中空闲栈内存的最小值（以字节为单位），从而较好地显示出任务未使用的栈内存量。注意：在 {IDF_TARGET_NAME} 上，该函数返回字节数（而不是标准 FreeRTOS 文档中所述的字数）。
 
   - 从任务本身内部调用 :cpp:func:`uxTaskGetStackHighWaterMark` 是调用该函数最容易的方式：在任务达到其栈内存使用峰值后，调用 ``uxTaskGetStackHighWaterMark(NULL)`` 获取当前任务的高水位标记，换言之，如果有主循环，请多次执行主循环来覆盖各种状态，随后调用 :cpp:func:`uxTaskGetStackHighWaterMark`。
   - 通常可以用任务的栈内存总大小减去调用 :cpp:func:`uxTaskGetStackHighWaterMark` 的返回值，计算任务实际使用的栈内存大小，但应留出一定的安全余量，应对运行时栈内存使用量的小幅意外增长。
@@ -96,7 +96,7 @@ ESP-IDF 包含一系列堆 API，可以在运行时测量空闲堆内存，请�
 
 - 避免占用过多栈内存的函数。字符串格式化函数（如 ``printf()``）会使用大量栈内存，如果任务不调用这类函数，通常可以减小其占用的栈内存。
 
-  - 使用实验性的选项 :ref:`picolibc-instead-of-newlib` 可以显著减少 ``printf()`` 调用的堆栈使用量。
+  - 使用 :ref:`picolibc-instead-of-newlib` 可以显著减少 ``printf()`` 调用的堆栈使用量。
   - 启用 :ref:`newlib-nano-formatting`，可以在任务调用 ``printf()`` 或其他 C 语言字符串格式化函数时，减少这类任务的栈内存使用量。
 
 - 避免在栈上分配大型变量。在 C 语言声明的默认作用域中，任何分配为自动变量的大型结构体或数组都会占用栈内存。要优化这些变量占用的栈内存大小，可以使用静态分配，或仅在需要时从堆中动态分配。
@@ -132,7 +132,6 @@ ESP-IDF 包含一系列堆 API，可以在运行时测量空闲堆内存，请�
    :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/nimble/index` 的栈内存大小为 :ref:`CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE`。
    - 以太网驱动程序会创建任务，用于使 MAC 接收以太网帧，在默认配置 ``ETH_MAC_DEFAULT_CONFIG`` 下，任务栈内存大小为 4 KB。在初始化以太网 MAC 时，传递自定义 :cpp:class:`eth_mac_config_t` 结构体可以更改此设置。
    - FreeRTOS 空闲任务栈内存大小由 :ref:`CONFIG_FREERTOS_IDLE_TASK_STACKSIZE` 配置。
-   - 使用 :doc:`/api-reference/protocols/mqtt` 组件时会创建一个任务，其栈内存大小由 :ref:`CONFIG_MQTT_TASK_STACK_SIZE` 配置。MQTT 栈内存大小也可以使用 :cpp:class:`esp_mqtt_client_config_t` 结构体中的 ``task_stack`` 字段配置。
    - 有关使用 ``mDNS`` 时内存优化的详细信息，请参阅 `优化内存使用 <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#minimizing-ram-usage>`__。
 
 .. note::
@@ -184,7 +183,6 @@ IRAM 优化
     - 启用 :ref:`CONFIG_RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH`。如果从 IRAM 中的中断上下文中使用 ISR ringbuf 函数，例如启用了 :ref:`CONFIG_UART_ISR_IN_IRAM`，则无法安全使用此选项。在此情况下，安装 ESP-IDF 相关驱动程序时，将在运行时报错。
     :SOC_WIFI_SUPPORTED: - 禁用 Wi-Fi 选项 :ref:`CONFIG_ESP_WIFI_IRAM_OPT` 和/或 :ref:`CONFIG_ESP_WIFI_RX_IRAM_OPT` 会释放可用 IRAM，但会牺牲部分 Wi-Fi 性能。
     :CONFIG_ESP_ROM_HAS_SPI_FLASH: - 启用 :ref:`CONFIG_SPI_FLASH_ROM_IMPL` 选项可以释放一些 IRAM，但此时 esp_flash 错误修复程序及新的 flash 芯片支持将失效，详情请参阅 :doc:`/api-reference/peripherals/spi_flash/spi_flash_idf_vs_rom`。
-    :esp32: - 禁用 :ref:`CONFIG_SPI_FLASH_ROM_DRIVER_PATCH` 选项可以释放一些 IRAM，但仅适用于某些 flash 配置，详情请参阅配置项帮助文档。
     :esp32: - 如果应用程序基于 ESP32 rev. 3 (ECO3)，且使用 PSRAM，设置 :ref:`CONFIG_ESP32_REV_MIN` 为 ``3``，可以禁用 PSRAM 的错误处理程序，节省 10 KB 乃至更多的 IRAM。
     - 禁用 :ref:`CONFIG_ESP_EVENT_POST_FROM_IRAM_ISR` 可以防止从 :ref:`iram-safe-interrupt-handlers` 中发布 ``esp_event`` 事件，节省 IRAM 空间。
     :SOC_GPSPI_SUPPORTED: - 禁用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 可以防止在写入 flash 时发生 spi_master 中断，节省 IRAM 空间，但可能影响 spi_master 的性能。
@@ -194,6 +192,8 @@ IRAM 优化
     :SOC_GPSPI_SUPPORTED: - 启用 :ref:`CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH`。只要未启用 :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 选项，且没有从 ISR 中错误地调用堆函数，就可以在所有配置中安全启用此选项。
     :esp32c2: - 启用 :ref:`CONFIG_BT_RELEASE_IRAM`。 蓝牙所使用的 data，bss 和 text 段已经被分配在连续的RAM区间。当调用 ``esp_bt_mem_release`` 时，这些段都会被添加到 Heap 中。 这将节省约 22 KB 的 RAM。但要再次使用蓝牙功能，需要重启程序。
     - 禁用 :ref:`CONFIG_LIBC_LOCKS_PLACE_IN_IRAM`。若在缓存禁用的情况下，运行中的中断服务程序（即 IRAM ISR）没有使用 libc 锁 API，那么禁用该配置可以节省 IRAM 空间。
+    :CONFIG_ESP_ROM_HAS_SUBOPTIMAL_NEWLIB_ON_MISALIGNED_MEMORY: - 禁用 :ref:`CONFIG_LIBC_OPTIMIZED_MISALIGNED_ACCESS` 可以节省大约 1000 字节的 IRAM，但会降低性能。
+    :SOC_SPIRAM_SUPPORTED: - 启用 :ref:`CONFIG_ESP_EVENT_LOOP_IN_EXT_RAM`，强制 ``esp_event`` 将事件循环相关的内存分配放在外部 RAM 而不是内部 RAM 中。
 
 .. only:: esp32
 

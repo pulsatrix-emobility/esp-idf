@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,6 +24,8 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_lcd_common.h"
+#include "esp_memory_utils.h"
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "lcd_panel.io.spi";
 
@@ -97,21 +99,14 @@ esp_err_t esp_lcd_new_panel_io_spi(esp_lcd_spi_bus_handle_t bus, const esp_lcd_p
     // if the DC line is not encoded into any spi transaction phase or it's not controlled by SPI peripheral
     if (io_config->dc_gpio_num >= 0) {
         gpio_set_level(io_config->dc_gpio_num, 0);
-        gpio_func_sel(io_config->dc_gpio_num, PIN_FUNC_GPIO);
         gpio_output_enable(io_config->dc_gpio_num);
-    }
-
-    const spi_bus_attr_t* bus_attr = spi_bus_get_attr((spi_host_device_t)bus);
-    uint32_t flags = bus_attr->bus_cfg.flags;
-    if ((flags & SPICOMMON_BUSFLAG_QUAD) == SPICOMMON_BUSFLAG_QUAD) {
-        spi_panel_io->flags.quad_mode = 1;
-    } else if ((flags & SPICOMMON_BUSFLAG_OCTAL) == SPICOMMON_BUSFLAG_OCTAL) {
-        spi_panel_io->flags.octal_mode = 1;
     }
 
     spi_panel_io->flags.dc_cmd_level = io_config->flags.dc_high_on_cmd;
     spi_panel_io->flags.dc_data_level = !io_config->flags.dc_low_on_data;
     spi_panel_io->flags.dc_param_level = !io_config->flags.dc_low_on_param;
+    spi_panel_io->flags.octal_mode = io_config->flags.octal_mode;
+    spi_panel_io->flags.quad_mode = io_config->flags.quad_mode;
     spi_panel_io->on_color_trans_done = io_config->on_color_trans_done;
     spi_panel_io->user_ctx = io_config->user_ctx;
     spi_panel_io->lcd_cmd_bits = io_config->lcd_cmd_bits;
@@ -215,7 +210,7 @@ static esp_err_t panel_io_spi_tx_param(esp_lcd_panel_io_t *io, int lcd_cmd, cons
     spi_transaction_t *spi_trans = NULL;
     lcd_spi_trans_descriptor_t *lcd_trans = NULL;
     esp_lcd_panel_io_spi_t *spi_panel_io = __containerof(io, esp_lcd_panel_io_spi_t, base);
-    bool send_cmd = (lcd_cmd >= 0);
+    bool send_cmd = (lcd_cmd != -1);
 
     ESP_RETURN_ON_ERROR(spi_device_acquire_bus(spi_panel_io->spi_dev, portMAX_DELAY), TAG, "acquire spi bus failed");
 
@@ -271,7 +266,7 @@ static esp_err_t panel_io_spi_rx_param(esp_lcd_panel_io_t *io, int lcd_cmd, void
     spi_transaction_t *spi_trans = NULL;
     lcd_spi_trans_descriptor_t *lcd_trans = NULL;
     esp_lcd_panel_io_spi_t *spi_panel_io = __containerof(io, esp_lcd_panel_io_spi_t, base);
-    bool send_cmd = (lcd_cmd >= 0);
+    bool send_cmd = (lcd_cmd != -1);
 
     ESP_RETURN_ON_ERROR(spi_device_acquire_bus(spi_panel_io->spi_dev, portMAX_DELAY), TAG, "acquire spi bus failed");
 
@@ -329,7 +324,7 @@ static esp_err_t panel_io_spi_tx_color(esp_lcd_panel_io_t *io, int lcd_cmd, cons
 
     ESP_RETURN_ON_ERROR(spi_device_acquire_bus(spi_panel_io->spi_dev, portMAX_DELAY), TAG, "acquire spi bus failed");
 
-    bool send_cmd = (lcd_cmd >= 0);
+    bool send_cmd = (lcd_cmd != -1);
     if (send_cmd) {
         // before issue a polling transaction, need to wait queued transactions finished
         size_t num_trans_inflight = spi_panel_io->num_trans_inflight;
@@ -353,10 +348,13 @@ static esp_err_t panel_io_spi_tx_color(esp_lcd_panel_io_t *io, int lcd_cmd, cons
             // use 8 lines for transmitting command, address and data
             lcd_trans->base.flags |= (SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR | SPI_TRANS_MODE_OCT);
         }
+
         // command is short, using polling mode
         ret = spi_device_polling_transmit(spi_panel_io->spi_dev, &lcd_trans->base);
         ESP_GOTO_ON_ERROR(ret, err, TAG, "spi transmit (polling) command failed");
     }
+
+    bool color_in_psram = color && color_size && esp_ptr_external_ram(color);
 
     // if the color buffer is big, we want to split it into chunks, and queue the chunks one by one
     do {
@@ -373,6 +371,10 @@ static esp_err_t panel_io_spi_tx_color(esp_lcd_panel_io_t *io, int lcd_cmd, cons
             spi_panel_io->num_trans_inflight--;
         }
         memset(lcd_trans, 0, sizeof(lcd_spi_trans_descriptor_t));
+        if (color_in_psram) {
+            // When the color buffer resides in PSRAM, set the DMA PSRAM flag
+            lcd_trans->base.flags |= SPI_TRANS_DMA_USE_PSRAM;
+        }
 
         // SPI per-transfer size has its limitation, if the color buffer is too big, we need to split it into multiple chunks
         if (chunk_size > spi_panel_io->spi_trans_max_bytes) {
@@ -419,6 +421,9 @@ IRAM_ATTR static void lcd_spi_pre_trans_cb(spi_transaction_t *trans)
     if (spi_panel_io->dc_gpio_num >= 0) { // set D/C line level if necessary
         // use ll function to speed up
         gpio_ll_set_level(&GPIO, spi_panel_io->dc_gpio_num, lcd_trans->flags.dc_gpio_level);
+
+        // ensure the D/C output is enabled
+        gpio_ll_output_enable(&GPIO, spi_panel_io->dc_gpio_num);
     }
 }
 
@@ -426,6 +431,12 @@ static void lcd_spi_post_trans_color_cb(spi_transaction_t *trans)
 {
     esp_lcd_panel_io_spi_t *spi_panel_io = trans->user;
     lcd_spi_trans_descriptor_t *lcd_trans = __containerof(trans, lcd_spi_trans_descriptor_t, base);
+
+    // disable the D/C output as we no longer need it
+    if (spi_panel_io->dc_gpio_num >= 0) {
+        gpio_ll_output_disable(&GPIO, spi_panel_io->dc_gpio_num);
+    }
+
     if (lcd_trans->flags.en_trans_done_cb) {
         if (spi_panel_io->on_color_trans_done) {
             spi_panel_io->on_color_trans_done(&spi_panel_io->base, NULL, spi_panel_io->user_ctx);

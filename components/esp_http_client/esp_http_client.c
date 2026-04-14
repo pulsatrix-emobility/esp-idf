@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -60,6 +60,9 @@ typedef struct {
  */
 typedef struct {
     http_header_handle_t headers;       /*!< http header */
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+    int saved_response_header_count;
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
     esp_http_buffer_t   *buffer;        /*!< data buffer as linked list */
     int                 status_code;    /*!< status code (integer) */
     int64_t             content_length; /*!< data length */
@@ -185,7 +188,7 @@ static const char *HTTP_METHOD_MAPPING[] = {
     "REPORT"
 };
 
-static esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len);
+esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len);
 static esp_err_t esp_http_client_connect(esp_http_client_handle_t client);
 static esp_err_t esp_http_client_send_post_data(esp_http_client_handle_t client);
 
@@ -249,6 +252,23 @@ static int http_on_header_event(esp_http_client_handle_t client)
         client->event.header_value = client->current_header_value;
         http_dispatch_event(client, HTTP_EVENT_ON_HEADER, NULL, 0);
         http_dispatch_event_to_event_loop(HTTP_EVENT_ON_HEADER, &client, sizeof(esp_http_client_handle_t));
+
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+        if (client->response->saved_response_header_count >= CONFIG_ESP_HTTP_CLIENT_MAX_SAVED_RESPONSE_HEADERS) {
+            ESP_LOGW(TAG, "Response header limit (%d) exceeded", CONFIG_ESP_HTTP_CLIENT_MAX_SAVED_RESPONSE_HEADERS);
+        } else {
+            if (strlen(client->current_header_key) > CONFIG_ESP_HTTP_CLIENT_MAX_RESPONSE_HEADER_SIZE ||
+                strlen(client->current_header_value) > CONFIG_ESP_HTTP_CLIENT_MAX_RESPONSE_HEADER_SIZE) {
+                ESP_LOGW(TAG, "Header '%s' exceeds max size (%d): key=%zu, value=%zu",
+                    client->current_header_key, CONFIG_ESP_HTTP_CLIENT_MAX_RESPONSE_HEADER_SIZE,
+                    strlen(client->current_header_key), strlen(client->current_header_value));
+            } else {
+                http_header_set(client->response->headers, client->current_header_key, client->current_header_value);
+                client->response->saved_response_header_count++;
+            }
+        }
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+
         free(client->current_header_key);
         free(client->current_header_value);
         client->current_header_key = NULL;
@@ -408,6 +428,17 @@ esp_err_t esp_http_client_get_header(esp_http_client_handle_t client, const char
 
     return http_header_get(client->request->headers, key, value);
 }
+
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+esp_err_t esp_http_client_get_response_header(esp_http_client_handle_t client, const char *key, char **value)
+{
+    if (client == NULL || client->response == NULL || client->response->headers == NULL || key == NULL || value == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return http_header_get(client->response->headers, key, value);
+}
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
 
 esp_err_t esp_http_client_delete_header(esp_http_client_handle_t client, const char *key)
 {
@@ -701,8 +732,12 @@ error:
 }
 #endif
 
-static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
+esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
 {
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
     esp_err_t ret = ESP_OK;
     client->process_again = 0;
     client->response->data_process = 0;
@@ -721,6 +756,12 @@ static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
         free(client->auth_header);
         client->auth_header = NULL;
     }
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+    if (client->response->headers != NULL) {
+        http_header_clean(client->response->headers);
+    }
+    client->response->saved_response_header_count = 0;
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
     http_parser_init(client->parser, HTTP_RESPONSE);
     if (client->connection_info.username) {
         if (client->connection_info.auth_type == HTTP_AUTH_TYPE_BASIC) {
@@ -813,7 +854,9 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
                    (client->request->headers       = http_header_init())                             &&
                    (client->request->buffer        = calloc(1, sizeof(esp_http_buffer_t)))           &&
                    (client->response               = calloc(1, sizeof(esp_http_data_t)))             &&
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
                    (client->response->headers      = http_header_init())                             &&
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
                    (client->response->buffer       = calloc(1, sizeof(esp_http_buffer_t)))
                );
 
@@ -1064,7 +1107,9 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
         free(client->request);
     }
     if (client->response) {
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
         http_header_destroy(client->response->headers);
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
         if (client->response->buffer) {
             free(client->response->buffer->data);
             esp_http_client_cached_buf_cleanup(client->response->buffer);
@@ -1447,6 +1492,9 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     http_dispatch_event_to_event_loop(HTTP_EVENT_ERROR, &client, sizeof(esp_http_client_handle_t));
                     return err;
                 }
+#if CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
+                client->response->saved_response_header_count = 0;
+#endif // CONFIG_ESP_HTTP_CLIENT_SAVE_RESPONSE_HEADERS
                 /* falls through */
             case HTTP_STATE_REQ_COMPLETE_HEADER:
                 if ((err = esp_http_client_send_post_data(client)) != ESP_OK) {
@@ -1538,10 +1586,10 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                 if (err != ESP_OK) {
                     http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
                     http_dispatch_event_to_event_loop(HTTP_EVENT_ERROR, &client, sizeof(esp_http_client_handle_t));
+                } else {
+                    http_dispatch_event(client, HTTP_EVENT_ON_FINISH, NULL, 0);
+                    http_dispatch_event_to_event_loop(HTTP_EVENT_ON_FINISH, &client, sizeof(esp_http_client_handle_t));
                 }
-
-                http_dispatch_event(client, HTTP_EVENT_ON_FINISH, NULL, 0);
-                http_dispatch_event_to_event_loop(HTTP_EVENT_ON_FINISH, &client, sizeof(esp_http_client_handle_t));
 
                 client->response->buffer->raw_len = 0;
                 if (!http_should_keep_alive(client->parser)) {
@@ -1673,6 +1721,7 @@ static int http_client_prepare_first_line(esp_http_client_handle_t client, int w
         const bool length_required = (client->connection_info.method != HTTP_METHOD_GET &&
                                       client->connection_info.method != HTTP_METHOD_HEAD &&
                                       client->connection_info.method != HTTP_METHOD_DELETE);
+        http_header_delete(client->request->headers, "Transfer-Encoding");
         if (write_len != 0 || length_required) {
             http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
         } else {
@@ -1680,6 +1729,12 @@ static int http_client_prepare_first_line(esp_http_client_handle_t client, int w
         }
     } else {
         esp_http_client_set_header(client, "Transfer-Encoding", "chunked");
+        /*
+         * RFC 9112, §6.2 (https://datatracker.ietf.org/doc/html/rfc9112#section-6.2-2)
+         * RFC 7230, §3.3.2 (https://www.rfc-editor.org/rfc/rfc7230.html#section-3.3.2)
+         * A sender MUST NOT send a Content-Length header field in any message that contains a Transfer-Encoding header field.
+         */
+        http_header_delete(client->request->headers, "Content-Length");
     }
 
     const char *method = HTTP_METHOD_MAPPING[client->connection_info.method];
@@ -1711,8 +1766,12 @@ static int http_client_prepare_first_line(esp_http_client_handle_t client, int w
     return first_line_len;
 }
 
-static esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len)
+esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len)
 {
+    if (client == NULL) {
+        return ESP_FAIL;
+    }
+
     int first_line_len = 0;
     if (!client->first_line_prepared) {
         if ((first_line_len = http_client_prepare_first_line(client, write_len)) < 0) {
@@ -1852,6 +1911,17 @@ esp_err_t esp_http_client_close(esp_http_client_handle_t client)
         http_dispatch_event_to_event_loop(HTTP_EVENT_DISCONNECTED, &client, sizeof(esp_http_client_handle_t));
         client->state = HTTP_STATE_INIT;
         return esp_transport_close(client->transport);
+    }
+    return ESP_OK;
+}
+
+esp_err_t esp_http_client_clear_response_buffer(esp_http_client_handle_t client)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (client->response != NULL && client->response->buffer != NULL) {
+        esp_http_client_cached_buf_cleanup(client->response->buffer);
     }
     return ESP_OK;
 }
@@ -2064,4 +2134,25 @@ esp_http_state_t esp_http_client_get_state(esp_http_client_handle_t client)
         return HTTP_STATE_UNINIT;
     }
     return client->state;
+}
+
+bool esp_http_client_is_persistent_connection(esp_http_client_handle_t client)
+{
+    if (client == NULL) {
+        return false;
+    }
+
+    if (http_should_keep_alive(client->parser)) {
+        return true;
+    }
+    return false;
+}
+
+int esp_http_client_get_socket(esp_http_client_handle_t client)
+{
+    if (client == NULL || client->transport == NULL) {
+        return -1;
+    }
+
+    return esp_transport_get_socket(client->transport);
 }

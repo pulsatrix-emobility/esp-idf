@@ -54,7 +54,7 @@ idf.py
 
 - CMake_，配置待构建的项目
 - Ninja_，用于构建项目
-- `esptool.py`_，烧录目标硬件设备
+- `esptool`_，烧录目标硬件设备
 
 可通过 ``idf.py`` 配置构建系统，具体可参考 :doc:`IDF 前端工具 <tools/idf-py>`。
 
@@ -264,6 +264,9 @@ ESP-IDF 适用于 Python 3.10 以上版本。
 2. 在项目 CMakeLists.txt 文件中设置 ``EXTRA_COMPONENT_DIRS``，并添加重命名后的 ``main`` 目录。
 3. 在组件的 CMakeLists.txt 文件中设置 ``COMPONENT_REQUIRES`` 或 ``COMPONENT_PRIV_REQUIRES`` 以指定依赖项。
 
+.. note::
+
+   没有 ``main`` 组件的项目无法使用 ``MINIMAL_BUILD`` :ref:`构建属性 <cmake-build-properties>`，因为该属性的生效明确依赖 ``main`` 组件的存在。因此，请确保在未包含 ``main`` 组件的项目中不要设置 ``MINIMAL_BUILD`` 属性。
 
 覆盖默认的构建规范
 ---------------------------------------
@@ -603,8 +606,9 @@ Spark Plug 组件
 
 为避免重复性工作，各组件都用自动依赖一些“通用” IDF 组件，即使它们没有被明确提及。这些组件的头文件会一直包含在构建系统中。
 
-通用组件包括：cxx、newlib、freertos、esp_hw_support、heap、log、soc、hal、esp_rom、esp_common、esp_system。
+通用组件包括：cxx、esp_libc、freertos、esp_hw_support、heap、log、soc、hal、esp_rom、esp_common、esp_system。
 
+.. _including-components-in-the-build:
 
 在构建中导入组件
 -----------------
@@ -718,7 +722,7 @@ project_include.cmake
 
 如果组件的某些构建行为需要在组件 CMakeLists 文件之前被执行，你可以在组件目录下创建名为 ``project_include.cmake`` 的文件，``project.cmake`` 在运行过程中会导入此 CMake 文件。
 
-``project_include.cmake`` 文件在 ESP-IDF 内部使用，以定义项目范围内的构建功能，比如 ``esptool.py`` 的命令行参数和 ``bootloader`` 这个特殊的应用程序。
+``project_include.cmake`` 文件在 ESP-IDF 内部使用，以定义项目范围内的构建功能，比如 ``esptool`` 的命令行参数和 ``bootloader`` 这个特殊的应用程序。
 
 与组件 ``CMakeLists.txt`` 文件有所不同，在导入 ``project_include.cmake`` 文件的时候，当前源文件目录（即 ``CMAKE_CURRENT_SOURCE_DIR`` 和工作目录）为项目目录。如果想获得当前组件的绝对路径，可以使用 ``COMPONENT_PATH`` 变量。
 
@@ -1053,10 +1057,6 @@ ESP-IDF 还支持自动生成链接脚本，它允许组件通过链接片段文
 - 第二组命令添加了一个目标库，指向外部构建系统生成的库文件。为了添加 include 目录，并告知 CMake 该文件的位置，需要再设置一些属性。
 - 最后，生成的库被添加到 `ADDITIONAL_MAKE_CLEAN_FILES`_ 中。即执行 ``make clean`` 后会删除该库。请注意，构建系统中的其他目标文件不会被删除。
 
-.. only:: esp32
-
-    .. note:: 当外部构建系统使用 PSRAM 时，请记得将 ``-mfix-esp32-psram-cache-issue`` 添加到 C 编译器的参数中。关于该标志的更多详细信息，请参考 :ref:`CONFIG_SPIRAM_CACHE_WORKAROUND`。
-
 
 .. _ADDITIONAL_MAKE_CLEAN_FILES_note:
 
@@ -1100,7 +1100,33 @@ ExternalProject 的依赖与构建清理
 
 如果使用 ``SDKCONFIG_DEFAULTS`` 覆盖默认文件的名称，则硬件目标的默认文件名也会从 ``SDKCONFIG_DEFAULTS`` 值中派生。如果 ``SDKCONFIG_DEFAULTS`` 中有多个文件，硬件目标文件会在引入该硬件目标文件的文件之后应用， 而 ``SDKCONFIG_DEFAULTS`` 中所有其它后续文件则会在硬件目标文件之后应用 。
 
-例如，如果 ``SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig_devkit1"``，并且在同一文件夹中有一个 ``sdkconfig.defaults.esp32`` 文件，那么这些文件将按以下顺序应用：（1) sdkconfig.defaults (2) sdkconfig.defaults.esp32 (3) sdkconfig_devkit1。
+以下示例中，假定构建目标为 ``esp32``，且项目目录中有下列文件：
+
+.. code-block:: none
+
+    sdkconfig.defaults
+    sdkconfig.defaults.esp32
+    sdkconfig_devkit1
+
+**示例 1**： ``SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig_devkit1"``
+
+构建系统将按以下顺序应用这些文件：
+
+1. ``sdkconfig.defaults``。
+2. ``sdkconfig.defaults.esp32`` — 对于 ``SDKCONFIG_DEFAULTS`` 中列出的每个文件，构建系统都会尝试加载其对应目标芯片的变体文件。
+3. ``sdkconfig_devkit1``。
+4. 构建系统还会尝试加载 ``sdkconfig_devkit1.esp32``，但由于项目中不存在以此命名的文件，所以不会加载任何额外的文件。
+
+**示例 2**： ``SDKCONFIG_DEFAULTS="sdkconfig_devkit1"``
+
+构建系统将按以下顺序应用这些文件：
+
+1. ``sdkconfig_devkit1``。
+2. 构建系统还会尝试加载 ``sdkconfig_devkit1.esp32``，但由于项目中不存在以此命名的文件，所以不会加载任何额外的文件。
+
+.. warning::
+
+    在第二个示例中，标准的 ``sdkconfig.defaults`` （或其特定于目标的变体）未被应用，因为它未被显式包含在 ``SDKCONFIG_DEFAULTS`` 中。
 
 关于项目配置的详细信息，请参阅 :ref:`项目配置指南 <project-configuration-guide>`。关于配置文件的详细信息，请参阅 :ref:`配置文件的结构和关系 <configuration-structure>`。
 
@@ -1109,7 +1135,7 @@ ExternalProject 的依赖与构建清理
 flash 参数
 ==========
 
-有些情况下，我们希望在没有 IDF 时也能烧写目标板，为此，我们希望可以保存已构建的二进制文件、esptool.py 和 esptool write_flash 命令的参数。可以通过编写一段简单的脚本来保存二进制文件和 esptool.py。
+有些情况下，我们希望在没有 IDF 时也能烧写目标板，为此，我们希望可以保存已构建的二进制文件、esptool 和 esptool write-flash 命令的参数。可以通过编写一段简单的脚本来保存二进制文件和 esptool。
 
 运行项目构建之后，构建目录将包含项目二进制输出文件（``.bin`` 文件），同时也包含以下烧录数据文件：
 
@@ -1119,9 +1145,9 @@ flash 参数
 
 .. highlight:: bash
 
-你可以参照如下命令将任意烧录参数文件传递给 ``esptool.py``::
+你可以参照如下命令将任意烧录参数文件传递给 ``esptool``::
 
-    python esptool.py --chip {IDF_TARGET_PATH_NAME} write_flash @build/flash_project_args
+    esptool --chip {IDF_TARGET_PATH_NAME} write-flash @build/flash_project_args
 
 也可以手动复制参数文件中的数据到命令行中执行。
 
@@ -1155,7 +1181,7 @@ ESP-IDF 构建系统用“组件”的概念“封装”了 CMake，并提供了
 
   target_include_directories(json PUBLIC cJSON)
 
-- 这实际上与 IDF 中的 :idf_file:`json 组件 </components/json/CMakeLists.txt>` 是等效的。
+- 这实际上与 `espressif/cjson <https://github.com/espressif/idf-extra-components/tree/master/cjson>`_ 托管组件是等效的。
 - 因为组件中的源文件不多，所以这个 CMakeLists 文件非常简单。对于具有大量源文件的组件而言，ESP-IDF 支持的组件通配符，可以简化组件 CMakeLists 的样式。
 - 每当组件中新增一个与组件同名的库目标时，ESP-IDF 构建系统会自动将其添加到构建中，并公开公共的 include 目录。如果组件想要添加一个与组件不同名的库目标，就需要使用 CMake 命令手动添加依赖关系。
 
@@ -1248,9 +1274,9 @@ ESP-IDF 提供了一个模板 CMake 项目，可以基于此轻松创建应用�
   idf_build_process(esp32)
 
   # 创建项目可执行文件
-  # 使用其别名 idf::newlib 将其链接到 newlib 组件
+  # 使用其别名 idf::esp_libc 将其链接到 esp_libc 组件
   add_executable(${CMAKE_PROJECT_NAME}.elf main.c)
-  target_link_libraries(${CMAKE_PROJECT_NAME}.elf idf::newlib)
+  target_link_libraries(${CMAKE_PROJECT_NAME}.elf idf::esp_libc)
 
   # 让构建系统知道项目到可执行文件是什么，从而添加更多的目标以及依赖关系等
   idf_build_executable(${CMAKE_PROJECT_NAME}.elf)
@@ -1341,6 +1367,50 @@ ESP-IDF 构建命令
   idf_build_get_config(var config [GENERATOR_EXPRESSION])
 
 获取指定配置的值。就像构建属性一样，特定 *GENERATOR_EXPRESSION* 将检索该配置的生成器表达式字符串，而不是实际值，即可以与支持生成器表达式的 CMake 命令一起使用。然而，实际的配置值只有在调用 ``idf_build_process`` 后才能知道。
+
+.. code-block:: none
+
+  idf_build_add_post_elf_dependency(elf_filename dep_target)
+
+注册一个依赖项，该依赖必须在 ELF 链接完成之后 (post-ELF)、生成二进制镜像之前运行，适用于组件在执行 ``elf2image`` 之前需要对 ELF 进行就地处理的场景（例如，插入元数据、剥离段或生成额外的符号文件）。依赖目标 ``dep_target`` 必须是一个有效的 CMake 目标。如果你的规则需要读取或修改 ELF 文件，请在自定义命令中将 ELF 文件声明为 ``DEPENDS``。
+
+.. important::
+
+   创建 post-ELF 步骤时，请确保构建图保持无环性：
+
+   - 不要将 ELF 本身作为自定义命令的输出，应生成一个单独的输出（例如，``app.elf.post``、``app.elf.symbols`` 或简单的标记文件）。
+   - 如果必须就地修改 ELF，还需要生成一个额外的输出文件，并更新其时间戳，使其晚于 ELF 的修改时间（例如，使用 ``cmake -E touch``）。这样可以确保输出文件的时间戳比修改后的 ELF 文件更新，从而使 CMake 认为规则已满足，不会在后续构建中反复执行。
+
+   遵循这些规则可确保 post-ELF 钩子按预期顺序运行，而不会触发无限重建循环。
+
+示例：
+
+.. code-block:: cmake
+
+    # 创建一个自定义命令，在 ELF 链接完成后处理 ELF 文件
+    idf_build_get_property(elf_target EXECUTABLE GENERATOR_EXPRESSION)
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.stripped_marker"
+        COMMAND ${CMAKE_OBJCOPY} --strip-debug
+                "$<TARGET_FILE:$<GENEX_EVAL:${elf_target}>>"
+        COMMAND ${CMAKE_COMMAND} -E touch
+                "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.stripped_marker"
+        DEPENDS "$<TARGET_FILE:$<GENEX_EVAL:${elf_target}>>"
+    )
+
+    # 将其封装为自定义目标
+    add_custom_target(strip_elf DEPENDS
+        "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.stripped_marker"
+    )
+
+    # 注册该依赖，使其在 ELF 链接完成后、BIN 生成之前运行
+    idf_build_add_post_elf_dependency("${CMAKE_PROJECT_NAME}.elf" strip_elf)
+
+.. code-block:: none
+
+  idf_build_get_post_elf_dependencies(elf_filename out_var)
+
+获取已为指定 ELF 文件注册的 post-ELF 依赖列表，并将其存储在 ``out_var`` 中。
 
 
 .. _cmake-build-properties:
@@ -1523,7 +1593,7 @@ ESP-IDF 中的组件使用了第三方的 Git CMake 集成模块（:idf_file:`/t
 
 - ``compile_commands.json`` 是标准格式的 JSON 文件，它描述了在项目中参与编译的每个源文件。CMake 其中的一个功能就是生成此文件，许多 IDE 都知道如何解析此文件。
 - ``project_description.json`` 包含有关 ESP-IDF 项目、已配置路径等的一些常规信息。
-- ``flasher_args.json`` 包含 esptool.py 工具用于烧录项目二进制文件的参数，此外还有 ``flash_*_args`` 文件，可直接与 esptool.py 一起使用。更多详细信息请参阅 :ref:`flash_parameters`。
+- ``flasher_args.json`` 包含 esptool 工具用于烧录项目二进制文件的参数，此外还有 ``flash_*_args`` 文件，可直接与 esptool 一起使用。更多详细信息请参阅 :ref:`flash_parameters`。
 - ``CMakeCache.txt`` 是 CMake 的缓存文件，包含 CMake 进程、工具链等其它信息。
 - ``config/sdkconfig.json`` 包含 JSON 格式的项目配置结果。
 - ``config/kconfig_menus.json`` 是在 menuconfig 中显示菜单的 JSON 格式版本，用于外部 IDE 的 UI。
@@ -1706,7 +1776,7 @@ CMake 中不可用的功能
 .. _esp-idf-template: https://github.com/espressif/esp-idf-template
 .. _Cmake: https://cmake.org
 .. _ninja: https://ninja-build.org
-.. _esptool.py: https://github.com/espressif/esptool/#readme
+.. _esptool: https://github.com/espressif/esptool/#readme
 .. _CMake v3.22 官方文档: https://cmake.org/cmake/help/v3.22/index.html
 .. _cmake 命令行文档: https://cmake.org/cmake/help/v3.22/manual/cmake.1.html#options
 .. _cmake add_library: https://cmake.org/cmake/help/v3.22/command/add_library.html

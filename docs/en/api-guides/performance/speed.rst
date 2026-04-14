@@ -3,7 +3,7 @@ Speed Optimization
 
 :link_to_translation:`zh_CN:[中文]`
 
-{IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
+{IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
 {IDF_TARGET_RF_TYPE:default="Wi-Fi/Bluetooth", esp32s2="Wi-Fi", esp32c6="Wi-Fi/Bluetooth/802.15.4", esp32c61="Wi-Fi/Bluetooth", esp32h2="Bluetooth/802.15.4", esp32h21="Bluetooth/802.15.4", esp32h4="Bluetooth/802.15.4", esp32c5="Wi-Fi/Bluetooth/802.15.4"}
 
 Overview
@@ -204,12 +204,11 @@ Common priorities are:
         - FreeRTOS Timer Task to handle FreeRTOS timer callbacks is created when the scheduler initializes and has minimum task priority (1, :ref:`configurable <CONFIG_FREERTOS_TIMER_TASK_PRIORITY>`).
         - :doc:`/api-reference/system/esp_event` system task to manage the default system event loop and execute callbacks has high priority (20, ``ESP_TASK_EVENT_PRIO``). This configuration is only used if the application calls :cpp:func:`esp_event_loop_create_default`. It is possible to call :cpp:func:`esp_event_loop_create` with a custom task configuration instead.
         - :doc:`/api-guides/lwip` TCP/IP task has high priority (18, ``ESP_TASK_TCPIP_PRIO``).
-        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi` task has high priority (23).
+        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi-driver/index` task has high priority (23).
         :SOC_WIFI_SUPPORTED: - Wi-Fi wpa_supplicant component may create dedicated tasks while the Wi-Fi Protected Setup (WPS), WPA2 EAP-TLS, Device Provisioning Protocol (DPP) or BSS Transition Management (BTM) features are in use. These tasks all have low priority (2).
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/controller_vhci` task has high priority (23, ``ESP_TASK_BT_CONTROLLER_PRIO``). The Bluetooth Controller needs to respond to requests with low latency, so it should always be among the highest priority task in the system.
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/nimble/index` task has high priority (21).
         - The Ethernet driver creates a task for the MAC to receive Ethernet frames. If using the default config ``ETH_MAC_DEFAULT_CONFIG`` then the priority is medium-high (15). This setting can be changed by passing a custom :cpp:class:`eth_mac_config_t` struct when initializing the Ethernet MAC.
-        - If using the :doc:`/api-reference/protocols/mqtt` component, it creates a task with default priority 5 (:ref:`configurable<CONFIG_MQTT_TASK_PRIORITY>`), depending on :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG`, and also configurable at runtime by ``task_prio`` field in the :cpp:class:`esp_mqtt_client_config_t`)
         - To see what is the task priority for ``mDNS`` service, please check `Performance Optimization <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__.
 
 .. only:: SOC_HP_CPU_HAS_MULTIPLE_CORES
@@ -221,7 +220,7 @@ Common priorities are:
         - FreeRTOS Timer Task to handle FreeRTOS timer callbacks is created when the scheduler initializes and has minimum task priority (1, :ref:`configurable <CONFIG_FREERTOS_TIMER_TASK_PRIORITY>`). This task is pinned to Core 0.
         - :doc:`/api-reference/system/esp_event` system task to manage the default system event loop and execute callbacks has high priority (20, ``ESP_TASK_EVENT_PRIO``) and it is pinned to Core 0. This configuration is only used if the application calls :cpp:func:`esp_event_loop_create_default`, it is possible to call :cpp:func:`esp_event_loop_create` with a custom task configuration instead.
         - :doc:`/api-guides/lwip` TCP/IP task has high priority (18, ``ESP_TASK_TCPIP_PRIO``) and is not pinned to any core (:ref:`configurable<CONFIG_LWIP_TCPIP_TASK_AFFINITY>`).
-        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi` task has high priority (23) and is pinned to Core 0 by default (:ref:`configurable<CONFIG_ESP_WIFI_TASK_CORE_ID>`).
+        :SOC_WIFI_SUPPORTED: - :doc:`/api-guides/wifi-driver/index` task has high priority (23) and is pinned to Core 0 by default (:ref:`configurable<CONFIG_ESP_WIFI_TASK_CORE_ID>`).
         :SOC_WIFI_SUPPORTED: - Wi-Fi wpa_supplicant component may create dedicated tasks while the Wi-Fi Protected Setup (WPS), WPA2 EAP-TLS, Device Provisioning Protocol (DPP) or BSS Transition Management (BTM) features are in use. These tasks all have low priority (2) and are not pinned to any core.
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/controller_vhci` task has high priority (23, ``ESP_TASK_BT_CONTROLLER_PRIO``) and is pinned to Core 0 by default (:ref:`configurable <{IDF_TARGET_CONTROLLER_CORE_CONFIG}>`). The Bluetooth Controller needs to respond to requests with low latency, so it should always be among the highest priority task assigned to a single CPU.
         :SOC_BT_SUPPORTED: - :doc:`/api-reference/bluetooth/nimble/index` task has high priority (21) and is pinned to Core 0 by default (:ref:`configurable <CONFIG_BT_NIMBLE_PINNED_TO_CORE_CHOICE>`).
@@ -233,7 +232,6 @@ Common priorities are:
                All Bluedroid Tasks are pinned to the same core, which is Core 0 by default (:ref:`configurable <CONFIG_BT_BLUEDROID_PINNED_TO_CORE_CHOICE>`).
 
         - The Ethernet driver creates a task for the MAC to receive Ethernet frames. If using the default config ``ETH_MAC_DEFAULT_CONFIG`` then the priority is medium-high (15) and the task is not pinned to any core. These settings can be changed by passing a custom :cpp:class:`eth_mac_config_t` struct when initializing the Ethernet MAC.
-        - If using the :doc:`/api-reference/protocols/mqtt` component, it creates a task with default priority 5 (:ref:`configurable <CONFIG_MQTT_TASK_PRIORITY>`, depending on :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG`) and not pinned to any core (:ref:`configurable <CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED>`).
         - To see what is the task priority for ``mDNS`` service, please check `Performance Optimization <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__.
 
 

@@ -25,15 +25,9 @@ extern __attribute__((unused)) portMUX_TYPE rtc_spinlock;
 /*------------------------------------------------------------------------------------------------------------
 -----------------------------------------Temperature Sensor---------------------------------------------------
 ------------------------------------------------------------------------------------------------------------*/
-static const char *TAG_TSENS = "temperature_sensor";
+ESP_LOG_ATTR_TAG(TAG_TSENS, "temperature_sensor");
 
 #define INT_NOT_USED 999999
-
-#if !SOC_RCC_IS_INDEPENDENT
-#define TSENS_RCC_ATOMIC() PERIPH_RCC_ATOMIC()
-#else
-#define TSENS_RCC_ATOMIC()
-#endif
 
 #define TSENS_LINE_REGRESSION_US (200)
 
@@ -51,7 +45,7 @@ void temperature_sensor_power_acquire(void)
 #if !SOC_TSENS_IS_INDEPENDENT_FROM_ADC
         adc_apb_periph_claim();
 #endif
-        TSENS_RCC_ATOMIC() {
+        PERIPH_RCC_ATOMIC() {
             temperature_sensor_ll_bus_clk_enable(true);
             temperature_sensor_ll_reset_module();
         }
@@ -74,7 +68,7 @@ void temperature_sensor_power_release(void)
         abort();
     } else if (s_temperature_sensor_power_cnt == 0) {
         temperature_sensor_ll_enable(false);
-        TSENS_RCC_ATOMIC() {
+        PERIPH_RCC_ATOMIC() {
             temperature_sensor_ll_bus_clk_enable(false);
         }
 #if !SOC_TSENS_IS_INDEPENDENT_FROM_ADC
@@ -103,7 +97,10 @@ int16_t temp_sensor_get_raw_value(bool *range_changed)
         s_first_temp_read = false;
     }
 
+    adc_reset_lock_acquire();
     result = temperature_sensor_hal_get_degree(range_changed);
+    adc_reset_lock_release();
+
     esp_os_exit_critical(&rtc_spinlock);
 
     return result;

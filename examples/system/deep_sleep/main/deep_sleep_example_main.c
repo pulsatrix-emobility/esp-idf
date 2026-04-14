@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -18,7 +18,11 @@
 #include "nvs.h"
 #include "deep_sleep_example.h"
 
-RTC_SLOW_ATTR static struct timeval sleep_enter_time;
+// For chips not support RTC memory, sleep_enter_time is stored in NVS Flash
+#if SOC_RTC_FAST_MEM_SUPPORTED || SOC_RTC_SLOW_MEM_SUPPORTED
+RTC_SLOW_ATTR
+#endif
+static struct timeval sleep_enter_time;
 
 static void deep_sleep_task(void *args)
 {
@@ -64,9 +68,9 @@ static void deep_sleep_task(void *args)
         }
 #if CONFIG_EXAMPLE_GPIO_WAKEUP
         if (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) {
-            uint64_t wakeup_pin_mask = esp_sleep_get_gpio_wakeup_status();
-            if (wakeup_pin_mask != 0) {
-                int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
+            uint64_t wakeup_channel_mask = esp_sleep_get_gpio_wakeup_status();
+            if (wakeup_channel_mask != 0) {
+                int pin = esp_sleep_wakeup_io_bit2num((uint32_t)__builtin_ctzll(wakeup_channel_mask));
                 printf("Wake up from GPIO %d\n", pin);
             } else {
                 printf("Wake up from GPIO\n");
@@ -82,7 +86,7 @@ static void deep_sleep_task(void *args)
         if (causes & BIT(ESP_SLEEP_WAKEUP_EXT1)) {
             uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
             if (wakeup_pin_mask != 0) {
-                int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
+                int pin = __builtin_ctzll(wakeup_pin_mask);
                 printf("Wake up from GPIO %d\n", pin);
             } else {
                 printf("Wake up from GPIO\n");

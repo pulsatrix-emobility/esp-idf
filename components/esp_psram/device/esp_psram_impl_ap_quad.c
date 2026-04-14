@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -291,10 +291,9 @@ static void s_config_psram_clock(bool init_state)
     } else {
         // This function can be extended if we have other psram frequency
 
-#if (CONFIG_SPIRAM_SPEED == 80) || (CONFIG_SPIRAM_SPEED == 48)
-        // IDF-13632, update 48M to 64M
+#if (CONFIG_SPIRAM_SPEED == 80) || (CONFIG_SPIRAM_SPEED == 64)
         clock_conf = psram_ctrlr_ll_calculate_clock_reg(1);
-#elif (CONFIG_SPIRAM_SPEED == 40)
+#elif (CONFIG_SPIRAM_SPEED == 40) || (CONFIG_SPIRAM_SPEED == 32)
         clock_conf = psram_ctrlr_ll_calculate_clock_reg(2);
 #endif
         psram_ctrlr_ll_set_bus_clock(PSRAM_CTRLR_LL_MSPI_ID_0, clock_conf);
@@ -432,6 +431,20 @@ static void config_psram_spi_phases(void)
     psram_ctrlr_ll_set_addr_bitlen(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_QUAD_ADDR_LENGTH);
     psram_ctrlr_ll_set_rd_dummy(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_QUAD_FAST_READ_QUAD_DUMMY);
     psram_ctrlr_ll_set_cs_pin(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_LL_CS_ID_1);
+}
+
+/******************************* Halfsleep Mode *******************************/
+// This PSRAM device does not support halfsleep mode
+PSRAM_HALFSLEEP_SLEEP_CODE_ATTR void esp_psram_impl_enter_halfsleep_mode(void)
+{
+}
+
+PSRAM_HALFSLEEP_SLEEP_CODE_ATTR void esp_psram_impl_exit_halfsleep_mode(void)
+{
+}
+
+PSRAM_HALFSLEEP_RESUME_CODE_ATTR void esp_psram_impl_resume_from_halfsleep_mode(uint32_t slowclk_period)
+{
 }
 
 /*---------------------------------------------------------------------------------

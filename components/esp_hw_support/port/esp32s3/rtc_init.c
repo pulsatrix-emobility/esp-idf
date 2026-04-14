@@ -31,7 +31,7 @@
 
 #define RTC_CNTL_MEM_FORCE_NOISO (RTC_CNTL_SLOWMEM_FORCE_NOISO | RTC_CNTL_FASTMEM_FORCE_NOISO)
 
-static const char *TAG = "rtcinit";
+ESP_HW_LOG_ATTR_TAG(TAG, "rtcinit");
 
 static void set_ocode_by_efuse(int calib_version);
 static void calibrate_ocode(void);
@@ -94,7 +94,7 @@ void rtc_init(rtc_config_t cfg)
     REG_SET_FIELD(RTC_CNTL_TIMER2_REG, RTC_CNTL_ULPCP_TOUCH_START_WAIT, RTC_CNTL_ULPCP_TOUCH_START_WAIT_DEFAULT);
 
     if (cfg.cali_ocode) {
-        uint32_t blk_ver_major = efuse_ll_get_blk_version_major(); // IDF-5366
+        uint32_t blk_ver_major = efuse_ll_get_blk_version_major();
         //default blk_ver_major will fallback to using the self-calibration way for OCode
         bool ocode_efuse_cali = (blk_ver_major == 1);
         if (ocode_efuse_cali) {

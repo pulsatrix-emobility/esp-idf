@@ -15,11 +15,17 @@ if(NOT IDF_TARGET)
         "in by the parent build process.")
 endif()
 
+if(IDF_BUILD_V2)
+    include(CMakeLists_v2.txt)
+    return()
+endif()
+
 # A number of these components are implemented as config-only when built in the bootloader
 set(COMPONENTS
     bootloader
     esptool_py
     esp_hw_support
+    esp_hal_security
     esp_system
     freertos
     hal
@@ -31,9 +37,9 @@ set(COMPONENTS
     micro-ecc
     main
     efuse
-    esp_system
-    newlib
-    esp_tee)
+    esp_libc
+    esp_tee
+    esp_stdio)
 
 # EXTRA_COMPONENT_DIRS can be populated with directories containing one or several components.
 # Make sure this variable contains `bootloader_components` directory of the project being compiled.
@@ -61,19 +67,15 @@ endforeach()
 set(BOOTLOADER_BUILD 1)
 set(NON_OS_BUILD 1)
 include("${IDF_PATH}/tools/cmake/project.cmake")
-set(common_req log esp_rom esp_common esp_hw_support newlib)
+set(common_req log esp_rom esp_common esp_hw_support esp_libc)
 idf_build_set_property(EXTRA_COMPONENT_EXCLUDE_DIRS "${EXTRA_COMPONENT_EXCLUDE_DIRS}")
 idf_build_set_property(__COMPONENT_REQUIRES_COMMON "${common_req}")
 idf_build_set_property(__OUTPUT_SDKCONFIG 0)
 # Define a property for the default linker script
 set(LD_DEFAULT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/main/ld/${IDF_TARGET}")
-idf_build_set_property(BOOTLOADER_LINKER_SCRIPT "${LD_DEFAULT_PATH}/bootloader.rom.ld" APPEND)
 project(bootloader)
-if(CONFIG_ESP32P4_REV_MIN_200)
-    target_linker_script("__idf_main" INTERFACE "${LD_DEFAULT_PATH}/bootloader.rev2.ld")
-else()
-    target_linker_script("__idf_main" INTERFACE "${LD_DEFAULT_PATH}/bootloader.ld")
-endif()
+target_linker_script("__idf_main" INTERFACE "${LD_DEFAULT_PATH}/bootloader.memory.ld.in")
+target_linker_script("__idf_main" INTERFACE "${LD_DEFAULT_PATH}/bootloader.sections.ld.in")
 
 idf_build_set_property(COMPILE_DEFINITIONS "BOOTLOADER_BUILD=1" APPEND)
 idf_build_set_property(COMPILE_DEFINITIONS "NON_OS_BUILD=1" APPEND)
@@ -109,7 +111,7 @@ idf_component_get_property(espefuse_py_cmd esptool_py ESPEFUSEPY_CMD)
 # String for printing flash command
 string(REPLACE ";" " " esptoolpy_write_flash
     "${esptool_py_cmd} --port=(PORT) --baud=(BAUD) ${main_args} "
-    "write_flash ${sub_args}")
+    "write-flash ${sub_args}")
 
 string(REPLACE ";" " " espsecurepy "${espsecure_py_cmd}")
 string(REPLACE ";" " " espefusepy "${espefuse_py_cmd}")
@@ -133,7 +135,7 @@ if(CONFIG_SECURE_BOOTLOADER_REFLASHABLE)
         ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}")
 
     add_custom_command(OUTPUT "${secure_bootloader_key}"
-        COMMAND ${espsecure_py_cmd} digest_private_key
+        COMMAND ${espsecure_py_cmd} digest-private-key
             --keylen "${key_digest_len}"
             --keyfile "${SECURE_BOOT_SIGNING_KEY}"
             "${secure_bootloader_key}"
@@ -147,9 +149,9 @@ if(CONFIG_SECURE_BOOTLOADER_REFLASHABLE)
                 "No pre-generated key for a reflashable secure bootloader is available, "
                 "due to signing configuration."
                 "\nTo generate one, you can use this command:"
-                "\n\t${espsecurepy} generate_flash_encryption_key ${secure_bootloader_key}"
+                "\n\t${espsecurepy} generate-flash-encryption-key ${secure_bootloader_key}"
                 "\nIf a signing key is present, then instead use:"
-                "\n\t${espsecurepy} digest_private_key "
+                "\n\t${espsecurepy} digest-private-key "
                 "--keylen (192/256) --keyfile KEYFILE "
                 "${secure_bootloader_key}")
         endif()
@@ -158,7 +160,7 @@ if(CONFIG_SECURE_BOOTLOADER_REFLASHABLE)
 
     add_custom_command(OUTPUT "${bootloader_digest_bin}"
         COMMAND ${CMAKE_COMMAND} -E echo "DIGEST ${bootloader_digest_bin}"
-        COMMAND ${espsecure_py_cmd} digest_secure_bootloader --keyfile "${secure_bootloader_key}"
+        COMMAND ${espsecure_py_cmd} digest-secure-bootloader --keyfile "${secure_bootloader_key}"
         -o "${bootloader_digest_bin}" "${CMAKE_BINARY_DIR}/bootloader.bin"
         MAIN_DEPENDENCY "${CMAKE_BINARY_DIR}/.bin_timestamp"
         DEPENDS gen_secure_bootloader_key gen_project_binary
@@ -179,7 +181,7 @@ if(CONFIG_SECURE_BOOT_V2_ENABLED)
                 "Secure Boot Signing Key Not found."
                 "\nGenerate the Secure Boot V2 RSA-PSS 3072 Key."
                 "\nTo generate one, you can use this command:"
-                "\n\t${espsecurepy} generate_signing_key --version 2 your_key.pem"
+                "\n\t${espsecurepy} generate-signing-key --version 2 your_key.pem"
             )
         endif()
 
@@ -225,7 +227,7 @@ elseif(CONFIG_SECURE_BOOTLOADER_REFLASHABLE)
         COMMAND ${CMAKE_COMMAND} -E echo
             "Burn secure boot key to efuse using:"
         COMMAND ${CMAKE_COMMAND} -E echo
-            "\t${espefusepy} burn_key secure_boot_v1 ${secure_bootloader_key}"
+            "\t${espefusepy} burn-key secure_boot_v1 ${secure_bootloader_key}"
         COMMAND ${CMAKE_COMMAND} -E echo
             "First time flash command is:"
         COMMAND ${CMAKE_COMMAND} -E echo
@@ -256,8 +258,8 @@ elseif(
     COMMAND ${CMAKE_COMMAND} -E echo
         "To sign the bootloader with additional private keys."
     COMMAND ${CMAKE_COMMAND} -E echo
-        "\t${espsecurepy} sign_data -k secure_boot_signing_key2.pem -v 2 \
---append_signatures -o signed_bootloader.bin build/bootloader/bootloader.bin"
+        "\t${espsecurepy} sign-data -k secure_boot_signing_key2.pem -v 2 \
+--append-signatures -o signed_bootloader.bin build/bootloader/bootloader.bin"
     COMMAND ${CMAKE_COMMAND} -E echo
         "Secure boot enabled, so bootloader not flashed automatically."
     COMMAND ${CMAKE_COMMAND} -E echo

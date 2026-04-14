@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import argparse
 import os
@@ -34,6 +34,7 @@ USUAL_TO_FORMAL = {
     'esp32c61': 'ESP32-C61',
     'esp32h21': 'ESP32-H21',
     'esp32h4': 'ESP32-H4',
+    'esp32s31': 'ESP32-S31',
     'linux': 'Linux',
 }
 
@@ -124,14 +125,12 @@ def parse_existing_table(app_dir: str) -> tuple[str | None, list[str]]:
 def get_grouped_apps(
     paths: list[str],
     exclude_dirs: list[str] | None = None,
-    extra_targets: list[str] | None = None,
 ) -> dict[str, list[App]]:
     apps = sorted(
         find_apps(
             paths,
             'all',
             exclude_list=exclude_dirs or [],
-            default_build_targets=SUPPORTED_TARGETS + (extra_targets or []),
         )
     )
 
@@ -145,10 +144,8 @@ def get_grouped_apps(
 def check_readme(
     paths: list[str],
     exclude_dirs: list[str] | None = None,
-    *,
-    extra_targets: list[str] | None = None,
 ) -> None:
-    grouped_apps = get_grouped_apps(paths, exclude_dirs, extra_targets)
+    grouped_apps = get_grouped_apps(paths, exclude_dirs)
     exit_code = 0
 
     for app_dir, apps in grouped_apps.items():
@@ -243,11 +240,10 @@ def check_test_scripts(
     paths: list[str],
     exclude_dirs: list[str] | None = None,
     *,
-    extra_targets: list[str] | None = None,
     bypass_targets: list[str] | None = None,
 ) -> None:
     # takes long time, run only in CI
-    grouped_apps = get_grouped_apps(paths, exclude_dirs, extra_targets)
+    grouped_apps = get_grouped_apps(paths, exclude_dirs)
     grouped_cases = get_grouped_cases(paths)
     exit_code = 0
 
@@ -270,7 +266,7 @@ def check_test_scripts(
 
         if manifest_targets == actual_targets:
             continue
-        if not (set(manifest_targets) - set(actual_targets + (bypass_targets or []))):
+        if not ((set(manifest_targets) ^ set(actual_targets)) - set(bypass_targets or [])):
             continue
 
         print(f'Test target MISMATCH!!!: {app_dir}')
@@ -340,22 +336,19 @@ if __name__ == '__main__':
 
     if check_all:
         check_dirs = {IDF_PATH}
-        _exclude_dirs = [
-            os.path.join(IDF_PATH, 'tools', 'unit-test-app'),
-            os.path.join(IDF_PATH, 'tools', 'test_build_system', 'build_test_app'),
-            os.path.join(IDF_PATH, 'tools', 'templates', 'sample_project'),
-        ]
-    else:
-        _exclude_dirs = [os.path.join(IDF_PATH, 'tools', 'templates', 'sample_project')]
 
-    _extra_targets: list[str] = []
+    _exclude_dirs = [
+        os.path.join(IDF_PATH, 'tools', 'test_build_system'),
+        os.path.join(IDF_PATH, 'tools', 'templates', 'sample_project'),
+        os.path.join(IDF_PATH, 'tools', 'cmakev2', 'test'),
+    ]
+
     _bypass_targets: list[str] = []
     if arg.config:
         with open(arg.config) as fr:
             configs = yaml.safe_load(fr)
 
         if configs:
-            _extra_targets = configs.get('extra_default_build_targets') or []
             _bypass_targets = configs.get('bypass_check_test_targets') or []
 
     os.environ.update(
@@ -370,12 +363,10 @@ if __name__ == '__main__':
         check_readme(
             list(check_dirs),
             _exclude_dirs,
-            extra_targets=_extra_targets,
         )
     elif arg.action == 'check-test-scripts':
         check_test_scripts(
             list(check_dirs),
             _exclude_dirs,
-            extra_targets=_extra_targets,
             bypass_targets=_bypass_targets,
         )

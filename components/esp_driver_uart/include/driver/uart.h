@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -34,12 +34,13 @@ extern "C" {
  */
 typedef struct {
     int baud_rate;                      /*!< UART baud rate
-                                             Note that the actual baud rate set could have a slight deviation from the user-configured value due to rounding error*/
-    uart_word_length_t data_bits;       /*!< UART byte size*/
-    uart_parity_t parity;               /*!< UART parity mode*/
-    uart_stop_bits_t stop_bits;         /*!< UART stop bits*/
-    uart_hw_flowcontrol_t flow_ctrl;    /*!< UART HW flow control mode (cts/rts)*/
-    uint8_t rx_flow_ctrl_thresh;        /*!< UART HW RTS threshold*/
+                                             Note that the actual baud rate set could have a slight deviation from the user-configured value due to rounding error */
+    uart_word_length_t data_bits;       /*!< UART byte size */
+    uart_parity_t parity;               /*!< UART parity mode */
+    uart_stop_bits_t stop_bits;         /*!< UART stop bits */
+    uart_hw_flowcontrol_t flow_ctrl;    /*!< UART HW flow control mode (cts/rts) */
+    uint8_t rx_flow_ctrl_thresh;        /*!< UART HW RTS threshold */
+    uint32_t rx_glitch_filt_thresh;     /*!< The width of the glitch on the RX signal to be filtered (unit: ns). If set to 0, then RX signal filter is disabled. */
     union {
         uart_sclk_t source_clk;             /*!< UART source clock selection */
 #if (SOC_UART_LP_NUM >= 1)
@@ -247,7 +248,7 @@ esp_err_t uart_set_baudrate(uart_port_t uart_num, uint32_t baudrate);
  * @param baudrate Pointer to accept value of UART baud rate
  *
  * @return
- *     - ESP_FAIL Parameter error
+ *     - ESP_FAIL Parameter error or the UART port is not enabled
  *     - ESP_OK   Success, result will be put in (*baudrate)
  *
  */
@@ -364,7 +365,7 @@ esp_err_t uart_enable_rx_intr(uart_port_t uart_num);
 esp_err_t uart_disable_rx_intr(uart_port_t uart_num);
 
 /**
- * @brief Disable UART TX interrupt (TX_FULL & TX_TIMEOUT INTERRUPT)
+ * @brief Disable UART TX interrupt (TX_FIFO_EMPTY INTERRUPT)
  *
  * @param uart_num  UART port number
  *
@@ -375,11 +376,11 @@ esp_err_t uart_disable_rx_intr(uart_port_t uart_num);
 esp_err_t uart_disable_tx_intr(uart_port_t uart_num);
 
 /**
- * @brief Enable UART TX interrupt (TX_FULL & TX_TIMEOUT INTERRUPT)
+ * @brief Enable UART TX interrupt (TX_FIFO_EMPTY INTERRUPT)
  *
  * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).
- * @param enable  1: enable; 0: disable
- * @param thresh  Threshold of TX interrupt, 0 ~ UART_HW_FIFO_LEN(uart_num)
+ * @param enable  Set to 1 to enable the interrupt
+ * @param thresh  Threshold of TX FIFO empty interrupt, 0 ~ UART_HW_FIFO_LEN(uart_num). If -1 is given, threshold configuration will be skipped.
  *
  * @return
  *     - ESP_OK   Success
@@ -397,6 +398,7 @@ static inline esp_err_t _uart_set_pin4(uart_port_t uart_num, int tx_io_num, int 
 // Error function for invalid argument count
 static inline esp_err_t __uart_set_pin_invalid_args__(int dummy, ...)
 {
+    (void)dummy;
     ESP_RETURN_ON_FALSE(false, ESP_FAIL, "uart", "Invalid number of arguments to uart_set_pin(). Expected 5 or 7 arguments.");
     return ESP_OK;
 }
@@ -515,7 +517,7 @@ esp_err_t uart_intr_config(uart_port_t uart_num, const uart_intr_config_t *intr_
  *     - ESP_FAIL Parameter error
  *     - ESP_ERR_TIMEOUT  Timeout
  */
-esp_err_t uart_wait_tx_done(uart_port_t uart_num, TickType_t ticks_to_wait);
+esp_err_t uart_wait_tx_done(uart_port_t uart_num, uint32_t ticks_to_wait);
 
 /**
  * @brief Send data to the UART port from a given buffer and length.
@@ -586,7 +588,7 @@ int uart_write_bytes_with_break(uart_port_t uart_num, const void* src, size_t si
  *     - (-1) Error
  *     - OTHERS (>=0) The number of bytes read from UART buffer
  */
-int uart_read_bytes(uart_port_t uart_num, void* buf, uint32_t length, TickType_t ticks_to_wait);
+int uart_read_bytes(uart_port_t uart_num, void* buf, uint32_t length, uint32_t ticks_to_wait);
 
 /**
  * @brief Alias of uart_flush_input.
@@ -625,7 +627,9 @@ esp_err_t uart_flush_input(uart_port_t uart_num);
 esp_err_t uart_get_buffered_data_len(uart_port_t uart_num, size_t* size);
 
 /**
- * @brief   UART get TX ring buffer free space size
+ * @brief   UART get TX ring buffer free space size for the next data to be enqueued
+ *
+ * It returns the tight conservative bound for NOSPLIT ring buffer overall enqueueable payload across up to two chunks.
  *
  * @param   uart_num UART port number, the max port number is (UART_NUM_MAX -1).
  * @param   size Pointer of size_t to accept the free space size
@@ -829,7 +833,8 @@ esp_err_t uart_get_collision_flag(uart_port_t uart_num, bool* collision_flag);
  *      - ESP_ERR_INVALID_ARG if uart_num is incorrect or wakeup_threshold is
  *        outside of [3, 0x3ff] range.
  */
-esp_err_t uart_set_wakeup_threshold(uart_port_t uart_num, int wakeup_threshold);
+esp_err_t uart_set_wakeup_threshold(uart_port_t uart_num, int wakeup_threshold)
+__attribute__((deprecated("use uart_wakeup_setup instead")));
 
 /**
  * @brief Get the number of RX pin signal edges for light sleep wakeup.
@@ -844,7 +849,8 @@ esp_err_t uart_set_wakeup_threshold(uart_port_t uart_num, int wakeup_threshold);
  *      - ESP_OK on success
  *      - ESP_ERR_INVALID_ARG if out_wakeup_threshold is NULL
  */
-esp_err_t uart_get_wakeup_threshold(uart_port_t uart_num, int* out_wakeup_threshold);
+esp_err_t uart_get_wakeup_threshold(uart_port_t uart_num, int* out_wakeup_threshold)
+__attribute__((deprecated));
 
 /**
   * @brief Wait until UART tx memory empty and the last char send ok (polling mode).
@@ -893,6 +899,7 @@ typedef struct {
     int rx_io_num;                      /*!< GPIO pin number for the incoming signal */
     uart_sclk_t source_clk;             /*!< The higher the frequency of the clock source, the more accurate the detected bitrate value;
                                              The slower the frequency of the clock source, the slower the bitrate can be measured */
+    uint32_t rx_glitch_filt_thresh;     /*!< The width of the glitch on the incoming signal to be filtered (unit: ns). If set to 0, then glitch filter is disabled. */
 } uart_bitrate_detect_config_t;
 
 /**

@@ -105,7 +105,7 @@ ULP LP 内核代码会与 ESP-IDF 项目共同编译，生成一个单独的二�
 
 若想编译和构建项目，请执行以下操作：
 
-1. 在 menuconfig 中启用 :ref:`CONFIG_ULP_COPROC_ENABLED` 和 :ref:`CONFIG_ULP_COPROC_TYPE` 选项，并将 :ref:`CONFIG_ULP_COPROC_TYPE` 设置为 ``CONFIG_ULP_COPROC_TYPE_LP_CORE``。:ref:`CONFIG_ULP_COPROC_RESERVE_MEM` 选项为 ULP 保留 RTC 内存，因此必须设置为一个足够大的值，以存储 ULP LP 内核代码和数据。如果应用程序组件包含多个 ULP 程序，那么 RTC 内存的大小必须足够容纳其中最大的程序。
+1. 在 menuconfig 中启用 :ref:`CONFIG_ULP_COPROC_ENABLED`，并在 ``ULP Coprocessor types`` 菜单中勾选 :ref:`CONFIG_ULP_COPROC_TYPE_LP_CORE`。:ref:`CONFIG_ULP_COPROC_RESERVE_MEM` 选项为 ULP 保留 RTC 内存，因此必须设置为一个足够大的值，以存储 ULP LP 内核代码和数据。如果应用程序组件包含多个 ULP 程序，那么 RTC 内存的大小必须足够容纳其中最大的程序。
 
 2. 按照常规步骤构建应用程序（例如 ``idf.py app``）。
 
@@ -210,8 +210,8 @@ ULP LP 内核协处理器如何启动取决于 :cpp:type:`ulp_lp_core_cfg_t` 中
 ULP 有以下唤醒源：
     * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_HP_CPU` - LP 内核可以被 HP CPU 唤醒。
     * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_LP_TIMER` - LP 内核可以被 LP 定时器唤醒。
-    * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_ETM` - LP 内核可以被 ETM 事件唤醒。（暂不支持）
-    * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_LP_IO` - 当 LP IO 电平变化时，LP 内核会被唤醒。（暂不支持）
+    * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_ETM` - LP 内核可以被 ETM 事件唤醒。
+    * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_LP_IO` - 当 LP IO 电平变化时，LP 内核会被唤醒。
     * :c:macro:`ULP_LP_CORE_WAKEUP_SOURCE_LP_UART` - 当 LP UART 在不同模式下接收到唤醒数据时，LP 内核会被唤醒。
 
 ULP 被唤醒时会经历以下步骤：
@@ -237,6 +237,7 @@ ULP LP 内核支持的外设
     * LP I2C
     * LP UART
     :SOC_LP_SPI_SUPPORTED: * LP SPI
+    :SOC_LP_MAILBOX_SUPPORTED: * LP 邮箱
 
 .. only:: CONFIG_ESP_ROM_HAS_LP_ROM
 
@@ -298,7 +299,7 @@ ULP LP 内核的时钟源来自系统时钟 ``LP_FAST_CLK``，详情请参见 `�
 
 * 通过共享变量共享程序状态：如 :ref:`ulp-lp-core-access-variables` 所述，主 CPU 和 ULP 内核都可以轻松访问 RTC 内存中的全局变量。若想了解 ULP 内核的运行状态，可以将状态信息从 ULP 写入变量中，并通过主 CPU 读取信息。这种方法的缺点在于它需要主 CPU 一直处于唤醒状态，而这通常很难实现。另外，若主 CPU 一直处于唤醒状态，可能会掩盖某些问题，因为部分问题只会在特定电源域断电时发生。
 
-* 紧急处理程序：当检测到异常时，LP 内核的紧急处理程序会把 LP 内核寄存器的状态通过 LP UART 发送出去。将 :ref:`CONFIG_ULP_PANIC_OUTPUT_ENABLE` 选项设置为 ``y``，可以启用紧急处理程序。禁用此选项将减少 LP 内核应用程序的 LP-RAM 使用量。若想从紧急转储中解析栈回溯，可以使用 ``idf.py monitor``。
+* 紧急处理程序：当检测到异常时，LP 内核的紧急处理程序会把 LP 内核寄存器的状态通过 LP UART 发送出去。将 ``CONFIG_ULP_PANIC_OUTPUT_ENABLE`` 选项设置为 ``y``，可以启用紧急处理程序。禁用此选项将减少 LP 内核应用程序的 LP-RAM 使用量。若想从紧急转储中解析栈回溯，可以使用 ``idf.py monitor``。
 
 .. warning::
 
@@ -391,6 +392,7 @@ LP 内核调试特性
     - :example:`system/ulp/lp_core/lp_uart/lp_uart_echo` 展示了低功耗内核上运行的 LP UART 驱动程序如何读取并回显写入串行控制台的数据。
     - :example:`system/ulp/lp_core/lp_uart/lp_uart_print` 展示了如何在低功耗内核上使用串口打印功能。
     - :example:`system/ulp/lp_core/lp_uart/lp_uart_char_seq_wakeup` 展示了如何使用 LP UART 特定字符序列唤醒模式触发唤醒。
+    - :example:`system/ulp/lp_core/lp_mailbox` 展示了如何在 HP 内核和 LP 内核之间使用邮箱进行同步和异步通信。根据目标设备的不同，示例实现可能会使用硬件邮箱控制器（如果可用），或者使用基于中断的纯软件实现。
     - :example:`system/ulp/lp_core/interrupt` 展示了如何在 LP 内核上注册中断处理程序，接收由主 CPU 触发的中断。
     - :example:`system/ulp/lp_core/gpio_intr_pulse_counter` 展示了如何在主 CPU 处于 Deep-sleep 模式时，使用 GPIO 中断为脉冲计数。
     - :example:`system/ulp/lp_core/build_system/` 演示了如何为 ULP 应用程序添加自定义的 ``CMakeLists.txt`` 文件。
@@ -423,6 +425,7 @@ LP 内核 API 参考
 .. include-build-file:: inc/ulp_lp_core_gpio.inc
 .. include-build-file:: inc/ulp_lp_core_i2c.inc
 .. include-build-file:: inc/ulp_lp_core_uart.inc
+.. include-build-file:: inc/ulp_lp_core_mailbox.inc
 .. include-build-file:: inc/ulp_lp_core_print.inc
 .. include-build-file:: inc/ulp_lp_core_interrupts.inc
 

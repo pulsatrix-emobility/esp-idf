@@ -21,8 +21,9 @@ from ecdsa.util import sigdecode_der
 from pytest_embedded import Dut
 from pytest_embedded_idf.utils import idf_parametrize
 
-# TODO: Enable for ESP32-C5 once support is stable
-SUPPORTED_TARGETS = ['esp32c6', 'esp32h2']
+TEST_TARGETS = ['esp32c6', 'esp32c5', 'esp32c61', 'esp32h2']
+
+TEST_TARGETS_OTA = ['esp32c6', 'esp32c5', 'esp32c61']
 
 TEST_MSG = 'hello world'
 
@@ -36,7 +37,7 @@ key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_certs/
 
 
 @pytest.mark.generic
-@idf_parametrize('target', SUPPORTED_TARGETS, indirect=['target'])
+@idf_parametrize('target', TEST_TARGETS, indirect=['target'])
 def test_tee_cli_secure_storage(dut: Dut) -> None:
     # Dumping the REE binary size
     binary_file = os.path.join(dut.app.binary_path, 'tee_cli.bin')
@@ -76,9 +77,10 @@ def test_tee_cli_secure_storage(dut: Dut) -> None:
 
         dut.write(f'tee_sec_stg_encrypt {sec_stg_key_ids.get(i)} {test_msg_hash}')
         test_msg_cipher = dut.expect(r'Ciphertext -\s*([0-9a-fA-F]{64})', timeout=30)[1].decode()
+        test_msg_iv = dut.expect(r'IV -\s*([0-9a-fA-F]{24})', timeout=30)[1].decode()
         test_msg_tag = dut.expect(r'Tag -\s*([0-9a-fA-F]{32})', timeout=30)[1].decode()
 
-        dut.write(f'tee_sec_stg_decrypt {sec_stg_key_ids.get(i)} {test_msg_cipher} {test_msg_tag}')
+        dut.write(f'tee_sec_stg_decrypt {sec_stg_key_ids.get(i)} {test_msg_cipher} {test_msg_iv} {test_msg_tag}')
         test_msg_decipher = dut.expect(r'Decrypted plaintext -\s*([0-9a-fA-F]{64})', timeout=30)[1].decode()
 
         assert test_msg_decipher == test_msg_hash
@@ -122,7 +124,7 @@ def verify_att_token_signature(att_tk: str) -> Any:
 
 
 @pytest.mark.generic
-@idf_parametrize('target', SUPPORTED_TARGETS, indirect=['target'])
+@idf_parametrize('target', TEST_TARGETS, indirect=['target'])
 def test_tee_cli_attestation(dut: Dut) -> None:
     # Dumping the REE binary size
     binary_file = os.path.join(dut.app.binary_path, 'tee_cli.bin')
@@ -164,7 +166,7 @@ def start_https_server(ota_image_dir: str, server_ip: str, server_port: int) -> 
 
 
 @pytest.mark.wifi_high_traffic
-@idf_parametrize('target', SUPPORTED_TARGETS, indirect=['target'])
+@idf_parametrize('target', TEST_TARGETS_OTA, indirect=['target'])
 def test_tee_cli_secure_ota_wifi(dut: Dut) -> None:
     """
     This is a positive test case, which downloads complete binary file multiple number of times.
@@ -179,6 +181,13 @@ def test_tee_cli_secure_ota_wifi(dut: Dut) -> None:
     server_port = 8001
     tee_bin = 'esp_tee/esp_tee.bin'
     user_bin = 'tee_cli.bin'
+    prev_tee_offs = None
+    prev_app_offs = None
+
+    # Fetch Wi-Fi credentials
+    env_name = 'wifi_high_traffic'
+    ap_ssid = get_env_config_variable(env_name, 'ap_ssid')
+    ap_password = get_env_config_variable(env_name, 'ap_password')
 
     # Start server
     thread1 = multiprocessing.Process(target=start_https_server, args=(dut.app.binary_path, '0.0.0.0', server_port))
@@ -190,22 +199,31 @@ def test_tee_cli_secure_ota_wifi(dut: Dut) -> None:
         # start test
         for i in range(iterations):
             # Boot up sequence checks
-            dut.expect('Loaded TEE app from partition at offset', timeout=30)
-            dut.expect('Loaded app from partition at offset', timeout=30)
+            curr_tee_offs = (
+                dut.expect(r'Loaded TEE app from partition at offset (0x[0-9a-fA-F]+)', timeout=30).group(1).decode()
+            )
+            curr_app_offs = (
+                dut.expect(r'Loaded app from partition at offset (0x[0-9a-fA-F]+)', timeout=30).group(1).decode()
+            )
+
+            # Check for offset change across iterations
+            if prev_tee_offs is not None and curr_tee_offs == prev_tee_offs:
+                raise ValueError('Updated TEE app is not running')
+
+            prev_tee_offs = curr_tee_offs
+            if prev_app_offs is None:
+                prev_app_offs = curr_app_offs
 
             # Starting the test
             dut.expect('ESP-TEE: Secure services demonstration', timeout=30)
             time.sleep(2)
 
             # Connecting to Wi-Fi
-            env_name = 'wifi_high_traffic'
-            ap_ssid = get_env_config_variable(env_name, 'ap_ssid')
-            ap_password = get_env_config_variable(env_name, 'ap_password')
             dut.write(f'wifi_connect {ap_ssid} {ap_password}')
 
             # Fetch the DUT IP address
             try:
-                ip_address = dut.expect(r'got ip:(\d+\.\d+\.\d+\.\d+)[^\d]', timeout=30)[1].decode()
+                ip_address = dut.expect(r'got ip:(\d+\.\d+\.\d+\.\d+)[^\d]', timeout=60)[1].decode()
                 print(f'Connected to AP/Ethernet with IP: {ip_address}')
             except pexpect.exceptions.TIMEOUT:
                 raise ValueError('ENV_TEST_FAILURE: Cannot connect to AP')
@@ -216,6 +234,11 @@ def test_tee_cli_secure_ota_wifi(dut: Dut) -> None:
             if i == (iterations - 1):
                 dut.write(f'user_ota https://{host_ip}:{str(server_port)}/{user_bin}')
                 dut.expect('OTA Succeed, Rebooting', timeout=150)
+                curr_app_offs = (
+                    dut.expect(r'Loaded app from partition at offset (0x[0-9a-fA-F]+)', timeout=30).group(1).decode()
+                )
+                if curr_app_offs == prev_app_offs:
+                    raise ValueError('Updated user app is not running')
             else:
                 dut.write(f'tee_ota https://{host_ip}:{str(server_port)}/{tee_bin}')
                 dut.expect('esp_tee_ota_end succeeded', timeout=150)
