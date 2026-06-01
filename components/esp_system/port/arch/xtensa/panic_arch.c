@@ -29,6 +29,10 @@
 #endif
 #endif // CONFIG_IDF_TARGET_ESP32
 
+// CrashLog hook — strong override in `components/logsink/`. See
+// `docs/logging/crash-log-publisher-plan.md`.
+extern void log_CrashLog(bool panic, const char *format, ...);
+
 void panic_print_registers(const void *f, int core)
 {
     XtExcFrame *frame = (XtExcFrame *) f;
@@ -60,6 +64,13 @@ void panic_print_registers(const void *f, int core)
         }
     }
 
+    log_CrashLog(true,
+                 "Register Dump from Core %d (1/2): PC=0x%08X, PS=0x%08X, SAR=0x%02X, EXCCAUSE=0x%08X, EXCVADDR=0x%08X, LBEG=0x%08X, LEND=0x%08X, LCOUNT=0x%08X\n",
+                 core, regs[1], regs[2], regs[19], regs[20], regs[21], regs[22], regs[23], regs[24]);
+    log_CrashLog(true,
+                 "Register Dump from Core %d (2/2): A0=0x%08X, A1(SP)=0x%08X, A2=0x%08X, A3=0x%08X, A4=0x%08X, A5=0x%08X, A6=0x%08X, A7=0x%08X, A8=0x%08X, A9=0x%08X, A10=0x%08X, A11=0x%08X, A12=0x%08X, A13=0x%08X, A14=0x%08X, A15=0x%08X\n",
+                 core, regs[3], regs[4], regs[5], regs[6], regs[7], regs[8], regs[9], regs[10], regs[11], regs[12], regs[13], regs[14], regs[15], regs[16], regs[17], regs[18]);
+
     // If the core which triggers the interrupt watchpoint was in ISR context, dump the epc registers.
     if (xPortInterruptedFromISRContext()
 #if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
@@ -90,6 +101,8 @@ void panic_print_registers(const void *f, int core)
         __asm__("rsr.epc4 %0" : "=a"(__value));
         panic_print_str("  EPC4    : 0x");
         panic_print_hex(__value);
+
+        log_CrashLog(true, "Interrupt Context on Core %d: This Core was running in ISR context when the panic occurred.\n", core);
     }
 }
 
@@ -116,6 +129,8 @@ static void print_illegal_instruction_details(const void *f)
     panic_print_hex(*(pepc + 1));
     panic_print_str(" ");
     panic_print_hex(*(pepc + 2));
+
+    log_CrashLog(true, "Illegal OpCode with Memory Dump at 0x%X: %X %X %X\n", epc, *pepc, *(pepc + 1), *(pepc + 2));
 }
 
 static void print_debug_exception_details(const void *f)

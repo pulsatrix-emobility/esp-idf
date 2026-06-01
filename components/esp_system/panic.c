@@ -72,6 +72,17 @@
 bool g_panic_abort = false;
 char *g_panic_abort_details = NULL;
 
+// CrashLog hooks — strong overrides provided by `components/logsink/`. See
+// `docs/logging/crash-log-publisher-plan.md`. log_CrashLog is invoked from
+// panic_print_* sites in panic.c, panic_arch.c, and debug_helpers.c to fan
+// panic-time text into the .noinit log ring. store_CrashLog is invoked
+// after esp_core_dump_write to set the freeze magic. Both have empty weak
+// defaults so projects that don't link logsink still compile.
+extern void log_CrashLog(bool panic, const char *format, ...);
+extern void store_CrashLog(void);
+void __attribute__((weak)) log_CrashLog(bool panic, const char *format, ...) {}
+void __attribute__((weak)) store_CrashLog(void) {}
+
 static wdt_hal_context_t rtc_wdt_ctx = RWDT_HAL_CONTEXT_DEFAULT();
 
 static uint32_t DRAM_ATTR g_panic_entry_count[CONFIG_FREERTOS_NUMBER_OF_CORES] = {0}; // Number of times panic handler has been entered per core since multiple cores can enter the panic handler simultaneously
@@ -173,6 +184,7 @@ void panic_print_dec(int d)
 static void print_abort_details(const void *f)
 {
     panic_print_str(g_panic_abort_details);
+    log_CrashLog(true, "Abort() function called within the program, with these details: %s\n", g_panic_abort_details);
 }
 
 /********************** Panic handler watchdog timer functions **********************/
@@ -327,10 +339,12 @@ void esp_panic_handler(panic_info_t *info)
         panic_print_str(" panic'ed (");
         panic_print_str(info->reason);
         panic_print_str("). ");
+        log_CrashLog(true, "Guru Meditation Error: Core %d panic'ed (%s).\n", info->core, info->reason);
     }
 
     if (info->description) {
         panic_print_str(info->description);
+        log_CrashLog(true, "%s\n", info->description);
     }
 
     panic_print_str("\r\n");
@@ -412,6 +426,12 @@ void esp_panic_handler(panic_info_t *info)
         s_dumping_core = false;
     }
 #endif /* CONFIG_ESP_COREDUMP_ENABLE */
+
+    // Set the .noinit freeze magic so logsink_crash_publish.cpp can detect
+    // and ship the captured ring on the next boot. Runs after coredump so
+    // panic-time DRAM (incl. the ring) is preserved in the binary dump
+    // regardless of whether MQTT publish later succeeds.
+    store_CrashLog();
 
 #if CONFIG_ESP_SYSTEM_PANIC_GDBSTUB
     panic_print_str("Entering gdb stub now.\r\n");
