@@ -239,7 +239,10 @@ static inline void disable_all_wdts(void)
 static void print_abort_details(const void *f)
 {
     panic_print_str(g_panic_abort_details);
-    log_CrashLog(true, "Abort() function called within the program, with these details: %S\n", g_panic_abort_details);
+    // %s, not %S: newlib treats %S as %ls, so g_panic_abort_details (a char*) would be read as a
+    // wchar_t* - four bytes per character, running past the end of the string until it happens to
+    // hit a 4-byte zero, inside the panic handler.
+    log_CrashLog(true, "Abort() function called within the program, with these details: %s\n", g_panic_abort_details);
 }
 
 // Control arrives from chip-specific panic handler, environment prepared for
