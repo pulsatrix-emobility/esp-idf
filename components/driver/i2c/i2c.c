@@ -673,6 +673,17 @@ static esp_err_t i2c_hw_fsm_reset(i2c_port_t i2c_num)
     i2c_hal_get_timing_config(&i2c_context[i2c_num].hal, &timing_config);
     i2c_ll_master_get_filter(i2c_context[i2c_num].hal.dev, &filter_cfg);
 
+    // pulsatrix (DEV-3803): disconnect the I2C interrupt while the bus clock is gated below. The interrupt is
+    // level-type, and with the clock gated the ISR's write to INT_CLR does not take effect (field crash dumps show
+    // the status still at END_DETECT after the clear), so an interrupt pending at the gate re-fires forever. If the
+    // ISR runs on the core that executes this reset, nothing can ungate the clock again: the core is lost to the
+    // ISR and the task watchdog reboots. Disabling via the interrupt matrix works from either core and does not
+    // depend on the peripheral's frozen registers.
+    intr_handle_t intr_handle = p_i2c_obj[i2c_num] ? p_i2c_obj[i2c_num]->intr_handle : NULL;
+    if (intr_handle) {
+        esp_intr_disable(intr_handle);
+    }
+
     //to reset the I2C hw module, we need re-enable the hw
     i2c_hw_disable(i2c_num);
     i2c_master_clear_bus(i2c_num);
@@ -683,6 +694,11 @@ static esp_err_t i2c_hw_fsm_reset(i2c_port_t i2c_num)
     i2c_ll_clear_intr_mask(i2c_context[i2c_num].hal.dev, I2C_LL_INTR_MASK);
     i2c_hal_set_timing_config(&i2c_context[i2c_num].hal, &timing_config);
     i2c_ll_master_set_filter(i2c_context[i2c_num].hal.dev, filter_cfg);
+
+    // Reconnect only now: the peripheral is clocked again, and its interrupt enable and status are cleared.
+    if (intr_handle) {
+        esp_intr_enable(intr_handle);
+    }
 #else
     i2c_ll_master_fsm_rst(i2c_context[i2c_num].hal.dev);
     i2c_master_clear_bus(i2c_num);
