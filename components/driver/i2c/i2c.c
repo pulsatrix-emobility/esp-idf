@@ -541,6 +541,15 @@ static void IRAM_ATTR i2c_isr_handler_default(void *arg)
     BaseType_t HPTaskAwoken = pdFALSE;
     BaseType_t HPTaskAwokenCallee = pdFALSE;
     if (p_i2c->mode == I2C_MODE_MASTER) {
+        // pulsatrix (DEV-3830): pairs with the detach at the end of i2c_master_cmd_begin(). The command link
+        // lives in that caller's stack frame, so once the detach has run (interrupts masked under
+        // this lock) this invocation must not touch cmd_link, status or the event queue.
+        I2C_ENTER_CRITICAL_ISR(&(i2c_context[i2c_num].spinlock));
+        i2c_ll_get_intr_mask(i2c_context[i2c_num].hal.dev, &int_mask);
+        if (int_mask == 0) {
+            I2C_EXIT_CRITICAL_ISR(&(i2c_context[i2c_num].spinlock));
+            return;
+        }
         if (p_i2c->status == I2C_STATUS_WRITE) {
             i2c_hal_master_handle_tx_event(&(i2c_context[i2c_num].hal), &evt_type);
         } else if (p_i2c->status == I2C_STATUS_READ) {
@@ -563,12 +572,14 @@ static void IRAM_ATTR i2c_isr_handler_default(void *arg)
             }
         } else {
             // Do nothing if there is no proper event.
+            I2C_EXIT_CRITICAL_ISR(&(i2c_context[i2c_num].spinlock));
             return;
         }
         i2c_cmd_evt_t evt = {
             .type = I2C_CMD_EVT_ALIVE
         };
         xQueueSendFromISR(p_i2c->cmd_evt_queue, &evt, &HPTaskAwoken);
+        I2C_EXIT_CRITICAL_ISR(&(i2c_context[i2c_num].spinlock));
     }
 #if SOC_I2C_SUPPORT_SLAVE
     else {
@@ -1618,7 +1629,20 @@ esp_err_t i2c_master_cmd_begin(i2c_port_t i2c_num, i2c_cmd_handle_t cmd_handle, 
             break;
         }
     }
+    // pulsatrix (DEV-3830): detach the command link from the ISR before returning, on every path. Its
+    // descriptors, including each read command's destination pointer, live in the caller's stack
+    // frame (i2c_cmd_link_create_static), so an ISR still following cmd_link after this function
+    // returns writes RX-FIFO bytes (0xFF on a dead bus) into whatever reuses that frame - the 0xFF
+    // fill seen in field crash dumps. The lock waits out a handler in flight on the other core; any
+    // later one sees the mask cleared and bails out. Disabling the CPU interrupt alone would not
+    // do: it neither waits for an in-flight handler nor stops it re-arming int_ena. The next
+    // transaction re-arms the interrupts when it starts.
+    I2C_ENTER_CRITICAL(&(i2c_context[i2c_num].spinlock));
+    i2c_ll_disable_intr_mask(i2c_context[i2c_num].hal.dev, I2C_LL_INTR_MASK);
+    i2c_ll_clear_intr_mask(i2c_context[i2c_num].hal.dev, I2C_LL_INTR_MASK);
+    p_i2c->cmd_link.head = NULL;
     p_i2c->status = I2C_STATUS_DONE;
+    I2C_EXIT_CRITICAL(&(i2c_context[i2c_num].spinlock));
 #ifdef CONFIG_PM_ENABLE
     esp_pm_lock_release(p_i2c->pm_lock);
 #endif
