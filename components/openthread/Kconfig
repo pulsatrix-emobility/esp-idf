@@ -26,6 +26,16 @@ menu "OpenThread"
             default 5
             help
                 The priority of OpenThread task.
+
+        config OPENTHREAD_PRIORITY_TASK_QUEUE_SIZE
+            int "Size of OpenThread priority task queue"
+            default 3
+            range 1 10
+            help
+                The OpenThread priority task queue holds tasks and events that must be processed.
+                Posting to this queue will assert if it is full. Increase this size, or post
+                droppable work with esp_openthread_task_queue_post() using
+                ESP_OPENTHREAD_TASK_QUEUE_TYPE_NORMAL instead.
     endmenu
 
     menu "Thread Version Message"
@@ -249,7 +259,7 @@ menu "OpenThread"
 
         config OPENTHREAD_BORDER_ROUTER
             bool "Enable Border Router"
-            depends on OPENTHREAD_FTD
+            depends on OPENTHREAD_FTD && OPENTHREAD_PLATFORM_NETIF
             default n
             help
                 Select this option to enable border router features in OpenThread.
@@ -299,7 +309,7 @@ menu "OpenThread"
 
         config OPENTHREAD_DNS64_CLIENT
             bool "Enable DNS64 Client"
-            depends on LWIP_IPV4
+            depends on LWIP_IPV4 && OPENTHREAD_PLATFORM_NETIF
             select LWIP_HOOK_DNS_EXTERNAL_RESOLVE_SELECT_CUSTOM
             default n
             help
@@ -323,7 +333,7 @@ menu "OpenThread"
             bool "Enable link metrics feature"
             default n
             select IEEE802154_TIMING_OPTIMIZATION if IEEE802154_ENABLED
-            select OPENTHREAD_TIMING_OPTIMIZATION
+            select OPENTHREAD_TIMING_OPTIMIZATION if OPENTHREAD_RADIO_NATIVE
             help
                 Select this option to enable link metrics feature
 
@@ -427,17 +437,16 @@ menu "OpenThread"
         endmenu
 
         menu "Thread Memory Allocation"
-            depends on (SPIRAM_USE_CAPS_ALLOC || SPIRAM_USE_MALLOC)
             config OPENTHREAD_PLATFORM_MALLOC_CAP_SPIRAM
+                depends on (SPIRAM_USE_CAPS_ALLOC || SPIRAM_USE_MALLOC)
                 bool 'Allocate memory from PSRAM'
                 default y
                 help
                     Select this option to allocate buffer from PSRAM for Thread
 
             config OPENTHREAD_PLATFORM_MSGPOOL_MANAGEMENT
-                bool 'Allocate message pool buffer from PSRAM'
-                depends on OPENTHREAD_PLATFORM_MALLOC_CAP_SPIRAM
-                default y
+                bool 'Allocate message pool buffer from platform'
+                default n
                 help
                     If enabled, the message pool is managed by platform defined logic.
         endmenu
@@ -471,8 +480,8 @@ menu "OpenThread"
 
             config OPENTHREAD_NUM_MESSAGE_BUFFERS
                 int "The number of openthread message buffers"
-                default 65 if !OPENTHREAD_PLATFORM_MSGPOOL_MANAGEMENT
-                default 1024 if OPENTHREAD_PLATFORM_MSGPOOL_MANAGEMENT
+                default 65 if !OPENTHREAD_PLATFORM_MALLOC_CAP_SPIRAM
+                default 1024 if OPENTHREAD_PLATFORM_MALLOC_CAP_SPIRAM
 
             config OPENTHREAD_XTAL_ACCURACY
                 int "The accuracy of the XTAL"
@@ -507,6 +516,40 @@ menu "OpenThread"
                     The maximum number of backoffs the CSMA-CA algorithm will attempt before declaring a channel access
                     failure.
         endmenu
+
+        config OPENTHREAD_PLATFORM_NETIF
+            bool "Enable esp_netif/lwIP glue"
+            depends on OPENTHREAD_FTD || OPENTHREAD_MTD
+            default y
+            help
+                Enable the default ESP-IDF OpenThread integration which creates an
+                OpenThread esp_netif, attaches the esp_netif glue, and enables
+                lwIP-specific DNS/netif handling.
+
+        config OPENTHREAD_MULTIPAN_HOST_ENABLE
+            bool "Enable Multipan Host"
+            depends on OPENTHREAD_RADIO_SPINEL_UART
+            default n
+            help
+                Enable MULTI-PAN host support over the UART radio spinel interface.
+                The host talks to a multipan RCP and demultiplexes Spinel frames by
+                interface ID.
+
+        config OPENTHREAD_MULTIPAN_RCP_ENABLE
+            bool "Enable Multipan RCP"
+            depends on (OPENTHREAD_RADIO && IEEE802154_MULTI_PAN_ENABLE)
+            default n
+            help
+                Enable MULTI-PAN RCP support. This also enables multiple OpenThread
+                instances. Currently only radio devices are supported.
+
+        config OPENTHREAD_MULTIPLE_INTERFACES_COUNT
+            int "The number of multiple interfaces"
+            depends on OPENTHREAD_MULTIPAN_HOST_ENABLE || OPENTHREAD_MULTIPAN_RCP_ENABLE
+            default 2
+            range 2 3
+            help
+                Number of Spinel interfaces used by the multipan host or RCP.
 
     endmenu
 
@@ -604,6 +647,13 @@ menu "OpenThread"
             help
                 The maximum number of backoffs the CSMA-CA algorithm will attempt before declaring a channel access
                 failure.
+
+        config OPENTHREAD_SPINEL_UART_DRIVER_BUFFER_SIZE
+            int "UART driver buffer size for radio spinel interface"
+            depends on OPENTHREAD_SPINEL_ONLY || OPENTHREAD_RADIO_SPINEL_UART
+            default 1024
+            help
+                RX buffer size passed to uart_driver_install() for the radio spinel UART interface.
     endmenu
 
     menuconfig OPENTHREAD_DEBUG

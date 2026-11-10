@@ -17,6 +17,8 @@
 
 #include <esp_http_server.h>
 #include "osal.h"
+#include "freertos/semphr.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -129,9 +131,7 @@ struct httpd_data {
     httpd_config_t config;                  /*!< HTTPD server configuration */
     int listen_fd;                          /*!< Server listener FD */
     int ctrl_fd;                            /*!< Ctrl message receiver FD */
-#if CONFIG_HTTPD_QUEUE_WORK_BLOCKING
-    SemaphoreHandle_t ctrl_sock_semaphore;  /*!< Ctrl socket semaphore */
-#endif
+    SemaphoreHandle_t ctrl_sock_semaphore;  /*!< Ctrl mbox slot reservation (sized to LWIP_UDP_RECVMBOX_SIZE) */
     int msg_fd;                             /*!< Ctrl message sender FD */
     struct thread_data hd_td;               /*!< Information for the HTTPD thread */
     struct sock_db *hd_sd;                  /*!< The socket database */
@@ -533,17 +533,23 @@ int httpd_default_recv(httpd_handle_t hd, int sockfd, char *buf, size_t buf_len,
 
 
 /**
- * @brief   This function is for responding a WebSocket handshake
+ * @brief   Respond to a WebSocket opening handshake.
+ *
+ * On any RFC 6455 §4.2.1 handshake validation failure (missing Host,
+ * malformed Sec-WebSocket-Key, unsupported Sec-WebSocket-Version, etc.),
+ * this function sends the appropriate HTTP error response (400 Bad Request
+ * or 426 Upgrade Required) to the client itself and returns ESP_FAIL.
+ * Callers MUST NOT attempt to send another response on the ESP_FAIL path.
  *
  * @param[in] req                       Pointer to handshake request that will be handled
  * @param[in] supported_subprotocol     Pointer to the subprotocol supported by this URI
  * @return
- *  - ESP_OK                        : When handshake is successful
- *  - ESP_ERR_NOT_FOUND             : When some headers (Sec-WebSocket-*) are not found
- *  - ESP_ERR_INVALID_VERSION       : The WebSocket version is not "13"
- *  - ESP_ERR_INVALID_STATE         : Handshake was done beforehand
- *  - ESP_ERR_INVALID_ARG           : Argument is invalid (null or non-WebSocket)
- *  - ESP_FAIL                      : Socket failures
+ *  - ESP_OK                        : Handshake successful; 101 Switching Protocols sent
+ *  - ESP_ERR_INVALID_ARG           : @p req or its aux pointer is NULL
+ *  - ESP_ERR_INVALID_STATE         : Handshake was already performed on this session
+ *  - ESP_FAIL                      : Handshake-validation failure (HTTP error already sent),
+ *                                    memory allocation failure, hash/encode failure,
+ *                                    or socket send failure
  */
 esp_err_t httpd_ws_respond_server_handshake(httpd_req_t *req, const char *supported_subprotocol);
 
@@ -591,6 +597,8 @@ esp_err_t httpd_sess_close_lru_direct(struct httpd_data *hd);
  * @}
  */
 
+#ifdef CONFIG_HTTPD_ENABLE_EVENTS
+
 #if CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT == -1
 #define ESP_HTTP_SERVER_EVENT_POST_TIMEOUT portMAX_DELAY
 #else
@@ -602,6 +610,18 @@ esp_err_t httpd_sess_close_lru_direct(struct httpd_data *hd);
  *
  */
 void esp_http_server_dispatch_event(int32_t event_id, const void* event_data, size_t event_data_size);
+
+#else // CONFIG_HTTPD_ENABLE_EVENTS
+static inline void esp_http_server_dispatch_event(int32_t event_id, const void* event_data, size_t event_data_size)
+{
+    // Events disabled, do nothing
+    (void) event_id;
+    (void) event_data;
+    (void) event_data_size;
+}
+#endif // CONFIG_HTTPD_ENABLE_EVENTS
+
+esp_err_t httpd_crypto_sha1(const uint8_t *data, size_t data_len, uint8_t *hash);
 
 #ifdef __cplusplus
 }

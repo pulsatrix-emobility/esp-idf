@@ -1,15 +1,17 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <stdint.h>
+#include <string.h>
 #include "sdkconfig.h"
 #include "esp_timer.h"
 #include "esp_clk_tree.h"
 #include "esp_cpu.h"
 #include "esp_private/esp_clk.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -23,11 +25,19 @@
 // Determine which timer to use as timestamp source
 #if CONFIG_ESP_TRACE_TS_SOURCE_CCOUNT
 #define TS_USE_CCOUNT 1
+#elif CONFIG_ESP_TRACE_TS_SOURCE_SYSTIMER
+#define TS_USE_SYSTIMER 1
 #elif CONFIG_ESP_TRACE_TS_SOURCE_ESP_TIMER
 #define TS_USE_ESP_TIMER 1
 #else
 #define TS_USE_TIMERGROUP 1
 #endif
+
+#if TS_USE_SYSTIMER
+#include "hal/systimer_ll.h"
+#include "soc/systimer_struct.h"
+#include "esp_private/systimer.h"
+#endif // TS_USE_SYSTIMER
 
 #if TS_USE_TIMERGROUP
 #include "driver/gptimer.h"
@@ -50,13 +60,17 @@ static gptimer_handle_t s_trace_gptimer;
 #define ESP_TRACE_TIMESTAMP_FREQ  (CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000)
 #endif // TS_USE_CCOUNT
 
+#if TS_USE_SYSTIMER
+#define ESP_TRACE_TIMESTAMP_FREQ  ((uint32_t)systimer_us_to_ticks(1000000))
+#endif // TS_USE_SYSTIMER
+
 // System Frequency.
 #define ESP_TRACE_CPU_FREQ        (esp_clk_cpu_freq())
 
 uint32_t esp_trace_timestamp_init(void)
 {
     /* We only need to initialize something if we use Timer Group.
-     * esp_timer and ccount can be used as is.
+     * esp_timer, systimer, and ccount can be used as is.
      */
 #if TS_USE_TIMERGROUP
     // get clock source frequency
@@ -81,7 +95,12 @@ uint32_t esp_trace_timestamp_init(void)
 
 uint32_t esp_trace_timestamp_get(void)
 {
-#if TS_USE_TIMERGROUP
+#if TS_USE_SYSTIMER
+    /* Set the "update" bit and wait for acknowledgment */
+    systimer_ll_counter_snapshot(&SYSTIMER, SYSTIMER_COUNTER_ESPTIMER);
+    while (!systimer_ll_is_counter_value_valid(&SYSTIMER, SYSTIMER_COUNTER_ESPTIMER)) {}
+    return systimer_ll_get_counter_value_low(&SYSTIMER, SYSTIMER_COUNTER_ESPTIMER);
+#elif TS_USE_TIMERGROUP
     uint64_t ts = 0;
     gptimer_get_raw_count(s_trace_gptimer, &ts);
     return (uint32_t)ts; // return lower part of counter value
@@ -131,6 +150,11 @@ void esp_trace_lock_init(esp_trace_lock_t *lock)
 
 esp_err_t esp_trace_lock_take(esp_trace_lock_t *lock, uint32_t tmo_us)
 {
+    /* Skip tmo_init's esp_timer read when the lock is free. */
+    if (portTRY_ENTER_CRITICAL(&lock->mux, 0) == pdTRUE) {
+        return ESP_OK;
+    }
+
     esp_trace_tmo_t tmo;
     esp_trace_tmo_init(&tmo, tmo_us);
 
@@ -151,4 +175,105 @@ esp_err_t esp_trace_lock_give(esp_trace_lock_t *lock)
 {
     portEXIT_CRITICAL(&lock->mux);
     return ESP_OK;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//////////////////////////////// RING BUFFER //////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+static inline uint32_t rb_mask(const esp_trace_rb_t *rb)
+{
+    return rb->max_size - 1;
+}
+
+static inline void rb_advance_tail(esp_trace_rb_t *rb, uint32_t n)
+{
+    rb->tail = (rb->tail + n) & rb_mask(rb);
+    rb->count -= n;
+}
+
+static inline void rb_advance_head(esp_trace_rb_t *rb, uint32_t n)
+{
+    rb->head = (rb->head + n) & rb_mask(rb);
+    rb->count += n;
+}
+
+esp_err_t esp_trace_rb_init(esp_trace_rb_t *rb, uint32_t size)
+{
+    rb->buffer = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!rb->buffer) {
+        return ESP_ERR_NO_MEM;
+    }
+    rb->max_size = size;
+    rb->count = 0;
+    rb->head = 0;
+    rb->tail = 0;
+    return ESP_OK;
+}
+
+esp_err_t esp_trace_rb_put(esp_trace_rb_t *rb, const uint8_t *data, uint32_t len)
+{
+    /* Drop the new record instead of overwriting old ones, so that the records
+     * in the buffer stay complete */
+    if (len > rb->max_size - rb->count) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    uint32_t head = rb->head;
+    uint32_t space_to_end = rb->max_size - head;
+
+    if (len <= space_to_end) {
+        memcpy(&rb->buffer[head], data, len);
+    } else {
+        memcpy(&rb->buffer[head], data, space_to_end);
+        memcpy(&rb->buffer[0], &data[space_to_end], len - space_to_end);
+    }
+
+    rb_advance_head(rb, len);
+
+    return ESP_OK;
+}
+
+uint32_t esp_trace_rb_get(esp_trace_rb_t *rb, uint8_t *data, uint32_t len)
+{
+    uint32_t available = rb->count;
+    if (available == 0 || len == 0) {
+        return 0;
+    }
+
+    uint32_t to_read = MIN(len, available);
+    uint32_t tail = rb->tail;
+    uint32_t cont = rb->max_size - tail;
+
+    if (to_read <= cont) {
+        memcpy(data, &rb->buffer[tail], to_read);
+    } else {
+        memcpy(data, &rb->buffer[tail], cont);
+        memcpy(&data[cont], &rb->buffer[0], to_read - cont);
+    }
+
+    rb_advance_tail(rb, to_read);
+
+    return to_read;
+}
+
+uint32_t esp_trace_rb_peek_contiguous(const esp_trace_rb_t *rb, const uint8_t **data)
+{
+    uint32_t used = rb->count;
+    if (used == 0) {
+        *data = NULL;
+        return 0;
+    }
+    *data = &rb->buffer[rb->tail];
+    uint32_t contiguous = rb->max_size - rb->tail;
+    return MIN(used, contiguous);
+}
+
+void esp_trace_rb_consume(esp_trace_rb_t *rb, uint32_t len)
+{
+    rb_advance_tail(rb, len);
 }

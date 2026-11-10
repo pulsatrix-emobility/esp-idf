@@ -168,7 +168,7 @@ static void rtc_clk_bbpll_configure(soc_xtal_freq_t xtal_freq, int pll_freq)
  * Must satisfy: cpu_freq = XTAL_FREQ / div.
  * Does not disable the PLL.
  */
-static void rtc_clk_cpu_freq_to_xtal(int cpu_freq, int div)
+FORCE_IRAM_ATTR static void rtc_clk_cpu_freq_to_xtal(int cpu_freq, int div)
 {
     // let f_cpu = f_ahb
     clk_ll_ahb_set_divider(1);
@@ -396,13 +396,8 @@ void rtc_clk_cpu_freq_set_xtal_for_sleep(void)
     rtc_clk_cpu_set_to_default_config();
 }
 
-void rtc_clk_cpu_freq_to_pll_and_pll_lock_release(int cpu_freq_mhz)
+void rtc_clk_modem_pll_lock_release(void)
 {
-    if (cpu_freq_mhz == 96 || cpu_freq_mhz == 48) {
-        rtc_clk_cpu_freq_to_pll_mhz(cpu_freq_mhz);
-    // } else { // cpu_freq_mhz == 64
-    //     rtc_clk_cpu_freq_to_xtal_x2(cpu_freq_mhz, 1);
-    }
     clk_ll_cpu_clk_src_lock_release();
 }
 

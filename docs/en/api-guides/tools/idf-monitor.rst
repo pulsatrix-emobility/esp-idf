@@ -49,7 +49,7 @@ For easy interaction with IDF Monitor, use the keyboard shortcuts given in the t
      - Discard all incoming serial data while activated. Allows to quickly pause and examine log output without quitting the monitor.
    * - * Ctrl + L
      - Stop/resume log output saved to file
-     - Create a file in the project directory and the output is written to that file until this is disabled with the same keyboard shortcut (or IDF Monitor exits).
+     - Create a file in the current working directory and the output is written to that file until this is disabled with the same keyboard shortcut (or IDF Monitor exits).
    * - * Ctrl + I (or I)
      - Stop/resume printing timestamps
      - IDF Monitor can print a timestamp in the beginning of each line. The timestamp format can be changed by the ``--timestamp-format`` command line argument.
@@ -240,6 +240,13 @@ The ROM ELF file is automatically loaded from a location based on the ``IDF_PATH
 .. note::
 
     Set environment variable ``ESP_MONITOR_DECODE`` to ``0`` or call esp_idf_monitor with specific command line option: ``python -m esp_idf_monitor --disable-address-decoding`` to disable address decoding.
+
+.. _idf-monitor-target-detection:
+
+Automatic Target Detection
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default, ``idf.py monitor`` connects to the target that has been set for the project. However, on an unbuilt project where no target has been configured, it can connect to any target — it will automatically detect the chip on the default serial port and pass it to the monitor. This allows running ``idf.py monitor`` on a clean project without having to call ``idf.py set-target`` first.
 
 Target Reset on Connection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

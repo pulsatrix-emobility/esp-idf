@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=W0621  # redefined-outer-name
 #
@@ -36,12 +36,15 @@ from _pytest.config import Config
 from _pytest.fixtures import FixtureRequest
 from idf_ci import PytestCase
 from idf_ci.idf_pytest import IDF_CI_PYTEST_CASE_KEY
+from idf_ci_utils import APP_EXTRA_S3_ARTIFACT_TYPE
+from idf_ci_utils import IDF_PATH
 from idf_ci_utils import idf_relpath
 from idf_pytest.constants import DEFAULT_LOGDIR
 from idf_pytest.plugin import IDF_LOCAL_PLUGIN_KEY
 from idf_pytest.plugin import IdfLocalPlugin
 from idf_pytest.plugin import requires_elf_or_map
 from idf_pytest.utils import format_case_id
+from pytest_embedded.plugin import _request_param_or_config_option_or_default
 from pytest_embedded.plugin import multi_dut_fixture
 from pytest_embedded.utils import to_bytes
 from pytest_embedded.utils import to_str
@@ -84,7 +87,7 @@ def test_case_name(request: FixtureRequest, target: str, config: str) -> str:
 
     filtered_params = {}
     for k, v in params.items():
-        if k not in request.session._fixturemanager._arg2fixturedefs:  # type: ignore
+        if request.session._fixturemanager.getfixturedefs(k, request.node) is None:  # type: ignore
             filtered_params[k] = v  # not fixture ones
 
     return format_case_id(target, config, request.node.originalname, is_qemu=is_qemu, params=filtered_params)  # type: ignore
@@ -125,7 +128,7 @@ class AppDownloader:
         self.commit_sha = commit_sha
         self.pipeline_id = pipeline_id
 
-    def download_app(self, app_build_path: str, artifact_type: str | None = None) -> None:
+    def download_app(self, app_dir: str, build_dir: str, artifact_type: str | None = None) -> None:
         args = [
             'idf-ci',
             'gitlab',
@@ -135,21 +138,64 @@ class AppDownloader:
         ]
         if artifact_type:
             args.extend(['--type', artifact_type])
+
         if self.pipeline_id:
             args.extend(['--pipeline-id', self.pipeline_id])
-        args.append(app_build_path)
 
-        subprocess.run(
-            args,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
+        args.extend(
+            [
+                app_dir,
+                '--build-dir',
+                build_dir,
+            ]
         )
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            cwd=IDF_PATH,
+        )
+        logging.info(result.stdout)
+        if result.stderr:
+            logging.info(result.stderr)
+
+    def download_app_extra(self, app_dir: str) -> None:
+        """Download app-dir artifacts defined under app_extra in .idf_ci.toml."""
+        args = [
+            'idf-ci',
+            'gitlab',
+            'download-artifacts',
+            '--commit-sha',
+            self.commit_sha,
+            '--type',
+            APP_EXTRA_S3_ARTIFACT_TYPE,
+            app_dir,
+        ]
+        if self.pipeline_id:
+            args.extend(['--pipeline-id', self.pipeline_id])
+
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            cwd=IDF_PATH,
+        )
+        logging.info(result.stdout)
+        if result.stderr:
+            logging.info(result.stderr)
+        if result.returncode != 0:
+            raise RuntimeError(f'Failed to download {APP_EXTRA_S3_ARTIFACT_TYPE} artifacts for {app_dir}')
 
 
 PRESIGNED_JSON = 'presigned.json'
 
 
 class OpenOCD:
+    # Characters around a command echo. A log line redraws the prompt as '\n> ', the prompt after
+    # command output is '\r>'.
+    PROMPT_CHARS = ' >\x08\r'
+    CMD_PROMPT = '\r>'
+
     def __init__(self, dut: 'IdfDut'):
         self.MAX_RETRIES = 3
         self.RETRY_DELAY = 1
@@ -187,10 +233,10 @@ class OpenOCD:
         ocd_env = os.environ.copy()
         ocd_env['LIBUSB_DEBUG'] = '1'
 
-        for _ in range(1, self.MAX_RETRIES + 1):
+        for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 self.proc = pexpect.spawn(
-                    command='openocd',
+                    command=os.getenv('OPENOCD_BIN', 'openocd'),
                     args=['-s', openocd_scripts] + debug_args.split(),
                     timeout=5,
                     encoding='utf-8',
@@ -203,7 +249,9 @@ class OpenOCD:
                     self.write(f'log_output {self.log_file}')
                     return self
             except (pexpect.exceptions.EOF, pexpect.exceptions.TIMEOUT, ConnectionRefusedError) as e:
-                logging.error('Error running OpenOCD: %s', str(e))
+                logging.error(
+                    'OpenOCD connection attempt %d/%d failed. Error: %s', attempt, self.MAX_RETRIES, type(e).__name__
+                )
                 self.kill()
             time.sleep(self.RETRY_DELAY)
 
@@ -220,20 +268,50 @@ class OpenOCD:
         else:
             raise ConnectionRefusedError
 
-    def write(self, s: str) -> t.Any:
+    def write(self, s: str, timeout: int = 30) -> t.Any:
         if self.telnet is None:
             logging.error('Telnet connection is not established.')
             return ''
         resp = self.telnet.read_very_eager()
         self.telnet.write(to_bytes(s, '\n'))
-        resp += self.telnet.read_until(b'>')
+        resp += self.telnet.read_until(b'>', timeout=timeout)
+        if not resp.endswith(b'>'):
+            return ''
         return to_str(resp)
+
+    def write_cmd(self, cmd: str, expect: str | None = None, timeout: int = 10) -> str:
+        """Runs cmd and returns only its own output. Log lines also start with a prompt, so read past them."""
+        end = time.time() + timeout
+        out = t.cast(str, self.write(cmd, timeout=timeout))
+        if not out:
+            raise pexpect.TIMEOUT(f'No reply to "{cmd}"')
+        while True:
+            lines = out.split('\n')
+            echoes = [i for i, line in enumerate(lines) if line.strip(self.PROMPT_CHARS) == cmd]
+            reply = '\n'.join(lines[echoes[-1] + 1 :]) if echoes else ''
+            if echoes and reply.endswith(self.CMD_PROMPT):
+                break
+            if self.telnet is None or time.time() > end:
+                raise pexpect.TIMEOUT(f'No complete reply to "{cmd}":\n{out}')
+            out += self.telnet.read_until(b'>', timeout=1).decode(errors='ignore')
+        reply = reply[: -len(self.CMD_PROMPT)]
+        if expect is not None and expect not in reply:
+            raise AssertionError(f'"{expect}" not in reply to "{cmd}":\n{reply}')
+        return reply
+
+    def consume_output(self, duration: float) -> None:
+        if self.telnet is None:
+            return
+        end = time.time() + duration
+        while time.time() < end:
+            self.telnet.read_very_eager()
+            time.sleep(0.05)
 
     def apptrace_wait_stop(self, timeout: int = 30) -> None:
         stopped = False
         end_before = time.time() + timeout
         while not stopped:
-            cmd_out = self.write('esp apptrace status')
+            cmd_out = self.write_cmd('esp apptrace status')
             for line in cmd_out.splitlines():
                 if line.startswith('Tracing is STOPPED.'):
                     stopped = True
@@ -279,6 +357,18 @@ def app_downloader(
 
 
 @pytest.fixture
+def download_app_extra(app_downloader: AppDownloader | None) -> t.Callable[[str], None]:
+    """Download app_extra S3 artifacts for the given app path (no-op outside CI)."""
+
+    def _download_app_extra(app_path: str) -> None:
+        if app_downloader is None:
+            return
+        app_downloader.download_app_extra(idf_relpath(app_path))
+
+    return _download_app_extra
+
+
+@pytest.fixture
 @multi_dut_fixture
 def build_dir(
     request: FixtureRequest,
@@ -307,12 +397,13 @@ def build_dir(
         downloader = app_downloader
 
     if downloader:
+        app_dir = idf_relpath(app_path)
+        build_dir = f'build_{target}_{config}'
         # somehow hardcoded...
-        app_build_path = os.path.join(idf_relpath(app_path), f'build_{target}_{config}')
         if requires_elf_or_map(case):
-            downloader.download_app(app_build_path)
+            downloader.download_app(app_dir, build_dir)
         else:
-            downloader.download_app(app_build_path, 'flash')
+            downloader.download_app(app_dir, build_dir, 'flash')
         check_dirs = [f'build_{target}_{config}']
     else:
         check_dirs = []
@@ -496,12 +587,12 @@ def log_minimum_free_heap_size(dut: IdfDut, config: str, idf_path: str) -> t.Cal
 
 @pytest.fixture(scope='session')
 def dev_password(request: FixtureRequest) -> str:
-    return request.config.getoption('dev_passwd') or ''
+    return _request_param_or_config_option_or_default(request, 'dev_password', '')  # type: ignore
 
 
 @pytest.fixture(scope='session')
 def dev_user(request: FixtureRequest) -> str:
-    return request.config.getoption('dev_user') or ''
+    return _request_param_or_config_option_or_default(request, 'dev_user', '')  # type: ignore
 
 
 ##################

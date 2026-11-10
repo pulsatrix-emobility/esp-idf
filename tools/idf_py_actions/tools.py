@@ -16,7 +16,7 @@ from typing import Any
 from typing import TextIO
 from typing import cast
 
-import click
+import rich_click as click
 import yaml
 from esp_idf_monitor import get_ansi_converter
 
@@ -76,7 +76,7 @@ def executable_exists(args: list) -> bool:
         return False
 
 
-def _idf_version_from_cmake() -> str | None:
+def idf_version_from_cmake() -> str | None:
     """Acquires version of ESP-IDF from version.cmake"""
     version_path = os.path.join(os.environ['IDF_PATH'], 'tools/cmake/version.cmake')
     regex = re.compile(r'^\s*set\s*\(\s*IDF_VERSION_([A-Z]{5})\s+(\d+)')
@@ -124,36 +124,95 @@ def idf_version() -> str | None:
     except Exception:
         # if failed, then try to parse cmake.version file
         sys.stderr.write('WARNING: Git version unavailable, reading from source\n')
-        version = _idf_version_from_cmake()
+        version = idf_version_from_cmake()
 
     return version
 
 
-def get_default_serial_port() -> Any:
+def get_default_esp(target: str | None = None) -> Any:
+    """
+    Detect a connected Espressif device.
+
+    If the target is not given, it is taken from the build context, which is empty unless ensure_build_directory() was
+    called. Without a known target any Espressif device is accepted.
+    """
     # Import is done here in order to move it after the check_environment()
     # ensured that pyserial has been installed
     try:
         import esptool
 
+        target = target or get_build_context().get('proj_desc', {}).get('target')
+
         ports = esptool.get_port_list()
         # high baud rate could cause the failure of creation of the connection
         esp = esptool.get_default_connected_device(
-            serial_list=ports, port=None, connect_attempts=4, initial_baud=115200
+            serial_list=ports,
+            port=None,
+            connect_attempts=4,
+            initial_baud=115200,
+            chip=target or 'auto',
         )
         if esp is None:
+            device = f'{target} device' if target else 'serial port'
             raise NoSerialPortFoundError(
-                "No serial ports found. Connect a device, or use '-p PORT' option to set a specific port."
+                f"No {device} found. Connect a device, or use '-p PORT' option to set a specific port."
             )
 
-        serial_port = esp.serial_port
         esp._port.close()
 
-        return serial_port
+        return esp
 
     except NoSerialPortFoundError:
         raise
     except Exception as e:
         raise FatalError(f'An exception occurred during detection of the serial port: {e}')
+
+
+def get_default_serial_port(target: str | None = None) -> Any:
+    """
+    Detect a serial port with a connected device.
+
+    Ports with a device not matching the target are skipped. If the target is not given,
+    it is taken from the build context, which is empty unless ensure_build_directory() was
+    called. Without a known target any Espressif device is accepted.
+    """
+    return get_default_esp(target).serial_port
+
+
+def get_selected_target(args: 'PropertyDict') -> str | None:
+    """
+    Return the target name if a project target has been explicitly selected instead of
+    relying on the implicit default target (esp32). Return None otherwise.
+
+    The target may come from the IDF_TARGET environment variable, a -DIDF_TARGET command
+    line define, the project sdkconfig, a sdkconfig.defaults file, or the CMakeCache.txt
+    from a previous build (mirroring how CMake guesses the target). This has to be
+    evaluated before the project is (re)configured, because configuration generates a
+    sdkconfig pinned to the (possibly default) target.
+    """
+    cache_cmdl = _parse_cmdl_cmakecache(args.define_cache_entry)
+
+    target = (
+        os.environ.get('IDF_TARGET')
+        or cache_cmdl.get('IDF_TARGET')
+        or get_sdkconfig_value(get_sdkconfig_filename(args, cache_cmdl), 'CONFIG_IDF_TARGET')
+    )
+    if target:
+        return target
+
+    sdkconfig_defaults = cache_cmdl.get('SDKCONFIG_DEFAULTS') or os.environ.get('SDKCONFIG_DEFAULTS')
+    default_files = sdkconfig_defaults.split(';') if sdkconfig_defaults else ['sdkconfig.defaults']
+    for default_file in default_files:
+        default_file = os.path.join(args.project_dir, default_file)
+        target = get_sdkconfig_value(default_file, 'CONFIG_IDF_TARGET')
+        if target:
+            return target
+
+    cache_path = os.path.join(args.build_dir, 'CMakeCache.txt')
+    if os.path.exists(cache_path):
+        return _parse_cmakecache(cache_path).get('IDF_TARGET')
+
+    return None
 
 
 # function prints warning when autocompletion is not being performed
@@ -395,6 +454,19 @@ class RunTool:
         env_copy = dict(os.environ)
         env_copy.update(self.env or {})
 
+        # Color control:
+        # 1. CLICOLOR_FORCE:
+        #   By default, GNU Make and Ninja strip away color escape sequences when they see that their stdout
+        #   is redirected. If idf.py's stdout is not redirected, the final output is a TTY, so we can tell
+        #   Make/Ninja to disable stripping of color escape sequences. (Requires Ninja v1.9.0 or later.)
+        # 2. FORCE_COLOR:
+        #   The same idea as above, but FORCE_COLOR is used by Python packages like rich.
+        # 3. NO_COLOR:
+        #   Universal kill switch; if set, we won't force colors.
+        if sys.stdout.isatty() and not env_copy.get('NO_COLOR'):
+            env_copy.setdefault('CLICOLOR_FORCE', '1')
+            env_copy.setdefault('FORCE_COLOR', '1')
+
         process: Process | subprocess.CompletedProcess[bytes]
         if self.hints:
             process, stderr_output_file, stdout_output_file = asyncio.run(self.run_command(self.args, env_copy))
@@ -425,7 +497,7 @@ class RunTool:
         and of the command, the id of the process, paths to captured output"""
         log_dir_name = 'log'
         try:
-            os.mkdir(os.path.join(self.build_dir, log_dir_name))
+            os.makedirs(os.path.join(self.build_dir, log_dir_name), exist_ok=True)
         except FileExistsError:
             pass
         # Note: we explicitly pass in os.environ here, as we may have set IDF_PATH there during startup
@@ -592,17 +664,23 @@ def run_target(
     if env is None:
         env = {}
 
-    generator_cmd = GENERATORS[args.generator]['command']
+    generator_cmd = list(GENERATORS[args.generator]['command'])
+
+    if args.generator == 'Ninja':
+        parallel_level = os.environ.get('IDF_PY_BUILD_JOBS')
+        if parallel_level:
+            try:
+                jobs = int(parallel_level)
+            except ValueError as e:
+                raise FatalError('Environment variable IDF_PY_BUILD_JOBS must be a positive integer') from e
+
+            if jobs <= 0:
+                raise FatalError('Environment variable IDF_PY_BUILD_JOBS must be a positive integer')
+
+            generator_cmd += ['-j', str(jobs)]
 
     if args.verbose:
         generator_cmd += [GENERATORS[args.generator]['verbose_flag']]
-
-    # By default, GNU Make and Ninja strip away color escape sequences when they see that their stdout is redirected.
-    # If idf.py's stdout is not redirected, the final output is a TTY, so we can tell Make/Ninja to disable stripping
-    # of color escape sequences. (Requires Ninja v1.9.0 or later.)
-    if sys.stdout.isatty():
-        if 'CLICOLOR_FORCE' not in env:
-            env['CLICOLOR_FORCE'] = '1'
 
     RunTool(
         generator_cmd[0],

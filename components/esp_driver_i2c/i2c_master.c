@@ -116,11 +116,8 @@ static esp_err_t s_i2c_hw_fsm_reset(i2c_master_bus_handle_t i2c_master, bool cle
     i2c_hal_get_timing_config(hal, &timing_config);
     i2c_ll_master_get_filter(hal->dev, &filter_cfg);
 
-    //to reset the I2C hw module, we need re-enable the hw
-    if (clear_bus) {
-        ret = s_i2c_master_clear_bus(i2c_master->base);
-    }
-    I2C_RCC_ATOMIC() {
+    // Run bus clear after reset and interrupt masking; reconnecting pins must not wake a stuck FSM.
+    PERIPH_RCC_ATOMIC() {
         i2c_ll_reset_register(i2c_master->base->port_num);
     }
 
@@ -134,6 +131,10 @@ static esp_err_t s_i2c_hw_fsm_reset(i2c_master_bus_handle_t i2c_master, bool cle
     i2c_ll_clear_intr_mask(hal->dev, I2C_LL_INTR_MASK);
     i2c_hal_set_timing_config(hal, &timing_config);
     i2c_ll_master_set_filter(hal->dev, filter_cfg);
+
+    if (clear_bus) {
+        ret = s_i2c_master_clear_bus(i2c_master->base);
+    }
 #else
     i2c_ll_master_fsm_rst(hal->dev);
     if (clear_bus) {
@@ -706,6 +707,12 @@ static esp_err_t s_i2c_transaction_start(i2c_master_dev_handle_t i2c_dev, int xf
 
     i2c_ll_txfifo_rst(hal->dev);
     i2c_ll_rxfifo_rst(hal->dev);
+    // contains_read is only set by s_i2c_read_command(), don't let it leak from a previous transaction
+    i2c_master->contains_read = false;
+    // Clear raw interrupt bits left over from the previous transaction (e.g. a TRANS_COMPLETE raised
+    // after an address NACK when the waiter had already returned), otherwise they would be taken as
+    // events of this transaction as soon as the interrupts are enabled.
+    i2c_ll_clear_intr_mask(hal->dev, I2C_LL_INTR_MASK);
     i2c_ll_enable_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
     portEXIT_CRITICAL(&i2c_master->base->spinlock);
 
@@ -801,13 +808,14 @@ static void i2c_master_isr_handler_default(void *arg)
         i2c_master->trans_done = true;
         i2c_master->event = I2C_EVENT_DONE;
     }
-    if (i2c_master->event != I2C_EVENT_ALIVE) {
-        xQueueSendFromISR(i2c_master->event_queue, (void *)&i2c_master->event, &HPTaskAwoken);
-    }
     if (i2c_master->contains_read == true) {
         if (int_mask & I2C_LL_INTR_MST_COMPLETE || int_mask & I2C_LL_INTR_END_DETECT) {
             i2c_isr_receive_handler(i2c_master);
         }
+    }
+    /* Wait for the ISR to finish copying RX FIFO before notifying the waiter so the caller's buffer is complete */
+    if (i2c_master->event != I2C_EVENT_ALIVE) {
+        xQueueSendFromISR(i2c_master->event_queue, (void *)&i2c_master->event, &HPTaskAwoken);
     }
 
     if (i2c_master->async_trans) {
@@ -823,7 +831,10 @@ static void i2c_master_isr_handler_default(void *arg)
         }
         xSemaphoreGiveFromISR(i2c_master->bus_lock_mux, &HPTaskAwoken);
         if (i2c_dev == NULL) {
-            return;
+            // HPTaskAwoken may have been set by xQueueSendFromISR / xSemaphoreTakeFromISR /
+            // xSemaphoreGiveFromISR above; fall through to the yield check at the end of
+            // the ISR rather than returning directly.
+            goto out;
         }
         i2c_master_event_data_t evt = {
             .event = i2c_master->event,
@@ -861,6 +872,7 @@ static void i2c_master_isr_handler_default(void *arg)
         xSemaphoreGiveFromISR(i2c_master->cmd_semphr, &HPTaskAwoken);
     }
 
+out:
     if (HPTaskAwoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
@@ -904,9 +916,6 @@ static esp_err_t i2c_master_bus_destroy(i2c_master_bus_handle_t bus_handle)
             if (i2c_master->event_queue) {
                 vQueueDeleteWithCaps(i2c_master->event_queue);
             }
-            if (i2c_master->queues_storage) {
-                free(i2c_master->queues_storage);
-            }
             free(i2c_master->i2c_async_ops);
             for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
                 if (i2c_master->trans_queues[i]) {
@@ -915,11 +924,12 @@ static esp_err_t i2c_master_bus_destroy(i2c_master_bus_handle_t bus_handle)
             }
             bus_handle = NULL;
         }
-
-        free(i2c_master);
     } else {
-        free(i2c_master);
+        // Non-OK here means interrupt teardown did not complete, so the ISR
+        // may still reference i2c_slave and its wrapper-owned resources.
+        return err;
     }
+    free(i2c_master);
 
     return ESP_OK;
 }
@@ -1043,7 +1053,8 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
     ESP_RETURN_ON_FALSE(bus_config->flags.allow_pd == 0, ESP_ERR_NOT_SUPPORTED, TAG, "not able to power down in light sleep");
 #endif // SOC_I2C_SUPPORT_SLEEP_RETENTION
 
-    i2c_master = heap_caps_calloc(1, sizeof(i2c_master_bus_t) + 20 * sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
+    // always allocate memory from internal memory because the driver object contains atomic variables
+    i2c_master = heap_caps_calloc(1, sizeof(i2c_master_bus_t) + 20 * sizeof(i2c_transaction_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
     ESP_RETURN_ON_FALSE(i2c_master, ESP_ERR_NO_MEM, TAG, "no memory for i2c master bus");
 
@@ -1118,13 +1129,8 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
         i2c_master->trans_finish = true;
         i2c_master->new_queue = true;
         i2c_master->queue_size = bus_config->trans_queue_depth;
-        i2c_master->queues_storage = (uint8_t*)heap_caps_calloc(bus_config->trans_queue_depth * I2C_TRANS_QUEUE_MAX, sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
-        ESP_RETURN_ON_FALSE(i2c_master->queues_storage, ESP_ERR_NO_MEM, TAG, "no mem for queue storage");
-        i2c_transaction_t **pp_trans_desc = (i2c_transaction_t **)i2c_master->queues_storage;
         for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
             i2c_master->trans_queues[i] = xQueueCreateWithCaps(bus_config->trans_queue_depth, sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
-
-            pp_trans_desc += bus_config->trans_queue_depth;
             // sanity check
             assert(i2c_master->trans_queues[i]);
         }
@@ -1382,6 +1388,10 @@ esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus_handle, uint16_t address,
     i2c_ll_txfifo_rst(hal->dev);
     i2c_ll_rxfifo_rst(hal->dev);
     i2c_ll_master_set_fractional_divider(hal->dev, 0, 0);
+    // Same as s_i2c_transaction_start(): probe has no read command, and stale raw interrupt bits
+    // from the previous transaction must not be taken as the result of this probe.
+    bus_handle->contains_read = false;
+    i2c_ll_clear_intr_mask(hal->dev, I2C_LL_INTR_MASK);
     i2c_ll_enable_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
     // 20ms is sufficient for stretch, since there is no device config on probe operation.
     i2c_hal_master_set_scl_timeout_val(hal, 20 * 1000, bus_handle->base->clk_src_freq_hz);

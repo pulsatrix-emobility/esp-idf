@@ -259,6 +259,11 @@ The legacy timer group driver ``driver/timer.h`` is deprecated since version 5.0
 
     The legacy PCNT driver ``driver/pcnt.h`` is deprecated since version 5.0 (see :ref:`deprecate_pcnt_legacy_driver`). Starting from version 6.0, the legacy driver is completely removed. The new driver is placed in the :component:`esp_driver_pcnt`, and the header file path is ``driver/pulse_cnt.h``.
 
+    PCNT GPIO Pull-up/Pull-down Configuration
+    -----------------------------------------
+
+    The new PCNT driver no longer enables or disables internal pull-up/pull-down resistors on the GPIOs used for edge, level, or clear signals. If the input signal requires a defined idle level, configure the GPIO pull mode explicitly by calling the corresponding GPIO APIs.
+
 .. only:: SOC_RMT_SUPPORTED
 
     Legacy RMT Driver is Removed
@@ -311,7 +316,7 @@ LCD
 - The ``psram_trans_align`` and ``sram_trans_align`` members in the :cpp:type:`esp_lcd_rgb_panel_config_t` structure have also been replaced by the :cpp:member:`esp_lcd_rgb_panel_config_t::dma_burst_size` member for configuring the DMA burst transfer size.
 - The ``color_space`` and ``rgb_endian`` configuration options in the :cpp:type:`esp_lcd_panel_dev_config_t` structure have been replaced by the :cpp:member:`esp_lcd_panel_dev_config_t::rgb_ele_order` member, which sets the RGB element order. The corresponding types ``lcd_color_rgb_endian_t`` and ``esp_lcd_color_space_t`` have also been removed; use :cpp:type:`lcd_rgb_element_order_t` instead.
 - The ``esp_lcd_panel_disp_off`` function has been removed. Please use the :func:`esp_lcd_panel_disp_on_off` function to control display on/off.
-- The ``on_bounce_frame_finish`` member in :cpp:type:`esp_lcd_rgb_panel_event_callbacks_t` has been replaced by :cpp:member:`esp_lcd_rgb_panel_event_callbacks_t::on_frame_buf_complete`, which indicates that a complete frame buffer has been sent to the LCD controller.
+- The ``on_bounce_frame_finish`` member in :cpp:type:`esp_lcd_rgb_panel_event_callbacks_t` has been replaced by :cpp:member:`esp_lcd_rgb_panel_event_callbacks_t::on_frame_buf_complete`, which indicates that a complete frame buffer can be safely reused.
 - The LCD IO layer driver for the I2C interface previously had two implementations, based on the new and legacy I2C master bus drivers. As the legacy I2C driver is being deprecated, support for it in the LCD IO layer has been removed. Only the APIs provided in ``driver/i2c_master.h`` are now used.
 - ``pixel_format`` member in the :cpp:type:`esp_lcd_dpi_panel_config_t` structure has been removed. It is recommended to only use :cpp:member:`esp_lcd_dpi_panel_config_t::in_color_format` to set the MIPI DSI driver's input pixel data format.
 - ``bits_per_pixel`` member in the :cpp:type:`esp_lcd_rgb_panel_config_t` structure has been removed. The color depth of the internal framebuffer is now determined by the :cpp:member:`esp_lcd_rgb_panel_config_t::in_color_format` member.

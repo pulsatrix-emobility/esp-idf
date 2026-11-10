@@ -143,7 +143,7 @@ static void set_defaults(usb_dwc_hal_context_t *hal)
     usb_dwc_ll_gusbcfg_force_host_mode(hal->dev);
 }
 
-void usb_dwc_hal_init(usb_dwc_hal_context_t *hal, int port_id)
+void usb_dwc_hal_init_with_config(usb_dwc_hal_context_t *hal, int port_id, const usb_dwc_hal_config_t *config)
 {
     // Check if a peripheral is alive by reading the core ID registers
     HAL_ASSERT(port_id < SOC_USB_OTG_PERIPH_NUM);
@@ -167,6 +167,13 @@ void usb_dwc_hal_init(usb_dwc_hal_context_t *hal, int port_id)
     hal->constant_config.chan_num_total = usb_dwc_ll_ghwcfg_get_channel_num(dev);
     hal->constant_config.max_size_byte_limit = (1U << usb_dwc_ll_ghwcfg_get_xfer_size_width(dev)) - 1;
     hal->constant_config.max_size_packet_limit = (1U << usb_dwc_ll_ghwcfg_get_packet_size_width(dev)) - 1;
+
+    // Check passed configuration flags
+    if (config) {
+        if (config->flags & USB_DWC_HAL_CONFIG_FLAG_FSLS_ONLY) {
+            hal->constant_config.flags.fsls_only = 1;
+        }
+    }
 
     set_defaults(hal);
 }
@@ -257,7 +264,7 @@ void usb_dwc_hal_get_mps_limits(usb_dwc_hal_context_t *hal, usb_hal_fifo_mps_lim
     HAL_ASSERT(hal->flags.fifo_sizes_set);
 
     const usb_dwc_hal_fifo_config_t *fifo_config = &(hal->fifo_config);
-    mps_limits->in_mps = (fifo_config->rx_fifo_lines - 2) * 4; // Two lines are reserved for status quadlets internally by USB_DWC
+    mps_limits->in_mps = (fifo_config->rx_fifo_lines - USB_DWC_HAL_RX_FIFO_STATUS_LINES) * 4;
     mps_limits->non_periodic_out_mps = fifo_config->nptx_fifo_lines * 4;
     mps_limits->periodic_out_mps = fifo_config->ptx_fifo_lines * 4;
 }
@@ -266,16 +273,23 @@ size_t usb_dwc_hal_get_xfer_size_limit(usb_dwc_hal_context_t *hal, uint16_t mps)
 {
     HAL_ASSERT(hal);
     HAL_ASSERT(mps > 0);
-    size_t max_xfer_size;
 
-    // Minimum of the two limits
-    if (mps * hal->constant_config.max_size_packet_limit > hal->constant_config.max_size_byte_limit) {
-        // We hit the overall byte limit
-        max_xfer_size = hal->constant_config.max_size_byte_limit;
-    } else {
-        // We hit the overall packet limit
-        max_xfer_size = mps * hal->constant_config.max_size_packet_limit;
-    }
+    /*
+     * In Scatter/Gather DMA mode the HCTSIZ register carries no transfer size: the bits used by the
+     * XferSize and PktCnt counters in Buffer DMA (slave) mode are instead NTD and SCHED_INFO
+     * (DWC_otg databook Section 5.4.41, Table 5-47). The per-transfer byte count lives in the
+     * non-isochronous qTD's "Total bytes to transfer" field, which is 17 bits wide (0 to 128K-1
+     * bytes, DWC_otg programming guide Section 6), so the GHWCFG3 transfer/packet counter widths
+     * (OTG_TRANS_COUNT_WIDTH / OTG_PACKET_COUNT_WIDTH) do not bound the transfer size here.
+     */
+    size_t max_xfer_size = USB_DWC_LL_QTD_NON_ISO_MAX_XFER_SIZE;
+
+    /*
+     * Floor to a whole number of maximum-sized packets: for IN transfers the qTD's byte count must
+     * be programmed as an integer multiple of the endpoint's MPS (programming guide Section 6), so
+     * an unaligned limit could be rounded up past the 17-bit field when the descriptor is filled.
+     */
+    max_xfer_size -= (max_xfer_size % mps);
     return max_xfer_size;
 }
 
@@ -286,6 +300,15 @@ static inline void debounce_lock_enable(usb_dwc_hal_context_t *hal)
     //Disable the hprt (connection) and disconnection interrupts to prevent repeated triggerings
     usb_dwc_ll_gintmsk_dis_intrs(hal->dev, USB_DWC_LL_INTR_CORE_PRTINT | USB_DWC_LL_INTR_CORE_DISCONNINT);
     hal->flags.dbnc_lock_enabled = 1;
+}
+
+void usb_dwc_hal_port_toggle_reset(usb_dwc_hal_context_t *hal, bool enable)
+{
+    // If the core is connected to HS PHY but configuration is FS/LS only
+    if (enable && hal->constant_config.hsphy_type && hal->constant_config.flags.fsls_only) {
+        usb_dwc_ll_hcfg_set_fsls_supp_only(hal->dev);
+    }
+    usb_dwc_ll_hprt_set_port_reset(hal->dev, enable);
 }
 
 void usb_dwc_hal_port_enable(usb_dwc_hal_context_t *hal)
@@ -534,7 +557,6 @@ usb_dwc_hal_chan_event_t usb_dwc_hal_chan_decode_intr(usb_dwc_hal_chan_t *chan_o
     Errors > Channel Halt Request > Transfer completed
     */
     if (chan_intrs & CHAN_INTRS_ERROR_MSK) {    //Note: Errors are uncommon, so we check against the entire interrupt mask to reduce frequency of entering this call path
-        HAL_ASSERT(chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD);  //An error should have halted the channel
         //Store the error in hal context
         usb_dwc_hal_chan_error_t error;
         if (chan_intrs & USB_DWC_LL_INTR_CHAN_STALL) {

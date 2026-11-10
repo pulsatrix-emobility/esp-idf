@@ -236,9 +236,9 @@ static tGATT_STATUS read_attr_value (void *p_attr,
     status = GATT_NO_RESOURCES;
 
     if (uuid16 == GATT_UUID_PRI_SERVICE || uuid16 == GATT_UUID_SEC_SERVICE) {
-        len = p_attr16->p_value->uuid.len;
-        if (mtu >= p_attr16->p_value->uuid.len) {
-            gatt_build_uuid_to_stream(&p, p_attr16->p_value->uuid);
+        len = gatt_get_uuid_stream_len(p_attr16->p_value->uuid);
+        if (mtu >= len) {
+            len = gatt_build_uuid_to_stream(&p, p_attr16->p_value->uuid);
             status = GATT_SUCCESS;
         }
     } else if (uuid16 == GATT_UUID_CHAR_DECLARE) {
@@ -363,27 +363,44 @@ tGATT_STATUS gatts_db_read_attr_value_by_type (tGATT_TCB   *p_tcb,
 
             if (p_attr->handle >= s_handle && gatt_uuid_compare(type, attr_uuid)) {
                 if (*p_len <= 2) {
+                    *p_cur_handle = p_attr->handle;
                     status = GATT_NO_RESOURCES;
                     break;
                 }
 
                 UINT16_TO_STREAM (p, p_attr->handle);
 
-                status = read_attr_value ((void *)p_attr, 0, &p, FALSE, (UINT16)(*p_len - 2), &len, sec_flag, key_size);
+                /*
+                 * ATT Read By Type Response encodes each Handle-Value Pair length in 1 octet.
+                 * Therefore a single record must be <= 255 bytes including the 2-byte handle,
+                 * i.e. the value length must be <= 253 bytes.
+                 *
+                 * Limit the maximum value length here so that p_rsp->offset (pair_len) never
+                 * exceeds 255 and cannot be truncated when written to the response PDU.
+                 */
+                UINT16 max_value_len = (UINT16)(*p_len - 2);
+                if (max_value_len > GATT_MAX_READ_BY_TYPE_VALUE_LEN) {
+                    max_value_len = GATT_MAX_READ_BY_TYPE_VALUE_LEN;
+                }
+                status = read_attr_value((void *)p_attr, 0, &p, FALSE, max_value_len, &len, sec_flag, key_size);
                 if (status == GATT_PENDING) {
 
 
                     need_rsp = TRUE;
                     status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, 0, trans_id, need_rsp);
-
+                    if (status != GATT_PENDING) {
+                        *p_cur_handle = p_attr->handle;
+                    }
                     /* one callback at a time */
                     break;
                 } else if (status == GATT_SUCCESS || status == GATT_STACK_RSP) {
                     if (status == GATT_STACK_RSP){
                         need_rsp = FALSE;
                         status = gatts_send_app_read_request(p_tcb, op_code, p_attr->handle, 0, trans_id, need_rsp);
-                        if(status == GATT_BUSY)
+                        if (status != GATT_STACK_RSP) {
+                            *p_cur_handle = p_attr->handle;
                             break;
+                        }
 
                         if (!have_send_request){
                             have_send_request = true;
@@ -400,6 +417,7 @@ tGATT_STATUS gatts_db_read_attr_value_by_type (tGATT_TCB   *p_tcb,
                         *p_len -= (len + 2);
                     } else {
                         GATT_TRACE_WARNING("format mismatch");
+                        *p_cur_handle = p_attr->handle;
                         status = GATT_NO_RESOURCES;
                         break;
                     }
@@ -546,6 +564,7 @@ UINT16 gatts_add_characteristic (tGATT_SVC_DB *p_db, tGATT_PERM perm,
 
         if (attr_val != NULL) {
             if (!copy_extra_byte_in_db(p_db, (void **)&p_char_val->p_value, sizeof(tGATT_ATTR_VAL))) {
+                deallocate_attr_in_db(p_db, p_char_decl);
                 deallocate_attr_in_db(p_db, p_char_val);
                 return 0;
             }
@@ -733,7 +752,7 @@ tGATT_STATUS gatts_set_attribute_value(tGATT_SVC_DB *p_db, UINT16 attr_handle,
     }
 
     p_cur    =  (tGATT_ATTR16 *) p_db->p_attr_list;
-
+    BOOLEAN found = FALSE;
     while (p_cur != NULL) {
         if (p_cur->handle == attr_handle) {
             /* for characteristic should not be set, return GATT_NOT_FOUND */
@@ -758,13 +777,14 @@ tGATT_STATUS gatts_set_attribute_value(tGATT_SVC_DB *p_db, UINT16 attr_handle,
             } else{
                 memcpy(p_cur->p_value->attr_val.attr_val, value, length);
                 p_cur->p_value->attr_val.attr_len = length;
+                found = TRUE;
             }
             break;
         }
         p_cur = p_cur->p_next;
     }
 
-    return GATT_SUCCESS;
+    return found ? GATT_SUCCESS : GATT_NOT_FOUND;
 }
 
 /*******************************************************************************
@@ -1205,8 +1225,8 @@ tGATT_STATUS gatts_write_attr_perm_check (tGATT_SVC_DB *p_db, UINT8 op_code,
                     GATT_TRACE_ERROR( "gatts_write_attr_perm_check - GATT_INSUF_AUTHORIZATION,handle %04x,perm %04x", handle, perm);
                 }
                 /* LE security mode 2 attribute  */
-                else if (perm & GATT_WRITE_SIGNED_PERM && op_code != GATT_SIGN_CMD_WRITE && !(sec_flag & GATT_SEC_FLAG_ENCRYPTED)
-                         &&  (perm & GATT_WRITE_ALLOWED) == 0) {
+                else if ((perm & GATT_WRITE_SIGNED_PERM) && op_code != GATT_SIGN_CMD_WRITE && !(sec_flag & GATT_SEC_FLAG_ENCRYPTED)
+                        && !(perm & (GATT_PERM_WRITE | GATT_PERM_WRITE_ENCRYPTED | GATT_PERM_WRITE_ENC_MITM))) {
                     status = GATT_INSUF_AUTHENTICATION;
                     GATT_TRACE_ERROR( "gatts_write_attr_perm_check - GATT_INSUF_AUTHENTICATION: LE security mode 2 required,handle %04x,perm %04x", handle, perm);
                 } else { /* writable: must be char value declaration or char descriptors */
@@ -1577,6 +1597,8 @@ static BOOLEAN gatts_db_add_service_declaration(tGATT_SVC_DB *p_db, tBT_UUID *p_
                 memcpy(p_attr->p_value->uuid.uu.uuid128, p_service->uu.uuid128, LEN_UUID_128);
             }
             rt = TRUE;
+        } else {
+            deallocate_attr_in_db(p_db, p_attr);
         }
 
     }

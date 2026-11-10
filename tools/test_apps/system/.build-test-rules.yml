@@ -34,7 +34,7 @@ tools/test_apps/system/esp_intr_dump:
 
 tools/test_apps/system/flash_auto_suspend_iram_reduction:
   disable:
-    - if: IDF_TARGET == "esp32" or IDF_TARGET == "esp32s2
+    - if: IDF_TARGET == "esp32" or IDF_TARGET == "esp32s2"
       reason: Targets do not support auto-suspend
   disable_test:
     - if: IDF_TARGET != "esp32c3"
@@ -49,7 +49,7 @@ tools/test_apps/system/g1_components:
 
 tools/test_apps/system/gdb:
   disable_test:
-    - if: IDF_TARGET in ["esp32p4", "esp32c5", "esp32c61"]
+    - if: IDF_TARGET in ["esp32p4", "esp32h4", "esp32h21"]
       temporary: true
       reason: not supported yet # TODO: IDF-13142
 
@@ -58,10 +58,6 @@ tools/test_apps/system/gdb_loadable_elf:
     - if: IDF_TARGET != "esp32"
       temporary: true
       reason: lack of runners
-  disable:
-    - if: IDF_TARGET == "esp32c6" or IDF_TARGET == "esp32h2"
-      temporary: true
-      reason: target esp32c6, esp32h2 is not supported yet
 
 tools/test_apps/system/init_array:
   enable:
@@ -107,9 +103,7 @@ tools/test_apps/system/no_embedded_paths:
 
 tools/test_apps/system/panic:
   enable:
-    - if: INCLUDE_DEFAULT == 1 or IDF_TARGET in ["esp32p4"] # preview targets
-  disable:
-    - if: IDF_TARGET == "esp32p4" # TODO: IDF-14348
+    - if: INCLUDE_DEFAULT == 1
 
 tools/test_apps/system/ram_loadable_app:
   disable:
@@ -125,6 +119,8 @@ tools/test_apps/system/rtc_mem_reserve:
 tools/test_apps/system/startup:
   disable:
     - if: CONFIG_NAME == "main_task_cpu1" and IDF_TARGET not in ["esp32", "esp32s3"]
+    - if: CONFIG_NAME == "spiram_debug_log" and SOC_SPIRAM_SUPPORTED != 1
+      reason: Test requires a target with PSRAM support
 
 tools/test_apps/system/test_watchpoint:
   enable:

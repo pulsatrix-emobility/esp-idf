@@ -45,11 +45,13 @@ typedef enum {
 typedef enum {
     WIFI_OFFCHAN_TX_CANCEL,   /**< Cancel off-channel transmission */
     WIFI_OFFCHAN_TX_REQ,      /**< Request off-channel transmission */
+    WIFI_OFFCHAN_TX_CONNECTING_REQ,  /**< Off-channel Tx request during connecting state; not recommended for use by public APIs */
 } wifi_action_tx_t;
 
 typedef enum {
     WIFI_ROC_CANCEL,    /**< Cancel remain on channel */
     WIFI_ROC_REQ,       /**< Request remain on channel */
+    WIFI_ROC_CONNECTING_REQ,   /**< Remain-on-channel request during connecting state; not recommended for use by public APIs */
 } wifi_roc_t;
 /**
   * @brief Wi-Fi country policy
@@ -81,6 +83,9 @@ typedef struct {
   * Strength of authmodes
   * Personal Networks   : OPEN < WEP < WPA_PSK < OWE < WPA2_PSK = WPA_WPA2_PSK < WAPI_PSK < WPA3_PSK = WPA2_WPA3_PSK = DPP
   * Enterprise Networks : WIFI_AUTH_WPA_ENTERPRISE < WIFI_AUTH_WPA2_ENTERPRISE < WIFI_AUTH_WPA3_ENTERPRISE = WIFI_AUTH_WPA2_WPA3_ENTERPRISE < WIFI_AUTH_WPA3_ENT_192
+  *
+  * @note WIFI_AUTH_UNKNOWN indicates an Access Point with invalid or unparseable security configuration
+  *       detected during scan parsing.
   */
 typedef enum {
     WIFI_AUTH_OPEN = 0,         /**< Authenticate mode : open */
@@ -101,6 +106,7 @@ typedef enum {
     WIFI_AUTH_WPA3_ENTERPRISE,  /**< Authenticate mode : WPA3-Enterprise Only Mode */
     WIFI_AUTH_WPA2_WPA3_ENTERPRISE, /**< Authenticate mode : WPA3-Enterprise Transition Mode */
     WIFI_AUTH_WPA_ENTERPRISE,   /**< Authenticate mode : WPA-Enterprise security */
+    WIFI_AUTH_UNKNOWN,          /**< Scan parsed authmode: Unknown or invalid security configuration parsed during scan */
     WIFI_AUTH_MAX
 } wifi_auth_mode_t;
 
@@ -331,7 +337,8 @@ typedef struct {
     uint32_t wps: 1;                      /**< Bit: 7 flag to identify if WPS is supported or not */
     uint32_t ftm_responder: 1;            /**< Bit: 8 flag to identify if FTM is supported in responder mode */
     uint32_t ftm_initiator: 1;            /**< Bit: 9 flag to identify if FTM is supported in initiator mode */
-    uint32_t reserved: 22;                /**< Bit: 10..31 reserved */
+    uint32_t akm_dpp: 1;                  /**< Bit: 10 flag set when AP supports mixed DPP AKM (e.g., SAE + DPP or WPA2-PSK + DPP) or when AP only supports DPP AKM */
+    uint32_t reserved: 21;                /**< Bit: 11..31 reserved */
     wifi_country_t country;               /**< Country information of AP */
     wifi_he_ap_info_t he_ap;              /**< HE AP info */
     wifi_bandwidth_t bandwidth;           /**< Bandwidth of AP */
@@ -359,12 +366,13 @@ typedef enum {
 } wifi_sort_method_t;
 
 /**
-  * @brief Structure describing parameters for a Wi-Fi fast scan
+  * @brief Structure describing parameters for Wi-Fi scan during connection
   */
 typedef struct {
-    int8_t              rssi;             /**< The minimum rssi to accept in the fast scan mode. Defaults to -127 if set to >= 0 */
-    wifi_auth_mode_t    authmode;         /**< The weakest auth mode to accept in the fast scan mode
-                                               Note: In case this value is not set and password is set as per WPA2 standards(password len >= 8), it will be defaulted to WPA2 and device won't connect to deprecated WEP/WPA networks. Please set auth mode threshold as WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK to connect to WEP/WPA networks */
+    int8_t              rssi;             /**< The minimum rssi to accept in Wi-Fi scan. Defaults to -127 if set to >= 0 */
+    wifi_auth_mode_t    authmode;         /**< The weakest authentication mode to accept when scanning for Wi-Fi during connection.
+                                               Note: In case this value is not set and password is set as per WPA2 standards(password len >= 8), it will be defaulted to WPA2 and device won't connect to deprecated WEP/WPA networks. Please set auth mode threshold as WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK to connect to WEP/WPA networks.
+                                               If this is set to a mixed mode (for example, WPA_WPA2 or WPA2_WPA3), the minimum mode becomes the stronger of the two. For example, WPA_WPA2 becomes WPA2, and WPA2_WPA3 becomes WPA3. See `wifi_auth_mode_t` for details on relative strengths. */
     uint8_t             rssi_5g_adjustment; /**< The RSSI value of the 5G AP is within the rssi_5g_adjustment range compared to the 2G AP, the 5G AP will be given priority for connection. */
 } wifi_scan_threshold_t;
 
@@ -529,7 +537,7 @@ typedef struct {
     uint8_t channel;                          /**< Channel of soft-AP. Set to 0 for auto selection (min channel: typically 1 for 2.4G, 36 for 5G). Other invalid values return ESP_ERR_INVALID_ARG. */
     wifi_auth_mode_t authmode;                /**< Auth mode of soft-AP. Do not support AUTH_WEP, AUTH_WAPI_PSK and AUTH_OWE in soft-AP mode. When the auth mode is set to WPA2_PSK, WPA2_WPA3_PSK or WPA3_PSK, the pairwise cipher will be overwritten with WIFI_CIPHER_TYPE_CCMP by default, unless explicitly set.  */
     uint8_t ssid_hidden;                      /**< Broadcast SSID or not, default 0, broadcast the SSID */
-    uint8_t max_connection;                   /**< Max number of stations allowed to connect in */
+    uint8_t max_connection;                   /**< Max number of stations allowed to connect in. Please note that soft-AP and ESP-NOW share the same encryption hardware keys, so the max_connection parameter will be affected by CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM. */
     uint16_t beacon_interval;                 /**< Beacon interval which should be multiples of 100. Unit: TU(time unit, 1 TU = 1024 us). Range: 100 ~ 60000. Default value: 100 */
     uint8_t csa_count;                        /**< Channel Switch Announcement Count. Notify the station that the channel will switch after the csa_count beacon intervals. Default value: 3 */
     uint8_t dtim_period;                      /**< Dtim period of soft-AP. Range: 1 ~ 10. Default value: 1 */
@@ -584,7 +592,25 @@ typedef struct {
     uint32_t vht_su_beamformee_disabled: 1;                       /**< Whether to disable support for operation as an VHT SU beamformee. */
     uint32_t vht_mu_beamformee_disabled: 1;                       /**< Whether to disable support for operation as an VHT MU beamformee. */
     uint32_t vht_mcs8_enabled: 1;                                 /**< Whether to support VHT-MCS8. The default value is 0. */
-    uint32_t reserved2: 19;                                       /**< Reserved for future feature set */
+    uint32_t max_bandwidth_negotiation_enabled_2g: 1;             /**< Whether to enable maximum bandwidth negotiation for the 2.4GHz band.
+                                                                        In STA-only mode, when enabled, the negotiated bandwidth depends on the negotiated protocol:
+                                                                        (1) If the negotiated protocol is 802.11ax, the negotiated bandwidth is 20 MHz.
+                                                                        (2) If the negotiated protocol is 802.11n, the negotiated bandwidth is determined by the maximum bandwidth supported by both AP and STA.
+                                                                        (3) For other negotiated protocols, the negotiated bandwidth is 20 MHz.
+                                                                        SoftAP + STA coexistence is subject to the following hardware limitations:
+                                                                        - If SoftAP is configured to 802.11ax, STA bandwidth is capped at 20 MHz.
+                                                                        - If STA is connected at 40 MHz, SoftAP cannot be configured to 802.11ax/802.11ac.
+                                                                        The default value is 0 (disabled). */
+    uint32_t max_bandwidth_negotiation_enabled_5g: 1;             /**< Whether to enable maximum bandwidth negotiation for the 5GHz band.
+                                                                        In STA-only mode, when enabled, the negotiated bandwidth depends on the negotiated protocol:
+                                                                        (1) If the negotiated protocol is 802.11ax/802.11ac, the negotiated bandwidth is 20 MHz.
+                                                                        (2) If the negotiated protocol is 802.11n/802.11an, the negotiated bandwidth is determined by the maximum bandwidth supported by both AP and STA.
+                                                                        (3) For other negotiated protocols, the negotiated bandwidth is 20 MHz.
+                                                                        SoftAP + STA coexistence is subject to the following hardware limitations:
+                                                                        - If SoftAP is configured to 802.11ax/802.11ac, STA bandwidth is capped at 20 MHz.
+                                                                        - If STA is connected at 40 MHz, SoftAP cannot be configured to 802.11ax/802.11ac.
+                                                                        The default value is 0 (disabled). */
+    uint32_t reserved2: 17;                                       /**< Reserved for future feature set */
     uint8_t sae_h2e_identifier[SAE_H2E_IDENTIFIER_LEN];           /**< Password identifier for H2E. Strings null-terminated (length < SAE_H2E_IDENTIFIER_LEN) or non-null terminated (length = SAE_H2E_IDENTIFIER_LEN) are accepted. Non-null terminated string with 0xFF for full length of SAE_H2E_IDENTIFIER_LEN is not considered a valid identifier */
 } wifi_sta_config_t;
 
@@ -854,6 +880,11 @@ typedef struct {
     uint8_t channel;            /**< Primary channel of the FTM Responder */
     uint8_t frm_count;          /**< No. of FTM frames requested in terms of 4 or 8 bursts (allowed values - 0(No pref), 16, 24, 32, 64) */
     uint16_t burst_period;      /**< Requested period between FTM bursts in 100's of milliseconds (allowed values 0(No pref) - 100) */
+    uint8_t secondary_chan;     /**< Secondary channel of the FTM Responder.
+                                     0: no preference (auto-selected when the Initiator is in 40 MHz); 1: above; 2: below.
+                                     Ignored if the Initiator bandwidth is 20MHz OR when the Responder is the connected AP (its own secondary is used).
+                                     If it differs from the home channel's secondary while connected or in APSTA
+                                     on the same channel, the session falls back to 20 MHz. */
 } wifi_ftm_initiator_cfg_t;
 
 #define ESP_WIFI_NAN_MAX_SVC_SUPPORTED  2      /**< Maximum number of NAN or NAN-USD services supported */
@@ -1488,7 +1519,6 @@ typedef struct {
     bool dcm;                                /**< Using dcm rate to send frame */
 } wifi_tx_rate_config_t;
 
-#define WIFI_MAX_SUPPORT_COUNTRY_NUM 176 /**< max number of supported countries */
 #ifdef CONFIG_SOC_WIFI_SUPPORT_5G
 #define WIFI_MAX_REGULATORY_RULE_NUM  7 /**< max number of regulatory rules */
 #else

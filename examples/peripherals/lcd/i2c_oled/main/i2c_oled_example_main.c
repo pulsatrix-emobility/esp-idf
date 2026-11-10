@@ -36,6 +36,7 @@ static const char *TAG = "example";
 #define EXAMPLE_PIN_NUM_SCL           4
 #define EXAMPLE_PIN_NUM_RST           -1
 #define EXAMPLE_I2C_HW_ADDR           0x3C
+#define EXAMPLE_I2C_TRANSACTION_TIMEOUT_MS 1000
 
 // The pixel number in horizontal and vertical
 #if CONFIG_EXAMPLE_LCD_CONTROLLER_SSD1306
@@ -75,7 +76,7 @@ static void example_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uin
     esp_lcd_panel_handle_t panel_handle = lv_display_get_user_data(disp);
 
     // This is necessary because LVGL reserves 2 x 4 bytes in the buffer, as these are assumed to be used as a palette. Skip the palette here
-    // More information about the monochrome, please refer to https://docs.lvgl.io/9.2/porting/display.html#monochrome-displays
+    // More information about the monochrome, please refer to https://docs.lvgl.io/master/main-modules/display/color_format.html#monochrome-displays
     px_map += EXAMPLE_LVGL_PALETTE_SIZE;
 
     uint16_t hor_res = lv_display_get_physical_horizontal_resolution(disp);
@@ -149,6 +150,7 @@ void app_main(void)
     esp_lcd_panel_io_i2c_config_t io_config = {
         .dev_addr = EXAMPLE_I2C_HW_ADDR,
         .scl_speed_hz = EXAMPLE_LCD_PIXEL_CLOCK_HZ,
+        .transaction_timeout_ms = EXAMPLE_I2C_TRANSACTION_TIMEOUT_MS,
         .control_phase_bytes = 1,               // According to SSD1306 datasheet
         .lcd_cmd_bits = EXAMPLE_LCD_CMD_BITS,   // According to SSD1306 datasheet
         .lcd_param_bits = EXAMPLE_LCD_CMD_BITS, // According to SSD1306 datasheet

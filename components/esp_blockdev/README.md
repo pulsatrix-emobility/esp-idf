@@ -28,7 +28,7 @@ The BDL interface follows the Open-Closed Principle (open for extension, closed 
 The BDL interface structure is described by the following pseudo-code:
 
 ```
-struct esp_blockdev_t {
+typedef struct esp_blockdev {
 
     //DEVICE FLAGS
     esp_blockdev_flags_t device_flags
@@ -96,6 +96,31 @@ Data manipulation and device handling API functions prototyped by function point
 and auxiliary operations like getting device statistics or debugging information.
 
 All the APIs are optional, so if any API function is not available for given device the corresponding pointer is set NULL.
+
+### Ioctl reservation overlap checking
+
+Components that define ioctl commands can also reserve command values or inclusive ranges for build-time validation. The reservation markers are real macro invocations; comments are ignored.
+
+Add reservation markers in a public header or other definition file:
+
+```c
+#include "esp_blockdev.h"
+
+ESP_BLOCKDEV_RESERVE_CMD_RANGE(nand_flash, ESP_BLOCKDEV_CMD_SYSTEM_BASE + 10, ESP_BLOCKDEV_CMD_SYSTEM_BASE + 20);
+ESP_BLOCKDEV_RESERVE_CMD(sdcard, ESP_BLOCKDEV_CMD_USER_BASE + 1);
+```
+
+Register each definition file with the build system:
+
+```cmake
+idf_build_set_property(
+    ESP_BLOCKDEV_IOCTL_DEF_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/include/foo_ioctl_defs.h"
+    APPEND
+)
+```
+
+The esp_blockdev checker component preprocesses every registered file during the build and fails if any reservations overlap or are invalid.
 
 ### Error handling
 

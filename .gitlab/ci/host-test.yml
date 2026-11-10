@@ -7,9 +7,6 @@
   # run host_test jobs immediately, only after upload cache
   needs:
     - pipeline_variables
-    - job: upload-pip-cache
-      optional: true
-      artifacts: false
     - job: upload-submodules-cache
       optional: true
       artifacts: false
@@ -71,6 +68,14 @@ test_partition_table_on_host:
     - cd components/partition_table/test_gen_esp32part_host
     - pytest_for_ut ./gen_esp32part_tests.py
 
+test_blockdev_ioctl_overlap_checker:
+  extends:
+    - .host_test_template
+    - .rules:build:check
+  script:
+    - cd components/esp_blockdev/test
+    - pytest_for_ut ./test_check_ioctl_overlap.py
+
 test_ldgen_on_host:
   extends: .host_test_template
   script:
@@ -98,6 +103,12 @@ test_certificate_bundle_on_host:
     - cd components/mbedtls/esp_crt_bundle/test_gen_crt_bundle/
     - pytest_for_ut ./test_gen_crt_bundle.py
 
+test_esp_tee_code_hash_on_host:
+  extends: .host_test_template
+  script:
+    - cd components/esp_tee/scripts/esp_tee_code_hash/
+    - pytest_for_ut ./test_esp_tee_code_hash.py
+
 # Test for create virtualenv. It must be invoked from Python, not from virtualenv.
 # Use docker image system python without any extra dependencies
 test_cli_installer:
@@ -118,7 +129,7 @@ test_cli_installer:
     #                                                                      cmake@version that is supported
     - python3 ${IDF_PATH}/tools/idf_tools.py download required qemu-riscv32 qemu-xtensa cmake cmake@3.22.1
     - cd ${IDF_PATH}/tools/test_idf_tools
-    - python3 -m pip install jsonschema
+    - python3 -m pip install jsonschema --break-system-packages
     # Testing with system python3, so don't use any third-party packages
     - python3 ./test_idf_tools.py -v
     - python3 ./test_idf_tools_python_env.py
@@ -184,6 +195,8 @@ test_tools:
     - run_cmd pytest --noconftest test_idf_py.py       --junitxml=${IDF_PATH}/XUNIT_IDF_PY.xml       --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
     - run_cmd pytest --noconftest test_hints.py        --junitxml=${IDF_PATH}/XUNIT_HINTS.xml        --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
     - run_cmd pytest --noconftest test_idf_qemu.py     --junitxml=${IDF_PATH}/XUNIT_IDF_PY_QEMU.xml  --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
+    - run_cmd pytest --noconftest test_mcp_ext.py      --junitxml=${IDF_PATH}/XUNIT_MCP_EXT.xml      --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
+    - run_cmd pytest --noconftest test_serial_ext.py   --junitxml=${IDF_PATH}/XUNIT_SERIAL_EXT.xml   --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
     - cd ${IDF_PATH}/tools/test_bsasm
     - run_cmd pytest --noconftest test_bsasm.py        --junitxml=${IDF_PATH}/XUNIT_BSASM.xml        --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}             || stat=1
     - cd ${IDF_PATH}/tools/test_mkdfu
@@ -309,12 +322,14 @@ build_docker:
   variables:
     DOCKER_TMP_IMAGE_NAME: "idf_tmp_image"
   script:
-    - export DOCKER_BUILD_ARGS="--build-arg IDF_CLONE_URL=${CI_REPOSITORY_URL} --build-arg IDF_CLONE_BRANCH_OR_TAG=${CI_COMMIT_REF_NAME} --build-arg IDF_CHECKOUT_REF=${CI_COMMIT_TAG:-$CI_COMMIT_SHA} --build-arg IDF_CLONE_SHALLOW=1 --build-arg IDF_GITHUB_ASSETS=${INTERNAL_GITHUB_ASSETS}"
-    - docker build --tag ${DOCKER_TMP_IMAGE_NAME} ${DOCKER_BUILD_ARGS} tools/docker/
+    # use different image tag for different concurrent job
+    - export DOCKER_TMP_IMAGE="${DOCKER_TMP_IMAGE_NAME}:${CI_CONCURRENT_ID:-latest}"
+    - export DOCKER_BUILD_ARGS="--build-arg IDF_CLONE_URL=${CI_REPOSITORY_URL} --build-arg IDF_CLONE_BRANCH_OR_TAG=${CI_COMMIT_REF_NAME} --build-arg IDF_CHECKOUT_REF=${CI_COMMIT_TAG:-$CI_COMMIT_SHA} --build-arg IDF_CLONE_SHALLOW=1 ${EXTRA_DOCKER_BUILD_ARGS:-} "
+    - time docker build --tag ${DOCKER_TMP_IMAGE} ${DOCKER_BUILD_ARGS} tools/docker/
     # We can't mount $PWD/examples/get-started/blink into the container, see https://gitlab.com/gitlab-org/gitlab-ce/issues/41227.
     # The workaround mentioned there works, but leaves around directories which need to be cleaned up manually.
     # Therefore, build a copy of the example located inside the container.
-    - docker run --rm --workdir /opt/esp/idf/examples/get-started/blink ${DOCKER_TMP_IMAGE_NAME} idf.py build
+    - docker run --rm --workdir /opt/esp/idf/examples/get-started/blink ${DOCKER_TMP_IMAGE} idf.py build
 
 ############################
 # Host test with test apps #
@@ -343,12 +358,11 @@ test_pytest_qemu:
       --build-system cmake
       --target $IDF_TARGET
       -m qemu
-      --modified-files ${MR_MODIFIED_FILES}
+      --modified-files \"${MR_MODIFIED_FILES}\"
     - run_cmd idf-ci gitlab download-known-failure-cases-file ${KNOWN_FAILURE_CASES_FILE_NAME}
     - run_cmd pytest
       --target $IDF_TARGET
       -m qemu
-      --embedded-services idf,qemu
       --junitxml=XUNIT_RESULT.xml
       --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}
       --qemu-extra-args \"-global driver=timer.$IDF_TARGET.timg,property=wdt_disable,value=true\"
@@ -369,18 +383,18 @@ test_pytest_linux:
       -p components -p examples -p tools/test_apps
       --target linux
       --only-test-related
-      --modified-files ${MR_MODIFIED_FILES}
+      --modified-files \"${MR_MODIFIED_FILES}\"
     - run_cmd idf-ci gitlab download-known-failure-cases-file ${KNOWN_FAILURE_CASES_FILE_NAME}
     - run_cmd pytest
       --target linux
-      --embedded-services idf
+      -m \"not macos\"
       --junitxml=XUNIT_RESULT.xml
       --ignore-result-files ${KNOWN_FAILURE_CASES_FILE_NAME}
 
 test_pytest_macos:
   extends:
     - .host_test_template
-    - .brew-macos-settings
+    - .macos-settings
   artifacts:
     paths:
       - XUNIT_RESULT.xml
@@ -395,7 +409,7 @@ test_pytest_macos:
       --target linux
       --only-test-related
       -m macos
-      --modified-files ${MR_MODIFIED_FILES}
+      --modified-files \"${MR_MODIFIED_FILES}\"
     - run_cmd idf-ci gitlab download-known-failure-cases-file ${KNOWN_FAILURE_CASES_FILE_NAME}
     - run_cmd pytest
       --target linux
@@ -486,7 +500,7 @@ pytest_buildv2_system:
 pytest_build_system_macos:
   extends:
     - .test_build_system_template
-    - .brew-macos-settings
+    - .macos-settings
     - .rules:build:macos
   parallel: 3
 
@@ -496,7 +510,7 @@ pytest_build_system_minimal_cmake:
 pytest_build_system_macos_minimal_cmake:
   extends:
     - .test_build_system_minimal_cmake_template
-    - .brew-macos-settings
+    - .macos-settings
     - .rules:build:macos
   variables:
     INSTALL_EXTRA_TOOLS: ninja cmake@3.22.1

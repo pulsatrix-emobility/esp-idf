@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -28,6 +28,7 @@
 #include "example_af.h"
 #include "example_awb.h"
 #include "example_pipelines.h"
+#include "example_dpc.h"
 #ifdef CONFIG_EXAMPLE_ISP_CROP_ENABLE
 #include "example_crop.h"
 #endif
@@ -174,7 +175,7 @@ void app_main(void)
         .v_res = crop_v_res,
         .lane_bit_rate_mbps = EXAMPLE_MIPI_CSI_LANE_BITRATE_MBPS,
         .input_data_color_type = CAM_CTLR_COLOR_RAW8,
-        .output_data_color_type = CAM_CTLR_COLOR_RGB565,
+        .output_data_color_type = CAM_CTLR_COLOR_RAW8,
         .data_lane_num = 2,
         .byte_swap_en = false,
         .queue_items = 1,
@@ -265,6 +266,33 @@ void app_main(void)
         ESP_LOGE(TAG, "Camera start fail");
         return;
     }
+
+#if CONFIG_EXAMPLE_ISP_ENABLE_DPC
+    const esp_isp_dpc_calibration_ref_t *dpc_calibration_ref = NULL;
+#if CONFIG_EXAMPLE_ISP_DPC_STATIC_CALIBRATION
+    static esp_isp_dpc_calibration_ref_t static_dpc_calibration_ref;
+    // The calibration function prompts the user to present uniform white and black images.
+    ret = example_isp_dpc_calibrate_static(isp_proc, &static_dpc_calibration_ref);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "DPC static calibration fail[%d]", ret);
+        return;
+    }
+    dpc_calibration_ref = &static_dpc_calibration_ref;
+#endif /* CONFIG_EXAMPLE_ISP_DPC_STATIC_CALIBRATION */
+
+    //---------------DPC Init and Enable------------------//
+    ret = example_isp_dpc_init(isp_proc, dpc_calibration_ref);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "DPC init fail[%d]", ret);
+        return;
+    }
+
+    ret = example_isp_dpc_enable(isp_proc);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "DPC enable fail[%d]", ret);
+        return;
+    }
+#endif /* CONFIG_EXAMPLE_ISP_ENABLE_DPC */
 
     example_dpi_panel_init(mipi_dpi_panel);
 

@@ -283,7 +283,7 @@ ESP-IDF 的 MCP（Model Context Protocol，模型上下文协议）服务器可�
 
   eim run "idf.py mcp-server"
 
-2. 直接使用 ``idf.py``：在已激活 ESP-IDF 环境的 shell 中运行 ``idf.py mcp-server`` 命令启动 MCP 服务器。必须在有效的 ESP-IDF 项目目录中执行该命令，或者使用 ``idf.py -C <project_dir> mcp-server`` 指定项目路径。
+2. 直接使用 ``idf.py``：在已激活 ESP-IDF 环境的 shell 中运行 ``idf.py mcp-server`` 命令启动 MCP 服务器。该服务器可以在任何目录下启动。使用 ``idf.py -C <project_dir> mcp-server`` 或设置 ``IDF_MCP_WORKSPACE_FOLDER`` 环境变量来配置默认项目。如果在启动时未配置任何项目，则在每次调用工具时显式传递项目目录。
 
 .. code-block:: bash
 
@@ -293,21 +293,38 @@ ESP-IDF 的 MCP（Model Context Protocol，模型上下文协议）服务器可�
 
     MCP 服务器需要通过 EIM 安装器来安装 ``mcp`` 功能。有关如何安装特定功能，请参见 `EIM 文档 ＞ CLI 配置 - 全局功能 <https://docs.espressif.com/projects/idf-im-ui/en/latest/cli_configuration.html#global-features-all-versions>`_。
 
+.. note::
+
+    ``mcp-server`` 使用 stdout 作为 MCP JSON-RPC 传输通道。使用该命令时， ``idf.py`` 不会打印通常的信息（例如 ``Executing action:``）。为避免其他输出写入 stdout，该命令不能与其他 ``idf.py`` 命令组合使用。
+
 可用工具与资源
 ^^^^^^^^^^^^^^
 
-MCP 服务器提供以下可用的命令：
+MCP 服务器提供以下工具：
 
 - ``set target``：设置 ESP-IDF 的目标芯片（esp32，esp32s3，esp32c6 等）
 - ``build project``：使用当前目标构建 ESP-IDF 项目
-- ``flash project``：将已构建的项目烧录到已连接的设备，通过端口名称进行指定。
+- ``flash project``：将已构建的项目烧录到已连接的设备，通过端口名称进行指定
 - ``clean project``：清理构建产物
+- ``create project``：基于示例模板创建新的 ESP-IDF 项目，可在尚无项目时使用
+- ``monitor device``：在已烧录的设备上运行一次脚本化的串口监视会话，并等待预期的输出。参见 :ref:`mcp-monitor-device`
+
+项目工具接受可选的 ``project_dir`` 参数。当省略该参数时，工具将默认使用启动时配置的目录（该目录可通过 ``-C`` 参数或 ``IDF_MCP_WORKSPACE_FOLDER`` 环境变量指定）。在同时处理多个项目，或启动时未配置默认项目的情况下，你可以明确指示 AI 模型使用某个特定的项目目录。``create project`` 和 ``monitor device`` 工具是例外：前者使用新项目的上级 ``path``；后者与设备交互，而不是针对项目目录。
 
 同时提供以下资源：
 
 - ``project://config``：获取当前项目配置
 - ``project://status``：获取当前项目的构建状态和构建产物
 - ``project://devices``：获取已连接的设备列表
+
+.. _mcp-monitor-device:
+
+监视设备
+^^^^^^^^
+
+AI 助手可以通过 ``monitor device`` 工具观察已烧录设备的打印输出，只需用自然语言提问即可。例如“烧录并检查设备是否在 30 秒内打印 ``Minimum free heap size``”。AI 助手会等待该输出，然后告知你结果。
+
+完整的串口日志会保存在一个文件中。如果你需要了解详细信息，可以让 AI 助手搜索日志文件。
 
 将 ESP-IDF MCP 服务器添加至 IDE 和 AI 智能体
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -466,6 +483,16 @@ ESP-IDF 支持 `CMake presets`_ 以简化多个构建配置的管理。此功能
 
 - **参与构建的组件**：在项目根目录，或注册在项目 ``CMakeLists.txt`` 中的组件根目录，放置名为 ``idf_ext.py`` 的文件，该文件会在项目配置完成后得到识别。运行 ``idf.py build`` 或 ``idf.py reconfigure``，新添加的命令即可生效。
 - **Python 入口点**：对于任何已安装的 Python 包，在 ``idf_extension`` 组中定义入口点后，就可以提供扩展功能。只要安装了 Python 包就可以使用扩展功能，无需重新构建项目。
+
+出于安全考虑，组件扩展仅从可信来源加载：
+
+- ESP-IDF 内置组件（位于 ``IDF_PATH/components`` 下）。
+- 项目组件（项目自身的 ``components/`` 目录）。
+- 在项目顶层 ``CMakeLists.txt`` 中，由 ``EXTRA_COMPONENT_DIRS`` 所列目录中的用户自定义组件。
+- 乐鑫组件注册表 (``https://components.espressif.com/``) 中的乐鑫组件，仅 ``espressif/`` 命名空间受信任。
+- 下载到 ``IDF_TOOLS_PATH/root_managed_components/`` 目录下的 IDF 托管组件。仅 ``espressif/`` 命名空间受信任。
+
+其他来源的扩展（例如通过 ``git``、本地 ``path`` 或 ``override_path`` 解析的组件）会被跳过，并给出警告。若要加载所有组件中的扩展，请设置 ``IDF_EXTENSION_ALLOW_UNTRUSTED=1``。
 
 .. important::
 

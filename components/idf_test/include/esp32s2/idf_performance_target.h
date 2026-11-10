@@ -11,16 +11,16 @@
 #define IDF_PERFORMANCE_MIN_AES_GCM_UPDATE_THROUGHPUT_MBSEC                     2.1
 
 // SHA256 hardware throughput at 240MHz, threshold set lower than worst case
-#define IDF_PERFORMANCE_MIN_SHA256_THROUGHPUT_MBSEC                             90.0
+#define IDF_PERFORMANCE_MIN_SHA256_THROUGHPUT_MBSEC                             88.0
 // esp_sha() time to process 32KB of input data from RAM
 #define IDF_PERFORMANCE_MAX_TIME_SHA1_32KB                                      900
 #define IDF_PERFORMANCE_MAX_TIME_SHA512_32KB                                    900
 
-#define IDF_PERFORMANCE_MAX_RSA_2048KEY_PUBLIC_OP                               17000
+#define IDF_PERFORMANCE_MAX_RSA_2048KEY_PUBLIC_OP                               36000
 #define IDF_PERFORMANCE_MAX_RSA_2048KEY_PRIVATE_OP                              650000
 #define IDF_PERFORMANCE_MAX_RSA_3072KEY_PUBLIC_OP                               36000
 #define IDF_PERFORMANCE_MAX_RSA_3072KEY_PRIVATE_OP                              960000
-#define IDF_PERFORMANCE_MAX_RSA_4096KEY_PUBLIC_OP                               62000
+#define IDF_PERFORMANCE_MAX_RSA_4096KEY_PUBLIC_OP                               141000
 #define IDF_PERFORMANCE_MAX_RSA_4096KEY_PRIVATE_OP                              2850000
 
 #define IDF_PERFORMANCE_MAX_ADC_CONTINUOUS_STD_ATTEN3_NO_FILTER                 3

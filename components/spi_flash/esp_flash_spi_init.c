@@ -23,7 +23,7 @@
 #include "bootloader_flash.h"
 #include "esp_check.h"
 #include "esp_private/esp_clk_tree_common.h"
-#include "clk_ctrl_os.h"
+#include "esp_clk_tree.h"
 #include "soc/soc_caps.h"
 #include "hal/spi_flash_hal.h"
 #include "hal/mspi_ll.h"
@@ -55,6 +55,8 @@ __attribute__((unused)) static const char TAG[] = "spi_flash";
 #if !CONFIG_SPI_FLASH_ROM_IMPL
 esp_flash_t *esp_flash_default_chip = NULL;
 #endif
+
+#define ESP_FLASH_GPSPI_PERIPH_SRC_FREQ_MAX     (80*1000*1000)    //peripheral hardware limitation for clock source into peripheral
 
 #if defined CONFIG_ESPTOOLPY_FLASHFREQ_120M
 #define DEFAULT_FLASH_SPEED 120
@@ -262,13 +264,13 @@ static esp_err_t acquire_spi_device(const esp_flash_spi_device_config_t *config,
 #if GPSPI_FLASH_LL_SUPPORT_CLK_SRC_PRE_DIV
 static uint32_t s_spi_find_clock_src_pre_div(uint32_t src_freq, uint32_t target_freq)
 {
-    // pre division must be even and at least 2
-    uint32_t min_div = ((src_freq / GPSPI_FLASH_LL_PERIPHERAL_FREQUENCY_MHZ) + 1) & (~0x01UL);
-    min_div = min_div < 2 ? 2 : min_div;
+    // no timing tuning, no need pre division to be even
+    uint32_t min_div = (src_freq / ESP_FLASH_GPSPI_PERIPH_SRC_FREQ_MAX);
+    min_div = min_div < 1 ? 1 : min_div;
 
     uint32_t total_div = src_freq / target_freq;
     // Loop the `div` to find a divisible value of `total_div`
-    for (uint32_t pre_div = min_div; pre_div <= total_div; pre_div += 2) {
+    for (uint32_t pre_div = min_div; pre_div <= total_div; pre_div += 1) {
         if ((total_div % pre_div) || (total_div / pre_div) > GPSPI_FLASH_LL_PERIPH_CLK_DIV_MAX) {
             continue;
         }
@@ -291,12 +293,6 @@ static uint32_t init_gpspi_clock(esp_flash_t *chip, const esp_flash_spi_device_c
     uint32_t clk_src_freq = 0;
     spi_clock_source_t clk_src = config->clock_source ? config->clock_source : SPI_CLK_SRC_DEFAULT;
 
-#if SOC_SPI_SUPPORT_CLK_RC_FAST
-    if (config->clock_source == SPI_CLK_SRC_RC_FAST) {
-        periph_rtc_dig_clk8m_enable();
-    }
-#endif
-
     esp_clk_tree_enable_src(clk_src, true);
     esp_clk_tree_src_get_freq_hz(clk_src, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &clk_src_freq);
 
@@ -312,9 +308,9 @@ static uint32_t init_gpspi_clock(esp_flash_t *chip, const esp_flash_spi_device_c
     // Calculate final clock source frequency
     uint32_t final_freq_mhz;
 #if GPSPI_FLASH_LL_SUPPORT_CLK_SRC_PRE_DIV
-    uint32_t pre_div = s_spi_find_clock_src_pre_div(clk_src_freq, GPSPI_FLASH_LL_PERIPHERAL_FREQUENCY_MHZ * 1000 * 1000);
-    gpspi_flash_ll_clk_source_pre_div(spi_flash_ll_get_hw(config->host_id), pre_div / 2, 2);
-    final_freq_mhz = clk_src_freq / (pre_div);
+    uint32_t pre_div = s_spi_find_clock_src_pre_div(clk_src_freq, config->freq_mhz * 1000 * 1000);
+    gpspi_flash_ll_clk_source_pre_div(spi_flash_ll_get_hw(config->host_id), pre_div, 1);
+    final_freq_mhz = clk_src_freq / (1000 * 1000) / pre_div;
 #else
     final_freq_mhz = clk_src_freq / (1 * 1000 * 1000);
 #endif
@@ -363,11 +359,6 @@ static void deinit_gpspi_clock(esp_flash_t *chip)
 
     // Disable the clock source
     esp_clk_tree_enable_src(chip->clock_source, false);
-
-    // Disable RC_FAST clock if it was used
-    if ((soc_module_clk_t)chip->clock_source == SOC_MOD_CLK_RC_FAST) {
-        periph_rtc_dig_clk8m_disable();
-    }
 #endif // !CONFIG_IDF_TARGET_ESP32
 }
 
@@ -566,7 +557,7 @@ esp_err_t esp_flash_init_default_chip(void)
     #endif
 
     //the host is already initialized, only do init for the data and load it to the host
-    esp_err_t err = memspi_host_init_pointers(&esp_flash_default_host, &cfg);
+    esp_err_t err = memspi_host_init_spi1_pointers(&esp_flash_default_host, &cfg);
     if (err != ESP_OK) {
         return err;
     }

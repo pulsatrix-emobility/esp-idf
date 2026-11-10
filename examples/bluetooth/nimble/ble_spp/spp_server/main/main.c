@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -17,6 +17,7 @@
 #include "ble_spp_server.h"
 #include "driver/uart.h"
 
+static const char *tag = "NimBLE_SPP_SERVER";
 static int ble_spp_server_gap_event(struct ble_gap_event *event, void *arg);
 static uint8_t own_addr_type;
 int gatt_svr_register(void);
@@ -150,6 +151,11 @@ ble_spp_server_gap_event(struct ble_gap_event *event, void *arg)
             rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
             assert(rc == 0);
             ble_spp_server_print_conn_desc(&desc);
+            ESP_LOGI(tag, "Connected, conn_handle %d, remote %02x:%02x:%02x:%02x:%02x:%02x",
+                     event->connect.conn_handle,
+                     desc.peer_ota_addr.val[5], desc.peer_ota_addr.val[4],
+                     desc.peer_ota_addr.val[3], desc.peer_ota_addr.val[2],
+                     desc.peer_ota_addr.val[1], desc.peer_ota_addr.val[0]);
         }
         MODLOG_DFLT(INFO, "\n");
         if (event->connect.status != 0 || CONFIG_BT_NIMBLE_MAX_CONNECTIONS > 1) {
@@ -248,7 +254,7 @@ ble_spp_server_on_sync(void)
 
 void ble_spp_server_host_task(void *param)
 {
-    MODLOG_DFLT(INFO, "BLE Host Task Started");
+    ESP_LOGI(tag, "BLE Host Task Started");
     /* This function will return only when nimble_port_stop() is executed */
     nimble_port_run();
 
@@ -411,7 +417,11 @@ static void ble_spp_uart_init(void)
         .source_clk = UART_SCLK_DEFAULT,
     };
     //Install UART driver, and get the queue.
-    uart_driver_install(UART_NUM_0, 4096, 8192, 10, &spp_common_uart_queue, 0);
+    esp_err_t err = uart_driver_install(UART_NUM_0, 4096, 8192, 10, &spp_common_uart_queue, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE("SPP_SERVER", "uart_driver_install failed: %d", err);
+        return;
+    }
     //Set UART parameters
     uart_param_config(UART_NUM_0, &uart_config);
     //Set UART pins

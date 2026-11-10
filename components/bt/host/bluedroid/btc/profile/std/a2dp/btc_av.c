@@ -40,7 +40,7 @@ bool g_av_with_rc;
 // global variable to indicate a2dp is initialized
 bool g_a2dp_on_init;
 // global variable to indicate a2dp is deinitialized
-bool g_a2dp_on_deinit;
+bool g_a2dp_on_deinit = true;
 // global variable to indicate a2dp source deinitialization is ongoing
 bool g_a2dp_source_ongoing_deinit;
 // global variable to indicate a2dp sink deinitialization is ongoing
@@ -330,6 +330,7 @@ static void btc_report_audio_state(esp_a2d_audio_state_t state, bt_bdaddr_t *bd_
 static BOOLEAN btc_av_state_idle_handler(btc_sm_event_t event, void *p_data)
 {
     esp_a2d_cb_param_t param;
+    memset(&param, 0, sizeof(esp_a2d_cb_param_t));
 
     BTC_TRACE_DEBUG("%s event: %s flags %x\n", __FUNCTION__,
               dump_av_sm_event_name(event), btc_av_cb.flags);
@@ -415,6 +416,10 @@ static BOOLEAN btc_av_state_idle_handler(btc_sm_event_t event, void *p_data)
          */
 #if BTC_AV_SRC_INCLUDED
         BTC_TRACE_DEBUG("BTA_AV_RC_OPEN_EVT received w/o AV");
+        if (btc_av_cb.tle_av_open_on_rc) {
+            osi_alarm_free(btc_av_cb.tle_av_open_on_rc);
+            btc_av_cb.tle_av_open_on_rc = NULL;
+        }
         btc_av_cb.tle_av_open_on_rc = osi_alarm_new("AVconn", btc_initiate_av_open_tmr_hdlr, NULL, BTC_TIMEOUT_AV_OPEN_ON_RC_SECS * 1000);
         osi_alarm_set(btc_av_cb.tle_av_open_on_rc, BTC_TIMEOUT_AV_OPEN_ON_RC_SECS * 1000);
 #endif /* BTC_AV_SRC_INCLUDED */
@@ -513,7 +518,8 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
         if (p_bta_data->open.status == BTA_AV_SUCCESS) {
             btc_av_cb.edr = p_bta_data->open.edr;
             btc_av_cb.peer_sep = p_bta_data->open.sep;
-            mtu = p_bta_data->open.mtu - BTC_AV_AUDIO_MTU_RESERVE;
+            mtu = (p_bta_data->open.mtu > BTC_AV_AUDIO_MTU_RESERVE) ?
+                  (p_bta_data->open.mtu - BTC_AV_AUDIO_MTU_RESERVE) : 0;
             conn_stat = ESP_A2D_CONNECTION_STATE_CONNECTED;
             av_state = BTC_AV_STATE_OPENED;
         } else {
@@ -573,19 +579,21 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
         btc_a2d_cb_to_app(ESP_A2D_AUDIO_CFG_EVT, &param);
     } break;
 
-    case BTC_AV_CONNECT_REQ_EVT:
+    case BTC_AV_CONNECT_REQ_EVT: {
+        btc_av_connect_req_t *connect_req = (btc_av_connect_req_t *)p_data;
         // Check for device, if same device which moved to opening then ignore callback
-        if (memcmp ((bt_bdaddr_t *)p_data, &(btc_av_cb.peer_bda),
+        if (memcmp (&connect_req->target_bda, &(btc_av_cb.peer_bda),
                     sizeof(btc_av_cb.peer_bda)) == 0) {
             BTC_TRACE_DEBUG("%s: Same device moved to Opening state,ignore Connect Req\n", __func__);
             btc_queue_advance();
             break;
         } else {
             BTC_TRACE_DEBUG("%s: Moved from idle by Incoming Connection request\n", __func__);
-            btc_report_connection_state(ESP_A2D_CONNECTION_STATE_DISCONNECTED, (bt_bdaddr_t *)p_data, 0, 0);
+            btc_report_connection_state(ESP_A2D_CONNECTION_STATE_DISCONNECTED, &connect_req->target_bda, 0, 0);
             btc_queue_advance();
             break;
         }
+    }
 
     case BTA_AV_PENDING_EVT:
         // Check for device, if same device which moved to opening then ignore callback
@@ -630,6 +638,37 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
 }
 
 
+#if BTC_A2DP_AUDIO_STATS
+static void btc_av_audio_stats_post(bool reset)
+{
+#if (BTC_AV_SRC_INCLUDED == TRUE) && (BTC_AV_EXT_CODEC == FALSE)
+    if (btc_av_cb.peer_sep == AVDT_TSEP_SNK) {
+        if (reset) {
+            btc_a2dp_source_audio_stats_reset(btc_av_cb.bta_handle);
+        } else {
+            btc_a2dp_source_audio_stats_stop(btc_av_cb.bta_handle);
+        }
+        return;
+    }
+#endif
+#if (BTC_AV_SINK_INCLUDED == TRUE) && (BTC_AV_EXT_CODEC == FALSE)
+    if (btc_av_cb.peer_sep == AVDT_TSEP_SRC) {
+        if (reset) {
+            btc_a2dp_sink_audio_stats_reset(btc_av_cb.bta_handle);
+        } else {
+            btc_a2dp_sink_audio_stats_stop(btc_av_cb.bta_handle);
+        }
+        return;
+    }
+#endif
+    if (reset) {
+        btc_a2dp_audio_stats_reset(btc_av_cb.bta_handle);
+    } else {
+        btc_a2dp_audio_stats_stop(btc_av_cb.bta_handle);
+    }
+}
+#endif /* BTC_A2DP_AUDIO_STATS */
+
 /*****************************************************************************
 **
 ** Function        btc_av_state_closing_handler
@@ -644,12 +683,16 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
 static BOOLEAN btc_av_state_closing_handler(btc_sm_event_t event, void *p_data)
 {
     esp_a2d_cb_param_t param;
+    memset(&param, 0, sizeof(esp_a2d_cb_param_t));
 
     BTC_TRACE_DEBUG("%s event: %s flags %x\n", __FUNCTION__,
               dump_av_sm_event_name(event), btc_av_cb.flags);
 
     switch (event) {
     case BTC_SM_ENTER_EVT:
+#if BTC_A2DP_AUDIO_STATS
+        btc_av_audio_stats_post(false);
+#endif
 #if BTC_AV_SRC_INCLUDED
         if (btc_av_cb.peer_sep == AVDT_TSEP_SNK) {
             /* immediately stop transmission of frames */
@@ -731,6 +774,7 @@ static BOOLEAN btc_av_state_closing_handler(btc_sm_event_t event, void *p_data)
 static BOOLEAN btc_av_state_opened_handler(btc_sm_event_t event, void *p_data)
 {
     esp_a2d_cb_param_t param;
+    memset(&param, 0, sizeof(esp_a2d_cb_param_t));
     tBTA_AV *p_av = (tBTA_AV *)p_data;
 
     BTC_TRACE_DEBUG("%s event: %s flags %x\n", __FUNCTION__,
@@ -829,6 +873,9 @@ static BOOLEAN btc_av_state_opened_handler(btc_sm_event_t event, void *p_data)
     case BTA_AV_CLOSE_EVT: {
         /* avdtp link is closed */
         btc_a2dp_on_stopped(NULL);
+#if BTC_A2DP_AUDIO_STATS
+        btc_a2dp_audio_stats_stop(btc_av_cb.bta_handle);
+#endif
         tBTA_AV_CLOSE *close = (tBTA_AV_CLOSE *)p_data;
         /* inform the application that we are disconnected */
         btc_report_connection_state(ESP_A2D_CONNECTION_STATE_DISCONNECTED, &(btc_av_cb.peer_bda), 0,
@@ -882,17 +929,19 @@ static BOOLEAN btc_av_state_opened_handler(btc_sm_event_t event, void *p_data)
         }
         break;
 
-    case BTC_AV_CONNECT_REQ_EVT:
-        if (memcmp (&((btc_av_connect_req_t *)p_data)->target_bda, &(btc_av_cb.peer_bda),
+    case BTC_AV_CONNECT_REQ_EVT: {
+        btc_av_connect_req_t *connect_req = (btc_av_connect_req_t *)p_data;
+        if (memcmp (&connect_req->target_bda, &(btc_av_cb.peer_bda),
                     sizeof(btc_av_cb.peer_bda)) == 0) {
             BTC_TRACE_DEBUG("%s: Ignore BTC_AVCONNECT_REQ_EVT for same device\n", __func__);
         } else {
             BTC_TRACE_DEBUG("%s: Moved to opened by Other Incoming Conn req\n", __func__);
             btc_report_connection_state(ESP_A2D_CONNECTION_STATE_DISCONNECTED,
-                                        (bt_bdaddr_t *)p_data, 0, ESP_A2D_DISC_RSN_NORMAL);
+                                        &connect_req->target_bda, 0, ESP_A2D_DISC_RSN_NORMAL);
         }
         btc_queue_advance();
         break;
+    }
 
     CHECK_RC_EVENT(event, p_data);
 
@@ -936,6 +985,7 @@ static BOOLEAN btc_av_state_started_handler(btc_sm_event_t event, void *p_data)
 {
     tBTA_AV *p_av = (tBTA_AV *)p_data;
     esp_a2d_cb_param_t param;
+    memset(&param, 0, sizeof(esp_a2d_cb_param_t));
 
     BTC_TRACE_DEBUG("%s event: %s flags %x\n", __FUNCTION__,
               dump_av_sm_event_name(event), btc_av_cb.flags);
@@ -946,6 +996,9 @@ static BOOLEAN btc_av_state_started_handler(btc_sm_event_t event, void *p_data)
         /* we are again in started state, clear any remote suspend flags */
         btc_av_cb.flags &= ~BTC_AV_FLAG_REMOTE_SUSPEND;
 
+#if BTC_A2DP_AUDIO_STATS
+        btc_av_audio_stats_post(true);
+#endif
         btc_report_audio_state(ESP_A2D_AUDIO_STATE_STARTED, &(btc_av_cb.peer_bda));
 
         /* increase the a2dp consumer task priority temporarily when start
@@ -1028,6 +1081,10 @@ static BOOLEAN btc_av_state_started_handler(btc_sm_event_t event, void *p_data)
             return FALSE;
         }
 
+#if BTC_A2DP_AUDIO_STATS
+        btc_a2dp_audio_stats_stop(btc_av_cb.bta_handle);
+#endif
+
         if (p_av->suspend.initiator != TRUE) {
             /* remote suspend, notify HAL and await audioflinger to
                suspend/stop stream */
@@ -1056,6 +1113,9 @@ static BOOLEAN btc_av_state_started_handler(btc_sm_event_t event, void *p_data)
 
         /* if stop was successful, change state to open */
         if (p_av->suspend.status == BTA_AV_SUCCESS) {
+#if BTC_A2DP_AUDIO_STATS
+            btc_a2dp_audio_stats_stop(btc_av_cb.bta_handle);
+#endif
             btc_sm_change_state(btc_av_cb.sm_handle, BTC_AV_STATE_OPENED);
         }
         break;
@@ -1065,6 +1125,9 @@ static BOOLEAN btc_av_state_started_handler(btc_sm_event_t event, void *p_data)
 
         /* avdtp link is closed */
         btc_a2dp_on_stopped(NULL);
+#if BTC_A2DP_AUDIO_STATS
+        btc_a2dp_audio_stats_stop(btc_av_cb.bta_handle);
+#endif
         tBTA_AV_CLOSE *close = (tBTA_AV_CLOSE *)p_data;
         /* inform the application that we are disconnected */
         btc_report_connection_state(ESP_A2D_CONNECTION_STATE_DISCONNECTED, &(btc_av_cb.peer_bda), 0,
@@ -1225,6 +1288,7 @@ static bt_status_t btc_av_init(int service_id)
             btc_dm_enable_service(BTA_A2DP_SOURCE_SERVICE_ID);
         }
 
+        btc_a2dp_audio_stats_init();
         btc_a2dp_on_init();
         g_a2dp_on_init = true;
         g_a2dp_on_deinit = false;
@@ -1298,6 +1362,8 @@ static void clean_up(int service_id)
     /* Also shut down the AV state machine */
     btc_sm_shutdown(btc_av_cb.sm_handle);
     btc_av_cb.sm_handle = NULL;
+
+    btc_a2dp_audio_stats_deinit();
 
 #if A2D_DYNAMIC_MEMORY == TRUE
     osi_free(btc_av_cb_ptr);
@@ -1810,6 +1876,22 @@ void btc_a2dp_call_handler(btc_msg_t *msg)
         btc_a2dp_control_media_ctrl(arg->ctrl);
         break;
     }
+#if BTC_A2DP_AUDIO_STATS
+    case BTC_AV_API_AUDIO_STATS_GET_EVT: {
+        esp_a2d_cb_param_t param = {0};
+#if (BTC_AV_EXT_CODEC == TRUE)
+        /* External-codec source returns the buffer to the caller instead of dropping it. */
+        if (btc_av_cb.peer_sep == AVDT_TSEP_SNK) {
+            param.audio_stats.status = ESP_ERR_NOT_SUPPORTED;
+        } else
+#endif
+        {
+            param.audio_stats.status = btc_a2dp_audio_stats_get(arg->audio_stats_conn_hdl, &param.audio_stats.stats);
+        }
+        btc_a2d_cb_to_app(ESP_A2D_AUDIO_STATS_EVT, &param);
+        break;
+    }
+#endif
     case BTC_AV_CONNECT_REQ_EVT:
         btc_sm_dispatch(btc_av_cb.sm_handle, msg->act, (char *)msg->arg);
         break;
@@ -2059,17 +2141,21 @@ bt_status_t btc_a2d_src_audio_data_send(esp_a2d_conn_hdl_t conn_hdl, esp_a2d_aud
     BT_HDR *p_buf = (BT_HDR *)audio_buf;
     assert(audio_buf->data - (UINT8 *)(p_buf + 1) >= BTC_AUDIO_BUFF_OFFSET);
     /* since p_buf and audio_buf point to the same memory, backup those value before modify p_buf */
-    uint16_t number_frame = audio_buf->number_frame;
-    uint16_t data_len = audio_buf->data_len;
-    uint32_t timestamp = audio_buf->timestamp;
+    uint16_t saved_number_frame = audio_buf->number_frame;
+    uint32_t saved_timestamp = audio_buf->timestamp;
+    uint16_t saved_data_len = audio_buf->data_len;
     p_buf->offset = audio_buf->data - (UINT8 *)(p_buf + 1);
-    p_buf->layer_specific = number_frame;
-    p_buf->len = data_len;
-    *((UINT32 *) (p_buf + 1)) = timestamp;
+    p_buf->layer_specific = saved_number_frame;
+    p_buf->len = saved_data_len;
+    *((UINT32 *) (p_buf + 1)) = saved_timestamp;
 
     if (btc_a2dp_source_enqueue_audio_frame(p_buf)) {
         return BT_STATUS_SUCCESS;
     }
+
+    audio_buf->number_frame = saved_number_frame;
+    audio_buf->timestamp = saved_timestamp;
+    audio_buf->data_len = saved_data_len;
 #endif
     return BT_STATUS_FAIL;
 }
@@ -2101,6 +2187,13 @@ uint16_t btc_a2d_conn_handle_get(void)
 void btc_av_audio_buff_alloc(uint16_t size, uint8_t **pp_buff, uint8_t **pp_data)
 {
     /* todo */
+    if (pp_buff == NULL || pp_data == NULL) {
+        return;
+    }
+
+    *pp_buff = NULL;
+    *pp_data = NULL;
+
     BT_HDR *p_buf= (BT_HDR *)osi_calloc(sizeof(BT_HDR) + BTC_AUDIO_BUFF_OFFSET + size);
     if (p_buf != NULL) {
         *pp_buff = (uint8_t *)p_buf;

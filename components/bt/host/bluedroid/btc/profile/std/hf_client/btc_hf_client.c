@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,7 +14,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdlib.h>
 #include "common/bt_defs.h"
 #include "device/bdaddr.h"
 #include "btc/btc_dm.h"
@@ -353,6 +352,19 @@ bt_status_t btc_hf_client_disconnect_audio( bt_bdaddr_t *bd_addr )
     return BT_STATUS_FAIL;
 }
 
+bt_status_t btc_hf_client_audio_data_send(uint16_t sync_conn_hdl, uint8_t *p_buff_start, uint8_t *p_data, uint8_t data_len)
+{
+#if (BTM_SCO_HCI_INCLUDED == TRUE) && (BTA_HFP_EXT_CODEC == TRUE)
+    CHECK_HF_CLIENT_SLC_CONNECTED();
+
+    if (sync_conn_hdl != ESP_INVALID_CONN_HANDLE && hf_client_local_param.btc_hf_client_cb.sync_conn_hdl == sync_conn_hdl) {
+        BTA_HfClientAudioDataSend(sync_conn_hdl, p_buff_start, p_data, data_len);
+        return BT_STATUS_SUCCESS;
+    }
+#endif
+    return BT_STATUS_FAIL;
+}
+
 /*******************************************************************************
 **
 ** Function         btc_hf_client_start_voice_recognition
@@ -537,6 +549,8 @@ static bt_status_t btc_hf_client_send_chld_cmd(esp_hf_chld_type_t type, int idx)
         }
         return BT_STATUS_UNSUPPORTED;
 
+    default:
+        return BT_STATUS_FAIL;
     }
     return BT_STATUS_SUCCESS;
 }
@@ -1069,7 +1083,6 @@ void btc_hf_client_cb_handler(btc_msg_t *msg)
                     param.cnum.type = ESP_HF_SUBSCRIBER_SERVICE_TYPE_UNKNOWN;
                 }
                 btc_hf_client_cb_to_app(ESP_HF_CLIENT_CNUM_EVT, &param);
-                break;
             } while (0);
             break;
         case BTA_HF_CLIENT_BTRH_EVT:

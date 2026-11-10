@@ -75,6 +75,12 @@ I2S 时钟
 
     通常，MCLK 应该同时是 ``采样率`` 和 BCLK 的倍数。字段 :cpp:member:`i2s_std_clk_config_t::mclk_multiple` 表示 MCLK 相对于 ``采样率`` 的倍数。在大多数情况下，将其设置为 ``I2S_MCLK_MULTIPLE_256`` 即可。但如果 ``slot_bit_width`` 被设置为 ``I2S_SLOT_BIT_WIDTH_24BIT``，为了保证 MCLK 是 BCLK 的整数倍，应该将 :cpp:member:`i2s_std_clk_config_t::mclk_multiple` 设置为能被 3 整除的倍数，如 ``I2S_MCLK_MULTIPLE_384``，否则 WS 会不精准。
 
+.. only:: esp32
+
+    .. note::
+
+        在ESP32上，MCLK 管脚必须使用 GPIO0、GPIO1 或 GPIO3 管脚。其他的时钟管脚可以使用任意的 GPIO。注意，由于 GPIO0 为 Strapping 管脚，一般不推荐用作其他功能。
+
 .. _i2s-communication-mode:
 
 I2S 通信模式
@@ -256,7 +262,7 @@ I2S 驱动中的资源可分为三个级别：
 
 电源管理启用（即开启 :ref:`CONFIG_PM_ENABLE`）时，系统将在进入 Light-sleep 前调整或停止 I2S 时钟源，这可能会影响 I2S 信号，从而导致传输或接收的数据无效。
 
-I2S 驱动可以获取电源管理锁，从而防止系统设置更改或时钟源被禁用。时钟源为 APB 时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_APB_FREQ_MAX`。时钟源为 APLL（若支持）时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_NO_LIGHT_SLEEP`。用户通过 I2S 读写时（即调用 :cpp:func:`i2s_channel_read` 或 :cpp:func:`i2s_channel_write`），驱动程序将获取电源管理锁，并在读写完成后释放锁。
+I2S 驱动可以获取电源管理锁，从而防止系统设置更改或时钟源被禁用。时钟源为 APB 时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_APB_FREQ_MAX`。时钟源为 APLL（若支持）时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_NO_LIGHT_SLEEP`。驱动程序将在调用 :cpp:func:`i2s_channel_enable` 启用通道时获取电源管理锁，并在调用 :cpp:func:`i2s_channel_disable` 禁用通道时释放锁，确保通道运行期间 I2S 时钟源保持稳定。
 
 .. only:: SOC_I2S_SUPPORT_SLEEP_RETENTION
 
@@ -340,6 +346,10 @@ I2S 驱动例程请参考 :example:`peripherals/i2s` 目录。以下为每种模
 - :c:macro:`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG`
 - :c:macro:`I2S_STD_PCM_SLOT_DEFAULT_CONFIG`
 - :c:macro:`I2S_STD_MSB_SLOT_DEFAULT_CONFIG`
+
+.. note::
+
+    标准模式的声道辅助宏会根据 ``bits_per_sample`` 参数设置 :cpp:member:`i2s_std_slot_config_t::ws_width`。如果使用辅助宏后手动修改 :cpp:member:`i2s_std_slot_config_t::slot_bit_width`，请根据需要同步更新 :cpp:member:`i2s_std_slot_config_t::ws_width`。对于 Philips 和 MSB 格式，应将 ``ws_width`` 设置为声道位宽，以保持 WS 占空比为 50%。对于 PCM 短帧同步格式，``ws_width`` 应保持为 1 个 BCLK。
 
 时钟配置的辅助宏为：
 
@@ -791,6 +801,10 @@ STD RX 模式
     - :c:macro:`I2S_TDM_PCM_SHORT_SLOT_DEFAULT_CONFIG`
     - :c:macro:`I2S_TDM_PCM_LONG_SLOT_DEFAULT_CONFIG`
 
+    .. note::
+
+        TDM Philips 和 MSB 声道辅助宏默认使用 ``I2S_TDM_AUTO_WS_WIDTH``，该配置会将 WS 宽度设置为帧宽的一半。如果手动修改 :cpp:member:`i2s_tdm_slot_config_t::ws_width`，请确保配置的 WS 宽度符合所选格式的预期时序。
+
     时钟配置的辅助宏为：
 
     - :c:macro:`I2S_TDM_CLK_DEFAULT_CONFIG`
@@ -877,6 +891,10 @@ STD RX 模式
 
 请注意，一个句柄只能代表一个通道，因此仍然需要对 TX 和 RX 通道逐个进行声道和时钟配置。
 
+.. note::
+
+    全双工模式下只能有一个通道作为 master 生成 BCLK 和 WS。如果配对的两个句柄都配置为 ``I2S_ROLE_MASTER``，后初始化的句柄会被自动切换为 ``I2S_ROLE_SLAVE``。
+
 驱动支持两种分配全双工通道的方法：
 
 1. 在调用 :cpp:func:`i2s_new_channel` 函数时，同时分配 TX 和 RX 通道两个通道。
@@ -894,7 +912,7 @@ STD RX 模式
     /* 同时分配给 TX 和 RX 通道，使其进入全双工模式。 */
     i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle);
 
-    /* 配置两个通道，因为在全双工模式下，TX 和 RX 通道必须相同。 */
+    /* 配置两个通道。全双工模式要求 BCLK/WS 与帧时序匹配。 */
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(32000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -919,7 +937,7 @@ STD RX 模式
 
     ...
 
-2. 调用两次 :cpp:func:`i2s_new_channel` 函数分别分配 TX 和 RX 通道，但使用相同配置初始化 TX 和 RX 通道。
+2. 调用两次 :cpp:func:`i2s_new_channel` 函数分别分配 TX 和 RX 通道，并使用兼容配置初始化 TX 和 RX 通道。
 
 .. code-block:: c
 
@@ -934,7 +952,7 @@ STD RX 模式
     /* 分别分配给 TX 和 RX 通道 */
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, NULL));
 
-    /* 为两个通道设置完全相同的配置，TX 和 RX 将自动组成全双工模式 */
+    /* 为两个通道设置兼容配置，TX 和 RX 将自动组成全双工模式 */
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(32000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -960,6 +978,15 @@ STD RX 模式
 
     ...
 
+.. only:: SOC_I2S_HW_VERSION_2
+
+    当 TX 和 RX 通道分别分配时（即上述第二种方法），二者无需配置得完全相同即可组成全双工。只要满足以下条件，驱动就会让它们共享 BCLK 和 WS 信号线：
+
+    - 两个通道使用相同且有效的 ``bclk`` 和 ``ws`` 管脚；
+    - 两个通道使用相同的 BCLK/WS 反相配置；
+    - 二者产生相同的帧时序，即 ``sample_rate_hz`` 相同且每帧总位数（``total_slot * slot_bit_width``）相同。
+
+    时钟源、外部时钟频率（``ext_clk_freq_hz``）以及 MCLK 相关配置不作为组成全双工的判据，MCLK 相关配置包括 ``mclk`` 管脚、``mclk_multiple`` 和 MCLK 反相配置。槽（slot）布局本身也可以不同。例如，一个 STD 通道与一个 TDM 通道，或者 2 槽/32 位通道与 4 槽/16 位通道配对，只要每帧的位数相同，仍可组成全双工。一旦组成了一对全双工通道，便可通过 :cpp:func:`i2s_channel_get_info` 返回的 :cpp:type:`i2s_chan_info_t`::pair_chan 获取配对通道的句柄。
 
 .. only:: SOC_I2S_HW_VERSION_1
 

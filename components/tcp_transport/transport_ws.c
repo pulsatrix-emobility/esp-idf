@@ -71,6 +71,7 @@ typedef struct {
     int http_status_code;
     bool propagate_control_frames;
     ws_transport_frame_state_t frame_state;
+    bool fragmented_msg_in_progress;    /*!< A data frame with FIN=0 was received, continuation frames are expected */
     esp_transport_handle_t parent;
     char *redir_host;
     char *response_header;
@@ -173,6 +174,7 @@ static int ws_connect(esp_transport_handle_t t, const char *host, int port, int 
 
     free(ws->redir_host);
     ws->redir_host = NULL;
+    ws->fragmented_msg_in_progress = false;
 
     if (esp_transport_connect(ws->parent, host, port, timeout_ms) < 0) {
         ESP_LOGE(TAG, "Error connecting to host %s:%d", host, port);
@@ -611,6 +613,21 @@ static int ws_read_header(esp_transport_handle_t t, char *buffer, int len, int t
         return -1;
     }
 
+    // RFC 6455 Section 5.4: Continuation frames are only valid inside a fragmented message, and a new
+    // data message must not start before it completes. Control frames may be interleaved.
+    if (!(ws->frame_state.opcode & WS_OPCODE_CONTROL_FRAME)) {
+        if (ws->frame_state.opcode == WS_OPCODE_CONT && !ws->fragmented_msg_in_progress) {
+            ESP_LOGE(TAG, "Continuation frame without a fragmented message in progress - protocol violation");
+            return -1;
+        }
+        if (ws->frame_state.opcode != WS_OPCODE_CONT && ws->fragmented_msg_in_progress) {
+            ESP_LOGE(TAG, "Data frame (opcode=0x%02X) received before fragmented message completed - protocol violation",
+                     ws->frame_state.opcode);
+            return -1;
+        }
+        ws->fragmented_msg_in_progress = !ws->frame_state.fin;
+    }
+
     if (payload_len == 126) {
         // headerLen += 2;
         if ((rlen = esp_transport_read_exact_size(ws, data_ptr, header, timeout_ms)) <= 0) {
@@ -626,17 +643,31 @@ static int ws_read_header(esp_transport_handle_t t, char *buffer, int len, int t
             return rlen;
         }
 
-        if (data_ptr[0] != 0 || data_ptr[1] != 0 || data_ptr[2] != 0 || data_ptr[3] != 0) {
-            // really too big!
-            payload_len = 0xFFFFFFFF;
-        } else {
-            payload_len = (uint8_t)data_ptr[4] << 24 | (uint8_t)data_ptr[5] << 16 | (uint8_t)data_ptr[6] << 8 | data_ptr[7];
+        if (data_ptr[0] != 0 || data_ptr[1] != 0 || data_ptr[2] != 0 || data_ptr[3] != 0 ||
+            ((uint8_t)data_ptr[4] & 0x80)) {
+            ESP_LOGE(TAG, "Payload length out of range");
+            return -1;
         }
+        payload_len = (int)((uint32_t)(uint8_t)data_ptr[4] << 24 |
+                            (uint32_t)(uint8_t)data_ptr[5] << 16 |
+                            (uint32_t)(uint8_t)data_ptr[6] << 8 |
+                            (uint32_t)(uint8_t)data_ptr[7]);
     }
     // RFC 6455 Section 5.5: Control frames MUST have payload length of 125 bytes or less
     if ((ws->frame_state.opcode & WS_OPCODE_CONTROL_FRAME) && payload_len > 125) {
         ESP_LOGE(TAG, "Control frame with excessive payload detected (opcode=0x%02X, payload_len=%d) - protocol violation",
                  ws->frame_state.opcode, payload_len);
+        // Consume the payload bytes from the TCP stream to keep it in sync before returning error
+        char buf[WS_TRANSPORT_MAX_CONTROL_FRAME_BUFFER_LEN];
+        int remaining = payload_len;
+        while (remaining > 0) {
+            int to_read = remaining < WS_TRANSPORT_MAX_CONTROL_FRAME_BUFFER_LEN ? remaining : WS_TRANSPORT_MAX_CONTROL_FRAME_BUFFER_LEN;
+            int bytes_read = esp_transport_read_internal(ws, buf, to_read, timeout_ms);
+            if (bytes_read <= 0) {
+                break;
+            }
+            remaining -= bytes_read;
+        }
         return -1;
     }
     if (mask) {
@@ -727,6 +758,24 @@ static int ws_read(esp_transport_handle_t t, char *buffer, int len, int timeout_
             // automatically handle only 0 payload frames and make the transport read to return 0 on success
             // which might be interpreted as timeouts
             return ws_handle_control_frame_internal(t, timeout_ms);
+        }
+
+        // Read the full control frame payload into the caller's buffer in one shot.
+        // This prevents the client from receiving the payload in chunks and
+        // incorrectly echoing only the last chunk as a PONG response.
+        if ((ws->frame_state.opcode & WS_OPCODE_CONTROL_FRAME) && ws->frame_state.payload_len > 0) {
+            int payload_len = ws->frame_state.payload_len;
+            if (payload_len > len) {
+                ESP_LOGE(TAG, "Control frame payload (%d) exceeds caller buffer (%d)", payload_len, len);
+                return -1;
+            }
+            int bytes_read = esp_transport_read_exact_size(ws, buffer, payload_len, timeout_ms);
+            if (bytes_read != payload_len) {
+                ESP_LOGE(TAG, "Control frame payload read failed (expected=%d, got=%d)", payload_len, bytes_read);
+                return -1;
+            }
+            ws->frame_state.bytes_remaining = 0;
+            return payload_len;
         }
 
         if (rlen == 0) {

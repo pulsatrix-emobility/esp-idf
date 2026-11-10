@@ -50,6 +50,39 @@ static inline int p256_words_is_zero(const u32 *a)
     return 1;
 }
 
+static inline int p256_words_is_one(const u32 *a)
+{
+    size_t i;
+
+    if (a[0] != 1U) {
+        return 0;
+    }
+
+    for (i = 1; i < P256_WORDS; i++) {
+        if (a[i] != 0U) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static inline int p256_words_cmp(const u32 *x, const u32 *y)
+{
+    int i;
+
+    for (i = P256_WORDS - 1; i >= 0; i--) {
+        if (x[i] > y[i]) {
+            return 1;
+        }
+        if (x[i] < y[i]) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 static inline size_t p256_words_bitlen(const u32 *a)
 {
     int i;
@@ -215,7 +248,7 @@ static inline void p256_mont_mul(u32 z[P256_WORDS],
                                  const u32 y[P256_WORDS])
 {
     u32 a[P256_WORDS + 1] = {0};
-    u32 reduced[P256_WORDS];
+    u32 reduced[P256_WORDS] = {0};
     size_t i;
 
     for (i = 0; i < P256_WORDS; i++) {

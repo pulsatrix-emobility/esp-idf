@@ -7,6 +7,7 @@
 #include "memory_checks.h"
 #include "esp_tls.h"
 #include "esp_tls_custom_stack.h"
+#include "esp_tls_private.h"
 #include "unity.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -60,6 +61,46 @@ const char *test_key_pem =    "-----BEGIN PRIVATE KEY-----\n"\
                               "Aogx44Fozd1t2hYcozPuZD4s\n"\
                               "-----END PRIVATE KEY-----\n";
 
+static ssize_t dummy_read(esp_tls_t *tls, char *data, size_t datalen) { return (ssize_t)datalen; }
+
+TEST_CASE("esp_tls_conn_write/read reject NULL tls", "[esp-tls]")
+{
+    char buf[16] = {0};
+    TEST_ASSERT_EQUAL(-1, esp_tls_conn_write(NULL, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL(-1, esp_tls_conn_read(NULL, buf, sizeof(buf)));
+}
+
+TEST_CASE("esp_tls_conn_write reject NULL data buffer", "[esp-tls]")
+{
+    esp_tls_t *tls = esp_tls_init();
+    TEST_ASSERT_NOT_NULL(tls);
+    TEST_ASSERT_EQUAL(-1, esp_tls_conn_write(tls, NULL, 16));
+    esp_tls_conn_destroy(tls);
+}
+
+TEST_CASE("esp_tls_conn_read accepts zero datalen", "[esp-tls]")
+{
+    esp_tls_t *tls = esp_tls_init();
+    TEST_ASSERT_NOT_NULL(tls);
+    tls->is_tls = true;
+    tls->read = dummy_read;
+    TEST_ASSERT_EQUAL(ESP_OK, esp_tls_set_conn_state(tls, ESP_TLS_DONE));
+    /* datalen=0 on read is used in some projects, to get the data in the SSL buffers */
+    TEST_ASSERT_EQUAL(0, esp_tls_conn_read(tls, NULL, 0));
+    esp_tls_conn_destroy(tls);
+}
+
+TEST_CASE("esp_tls_conn_write/read reject unconnected tls", "[esp-tls]")
+{
+    esp_tls_t *tls = esp_tls_init();
+    TEST_ASSERT_NOT_NULL(tls);
+    /* read/write function pointers are NULL right after init */
+    char buf[16] = {0};
+    TEST_ASSERT_EQUAL(-1, esp_tls_conn_write(tls, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL(-1, esp_tls_conn_read(tls, buf, sizeof(buf)));
+    esp_tls_conn_destroy(tls);
+}
+
 #if CONFIG_ESP_TLS_USING_MBEDTLS
 TEST_CASE("esp-tls init deinit", "[esp-tls]")
 {
@@ -94,7 +135,6 @@ TEST_CASE("esp_tls_server session create delete", "[esp-tls]")
     TEST_ASSERT_LESS_THAN_INT(0, ret);
     // free the allocated memory.
     esp_tls_server_session_delete(tls);
-
 }
 #endif /* CONFIG_ESP_TLS_USING_MBEDTLS */
 

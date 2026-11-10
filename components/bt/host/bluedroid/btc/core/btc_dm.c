@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -29,7 +29,8 @@
 /******************************************************************************
 **  Constants & Macros
 ******************************************************************************/
-#define BTA_SERVICE_ID_TO_SERVICE_MASK(id)       (1 << (id))
+/* Use 1ULL to avoid UB: 1 << 32 is undefined when int is 32-bit (C11 §6.5.7) */
+#define BTA_SERVICE_ID_TO_SERVICE_MASK(id)       ((tBTA_SERVICE_MASK)(1ULL << (id)))
 
 /******************************************************************************
 **  Static variables
@@ -167,6 +168,8 @@ void btc_dm_get_ble_local_keys(tBTA_DM_BLE_LOCAL_KEY_MASK *p_key_mask, BT_OCTET1
 }
 
 
+#if (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL == TRUE) || \
+    (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL == TRUE)
 static void btc_dm_remove_ble_bonding_keys(void)
 {
     bt_bdaddr_t bd_addr;
@@ -181,6 +184,16 @@ static void btc_dm_remove_ble_bonding_keys(void)
     btc_storage_remove_ble_dev_type(&bd_addr, false);
     btc_storage_remove_ble_bonding_keys(&bd_addr);
 }
+
+/* Role-specific erase policy. keep_bond (hardened re-pairing refusal) always wins. */
+static BOOLEAN btc_dm_ble_should_remove_bond_on_fail(BOOLEAN is_central)
+{
+    if (is_central) {
+        return (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL == TRUE);
+    }
+    return (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL == TRUE);
+}
+#endif
 
 #if BLE_SMP_BOND_NVS_FLASH
 static void btc_dm_save_ble_bonding_keys(void)
@@ -268,7 +281,7 @@ static void btc_dm_ble_auth_cmpl_evt (tBTA_DM_AUTH_CMPL *p_auth_cmpl)
         }
 
 #if BLE_SMP_BOND_NVS_FLASH
-        int addr_type;
+        int addr_type = BLE_ADDR_PUBLIC;
 
         if (btc_dm_cb.pairing_cb.ble.is_pid_key_rcvd) {
             // delete unused section in NVS
@@ -283,22 +296,49 @@ static void btc_dm_ble_auth_cmpl_evt (tBTA_DM_AUTH_CMPL *p_auth_cmpl)
 #endif
     } else {
         /*Map the HCI fail reason  to  bt status  */
+        BOOLEAN remove_bond = FALSE;
+
         switch (p_auth_cmpl->fail_reason) {
         case BTA_DM_AUTH_SMP_PAIR_AUTH_FAIL:
         case BTA_DM_AUTH_SMP_CONFIRM_VALUE_FAIL:
-            btc_dm_remove_ble_bonding_keys();
             status = BT_STATUS_AUTH_FAILURE;
+            remove_bond = TRUE;
             break;
         case BTA_DM_AUTH_SMP_PAIR_NOT_SUPPORT:
             status = BT_STATUS_AUTH_REJECTED;
             break;
         default:
-            BTC_TRACE_WARNING ("%s, remove bond in flash bd_addr: %08x%04x", __func__,
+            BTC_TRACE_WARNING ("%s, pairing failed for bd_addr: %08x%04x", __func__,
                                 (p_auth_cmpl->bd_addr[0] << 24) + (p_auth_cmpl->bd_addr[1] << 16) + (p_auth_cmpl->bd_addr[2] << 8) + p_auth_cmpl->bd_addr[3],
                                 (p_auth_cmpl->bd_addr[4] << 8) + p_auth_cmpl->bd_addr[5]);
-            btc_dm_remove_ble_bonding_keys();
             status =  BT_STATUS_FAIL;
+            remove_bond = TRUE;
             break;
+        }
+
+        if (p_auth_cmpl->keep_bond) {
+            /* Hardened re-pairing refused this procedure; never erase the baseline. */
+            BTC_TRACE_WARNING("%s, keeping bond after local refusal, fail_reason=%d, role=%s, bd_addr: %08x%04x",
+                              __func__, p_auth_cmpl->fail_reason,
+                              p_auth_cmpl->is_central ? "central" : "peripheral",
+                              (p_auth_cmpl->bd_addr[0] << 24) + (p_auth_cmpl->bd_addr[1] << 16) + (p_auth_cmpl->bd_addr[2] << 8) + p_auth_cmpl->bd_addr[3],
+                              (p_auth_cmpl->bd_addr[4] << 8) + p_auth_cmpl->bd_addr[5]);
+#if (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL == TRUE) || \
+    (BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL == TRUE)
+        } else if (remove_bond && btc_dm_ble_should_remove_bond_on_fail(p_auth_cmpl->is_central)) {
+            BTC_TRACE_WARNING("remove NVS bond, rsn %d, role=%s, bd_addr: %08x%04x",
+                              p_auth_cmpl->fail_reason,
+                              p_auth_cmpl->is_central ? "central" : "peripheral",
+                              (p_auth_cmpl->bd_addr[0] << 24) + (p_auth_cmpl->bd_addr[1] << 16) + (p_auth_cmpl->bd_addr[2] << 8) + p_auth_cmpl->bd_addr[3],
+                              (p_auth_cmpl->bd_addr[4] << 8) + p_auth_cmpl->bd_addr[5]);
+            btc_dm_remove_ble_bonding_keys();
+#endif
+        } else if (remove_bond) {
+            BTC_TRACE_WARNING("%s, keeping bond after pairing fail, role=%s, unbond with esp_ble_remove_bond_device(), bd_addr: %08x%04x",
+                              __func__,
+                              p_auth_cmpl->is_central ? "central" : "peripheral",
+                              (p_auth_cmpl->bd_addr[0] << 24) + (p_auth_cmpl->bd_addr[1] << 16) + (p_auth_cmpl->bd_addr[2] << 8) + p_auth_cmpl->bd_addr[3],
+                              (p_auth_cmpl->bd_addr[4] << 8) + p_auth_cmpl->bd_addr[5]);
         }
 
     }
@@ -697,7 +737,7 @@ bt_status_t btc_dm_enable_service(tBTA_SERVICE_ID service_id)
 {
     tBTA_SERVICE_ID *p_id = &service_id;
 
-    btc_dm_cb.btc_enabled_services |= (1 << service_id);
+    btc_dm_cb.btc_enabled_services |= (tBTA_SERVICE_MASK)(1ULL << service_id);
 
     BTC_TRACE_DEBUG("%s: current services:0x%x", __FUNCTION__, btc_dm_cb.btc_enabled_services);
 
@@ -710,7 +750,7 @@ bt_status_t btc_dm_disable_service(tBTA_SERVICE_ID service_id)
 {
     tBTA_SERVICE_ID *p_id = &service_id;
 
-    btc_dm_cb.btc_enabled_services &= (tBTA_SERVICE_MASK)(~(1 << service_id));
+    btc_dm_cb.btc_enabled_services &= (tBTA_SERVICE_MASK)(~(1ULL << service_id));
 
     BTC_TRACE_DEBUG("%s: Current Services:0x%x", __FUNCTION__, btc_dm_cb.btc_enabled_services);
 
@@ -808,8 +848,7 @@ void btc_dm_sec_cb_handler(btc_msg_t *msg)
     case BTA_DM_DISABLE_EVT: {
         tBTA_SERVICE_MASK service_mask = btc_get_enabled_services_mask();
         for (int i = 0; i <= BTA_MAX_SERVICE_ID; i++) {
-            if (service_mask &
-                    (tBTA_SERVICE_MASK)(BTA_SERVICE_ID_TO_SERVICE_MASK(i))) {
+            if (service_mask & BTA_SERVICE_ID_TO_SERVICE_MASK(i)) {
                 btc_in_execute_service_request(i, FALSE);
             }
         }

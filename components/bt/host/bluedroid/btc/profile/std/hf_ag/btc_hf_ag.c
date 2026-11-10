@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -159,6 +159,14 @@ do {                                                                            
 ************************************************************************************/
 static int btc_hf_idx_by_bdaddr(bt_bdaddr_t *bd_addr)
 {
+#if HFP_DYNAMIC_MEMORY == TRUE
+    if (hf_local_param_ptr == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
+#endif
+    if (bd_addr == NULL || !hf_local_param.initialized || hf_local_param.btc_hf_cb == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
     for (int i = 0; i < btc_max_hf_clients; ++i) {
         if (bdcmp(bd_addr->address, hf_local_param.btc_hf_cb[i].connected_bda.address) == 0) {
             return i;
@@ -169,9 +177,16 @@ static int btc_hf_idx_by_bdaddr(bt_bdaddr_t *bd_addr)
 
 static int btc_hf_find_free_idx(void)
 {
+#if HFP_DYNAMIC_MEMORY == TRUE
+    if (hf_local_param_ptr == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
+#endif
+    if (!hf_local_param.initialized || hf_local_param.btc_hf_cb == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
     for (int idx = 0; idx < btc_max_hf_clients; ++idx) {
-        if (hf_local_param.initialized &&
-            hf_local_param.btc_hf_cb[idx].connection_state == ESP_HF_CONNECTION_STATE_DISCONNECTED) {
+        if (hf_local_param.btc_hf_cb[idx].connection_state == ESP_HF_CONNECTION_STATE_DISCONNECTED) {
             return idx;
         }
     }
@@ -192,6 +207,14 @@ static int btc_hf_latest_connected_idx(void)
 {
     struct timespec   now, conn_time_delta;
     int latest_conn_idx = BTC_HF_INVALID_IDX;
+#if HFP_DYNAMIC_MEMORY == TRUE
+    if (hf_local_param_ptr == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
+#endif
+    if (!hf_local_param.initialized || hf_local_param.btc_hf_cb == NULL) {
+        return BTC_HF_INVALID_IDX;
+    }
     clock_gettime(CLOCK_MONOTONIC, &now);
     conn_time_delta.tv_sec = now.tv_sec;
 
@@ -598,7 +621,7 @@ static bt_status_t btc_hf_cind_response(bt_bdaddr_t *bd_addr,
     if (is_connected(idx, bd_addr)) {
         tBTA_AG_RES_DATA    ag_res;
         memset(&ag_res, 0, sizeof (ag_res));
-        sprintf(ag_res.str, "%d,%d,%d,%d,%d,%d,%d",
+        snprintf(ag_res.str, sizeof(ag_res.str), "%d,%d,%d,%d,%d,%d,%d",
                 call_status,                                           /* Call state*/
                 call_setup_status,                                     /* Callsetup state */
                 ntk_state,                                             /* network service */
@@ -623,7 +646,7 @@ static bt_status_t btc_hf_cops_response(bt_bdaddr_t *bd_addr, const char *name)
         tBTA_AG_RES_DATA    ag_res;
         memset (&ag_res, 0, sizeof (ag_res));
         /* Format the response */
-        sprintf(ag_res.str, "0,0,\"%s\"", name);
+        snprintf(ag_res.str, sizeof(ag_res.str), "0,0,\"%s\"", name);
         ag_res.ok_flag = BTA_AG_OK_DONE;
         BTA_AgResult(hf_local_param.btc_hf_cb[idx].handle, BTA_AG_COPS_RES, &ag_res);
         return BT_STATUS_SUCCESS;
@@ -648,12 +671,12 @@ static bt_status_t btc_hf_clcc_response(bt_bdaddr_t *bd_addr, int index, esp_hf_
         } else {
             BTC_TRACE_EVENT("clcc_response: [%d] dir: %d current_call_state: %d mode: %d number: %s type: %d",
                             index, dir, current_call_state, mode, number, type);
-            int loc = sprintf (ag_res.str, "%d,%d,%d,%d,%d", index, dir, current_call_state, mode, mpty);
-            if (number) {
+            int loc = snprintf(ag_res.str, sizeof(ag_res.str), "%d,%d,%d,%d,%d", index, dir, current_call_state, mode, mpty);
+            if (number && loc >= 0 && (size_t)loc < sizeof(ag_res.str)) {
                if ((type == ESP_HF_CALL_ADDR_TYPE_INTERNATIONAL) && (*number != '+')) {
-                    sprintf(&ag_res.str[loc], ",\"+%s\",%d", number, type);
+                    snprintf(ag_res.str + loc, sizeof(ag_res.str) - (size_t)loc, ",\"+%s\",%d", number, type);
                 } else {
-                    sprintf(&ag_res.str[loc], ",\"%s\",%d", number, type);
+                    snprintf(ag_res.str + loc, sizeof(ag_res.str) - (size_t)loc, ",\"%s\",%d", number, type);
                 }
             }
         }
@@ -674,9 +697,9 @@ static bt_status_t btc_hf_cnum_response(bt_bdaddr_t *bd_addr, const char *number
         memset(&ag_res, 0, sizeof (ag_res));
         BTC_TRACE_EVENT("cnum_response: number = %s, number type = %d, service type = %d", number, number_type, service_type);
         if (service_type) {
-            sprintf(ag_res.str, ",\"%s\",%d,,%d",number, number_type, service_type);
+            snprintf(ag_res.str, sizeof(ag_res.str), ",\"%s\",%d,,%d", number, number_type, service_type);
         } else {
-            sprintf(ag_res.str, ",\"%s\",%d,,",number, number_type);
+            snprintf(ag_res.str, sizeof(ag_res.str), ",\"%s\",%d,,", number, number_type);
         }
         ag_res.ok_flag = BTA_AG_OK_DONE;
         BTA_AgResult(hf_local_param.btc_hf_cb[idx].handle, BTA_AG_CNUM_RES, &ag_res);
@@ -835,13 +858,13 @@ static bt_status_t btc_hf_phone_state_update(bt_bdaddr_t *bd_addr,int num_active
                 if (number) {
                     int loc = 0;
                     if ((type == ESP_HF_CALL_ADDR_TYPE_INTERNATIONAL) && (*number != '+')) {
-                        loc = sprintf (ag_res.str, "\"+%s\"", number);
+                        loc = snprintf(ag_res.str, sizeof(ag_res.str), "\"+%s\"", number);
                     } else {
-                        loc = sprintf (ag_res.str, "\"%s\"", number);
+                        loc = snprintf(ag_res.str, sizeof(ag_res.str), "\"%s\"", number);
                     }
                     ag_res.num = type;
-                    if (res == BTA_AG_CALL_WAIT_RES) {
-                        sprintf(&ag_res.str[loc], ",%d", type);
+                    if (res == BTA_AG_CALL_WAIT_RES && loc >= 0 && (size_t)loc < sizeof(ag_res.str)) {
+                        snprintf(ag_res.str + loc, sizeof(ag_res.str) - (size_t)loc, ",%d", type);
                     }
                 }
                 break;
@@ -938,18 +961,18 @@ bt_status_t btc_hf_ci_sco_data(void)
     return status;
 }
 
-bool btc_hf_ag_audio_data_send(uint16_t sync_conn_hdl, uint8_t *p_buff_start, uint8_t *p_data, uint8_t data_len)
+bt_status_t btc_hf_ag_audio_data_send(uint16_t sync_conn_hdl, uint8_t *p_buff_start, uint8_t *p_data, uint8_t data_len)
 {
 #if (BTM_SCO_HCI_INCLUDED == TRUE) && (BTA_HFP_EXT_CODEC == TRUE)
-    /* currently, sync_conn_hdl is not used */
     int idx = btc_hf_latest_connected_idx();
     CHECK_HF_SLC_CONNECTED(idx);
-    if (idx != BTC_HF_INVALID_IDX) {
+
+    if (sync_conn_hdl != ESP_INVALID_CONN_HANDLE && hf_local_param.btc_hf_cb[idx].sync_conn_hdl == sync_conn_hdl) {
         BTA_AgAudioDataSend(hf_local_param.btc_hf_cb[idx].handle, p_buff_start, p_data, data_len);
-        return true;
+        return BT_STATUS_SUCCESS;
     }
 #endif
-    return false;
+    return BT_STATUS_FAIL;
 }
 
 /************************************************************************************
@@ -1585,9 +1608,11 @@ void btc_hf_cb_handler(btc_msg_t *msg)
                     memcpy(param.out_call.remote_addr, &hf_local_param.btc_hf_cb[idx].connected_bda,sizeof(esp_bd_addr_t));
                     param.out_call.type = p_data->val.value;
                     param.out_call.num_or_loc = osi_malloc((strlen(p_data->val.str) + 1) * sizeof(char));
-                    sprintf(param.out_call.num_or_loc, "%s", p_data->val.str);
-                    btc_hf_cb_to_app(ESP_HF_DIAL_EVT, &param);
-                    osi_free(param.out_call.num_or_loc);
+                    if (param.out_call.num_or_loc) {
+                        snprintf(param.out_call.num_or_loc, strlen(p_data->val.str) + 1, "%s", p_data->val.str);
+                        btc_hf_cb_to_app(ESP_HF_DIAL_EVT, &param);
+                        osi_free(param.out_call.num_or_loc);
+                    }
                 } else if (event == BTA_AG_AT_BLDN_EVT) {                    //dial_last
                     memcpy(param.out_call.remote_addr, &hf_local_param.btc_hf_cb[idx].connected_bda,sizeof(esp_bd_addr_t));
                     param.out_call.num_or_loc = NULL;

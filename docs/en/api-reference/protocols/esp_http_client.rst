@@ -17,6 +17,7 @@ Application Examples
 --------------------
 
 - :example:`protocols/esp_http_client` demonstrates how to use the ESP HTTP Client to make HTTP/S requests.
+- :example:`protocols/esp_http_client_mutual_auth` demonstrates how to configure mutual TLS authentication with the ESP HTTP Client.
 
 
 Basic HTTP Request
@@ -35,13 +36,18 @@ To allow ESP HTTP client to take full advantage of persistent connections, one s
 Use Secure Element (ATECC608) for TLS
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-A secure element (ATECC608) can be also used for the underlying TLS connection in the HTTP client connection. Please refer to the **ATECC608A (Secure Element) with ESP-TLS** section in the :doc:`ESP-TLS documentation </api-reference/protocols/esp_tls>` for more details. The secure element support has to be first enabled in menuconfig through :ref:`CONFIG_ESP_TLS_USE_SECURE_ELEMENT`. Then the HTTP client can be configured to use secure element as follows:
+A secure element (ATECC608) can be used for the underlying TLS connection in the HTTP client connection via the PSA Crypto opaque driver interface. Please refer to the **ATECC608A (Secure Element) with ESP-TLS** section in the :doc:`ESP-TLS documentation </api-reference/protocols/esp_tls>` for details on setting up the PSA key. Then configure the HTTP client to use the secure element via the ``client_key`` field in :cpp:type:`esp_http_client_config_t`:
 
 .. code-block:: c
 
+    esp_key_config_t key_config = {
+        .source = ESP_KEY_SOURCE_PSA,
+        .psa.key_id = psa_key_id,  /* obtained via psa_import_key() */
+    };
+
     esp_http_client_config_t cfg = {
-        /* other configurations options */
-        .use_secure_element = true,
+        /* other configuration options */
+        .client_key = &key_config,
     };
 
 .. only:: SOC_ECDSA_SUPPORTED
@@ -198,6 +204,8 @@ ESP HTTP Client supports event handling by triggering an event handler correspon
 
 To enable event handling, you just need to set a callback function using the :cpp:member:`esp_http_client_config_t::event_handler` member.
 
+Also you can set a callback function after the client is initialized using the :cpp:func:`esp_http_client_set_event_handler` function.
+
 ESP HTTP Client Diagnostic Information
 --------------------------------------
 
@@ -217,6 +225,8 @@ Expected data types for different HTTP Client events in the event loop are as fo
     - HTTP_EVENT_REDIRECT           : ``esp_http_client_redirect_event_data_t``
 
 The :cpp:type:`esp_http_client_handle_t` received along with the event data will be valid until :cpp:enumerator:`HTTP_EVENT_DISCONNECTED <esp_http_client_event_id_t::HTTP_EVENT_DISCONNECTED>` is not received. This handle has been sent primarily to differentiate between different client connections and must not be used for any other purpose, as it may change based on client connection state.
+
+For :cpp:enumerator:`HTTP_EVENT_ERROR <esp_http_client_event_id_t::HTTP_EVENT_ERROR>`, a callback handler finds the cause of the failure, the ``esp_err_t`` the failing call returns, in :cpp:member:`esp_http_client_event_t::error`, which always belongs to the event the handler receives. The event-loop payload stays the client handle. The transport's own record of the failure, with the TLS detail, is available through :cpp:func:`esp_http_client_get_and_clear_last_tls_error`.
 
 TLS Protocol Version
 --------------------

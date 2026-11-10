@@ -897,6 +897,27 @@ TEST_CASE("deinit partition doesn't affect other partition's open handles", "[nv
     TEST_ESP_OK(nvs_flash_deinit_partition(TEST_SECONDARY_PARTITION_NAME));
 }
 
+TEST_CASE("deinit with open handles frees them", "[nvs]")
+{
+    // nvs_flash_deinit_partition must delete leftover open
+    // handles (same as nvs_close), not only erase them from the C API handle list.
+    TEST_ESP_OK(nvs_flash_erase_partition(TEST_3SEC_PARTITION_NAME));
+    TEST_ESP_OK(nvs_flash_init_partition(TEST_3SEC_PARTITION_NAME));
+
+    nvs_handle_t handle_1;
+    nvs_handle_t handle_2;
+    TEST_ESP_OK(nvs_open_from_partition(TEST_3SEC_PARTITION_NAME, "ns1", NVS_READWRITE, &handle_1));
+    TEST_ESP_OK(nvs_open_from_partition(TEST_3SEC_PARTITION_NAME, "ns2", NVS_READWRITE, &handle_2));
+    CHECK(nvs::NVSPartitionManager::get_instance()->open_handles_size() == 2);
+
+    TEST_ESP_OK(nvs_flash_deinit_partition(TEST_3SEC_PARTITION_NAME));
+    CHECK(nvs::NVSPartitionManager::get_instance()->open_handles_size() == 0);
+
+    // Stale handle ids must be harmless after deinit already freed the entries.
+    nvs_close(handle_1);
+    nvs_close(handle_2);
+}
+
 TEST_CASE("nvs iterator nvs_entry_find invalid parameter test", "[nvs]")
 {
     // TC verifies that nvs_entry_find returns ESP_ERR_INVALID_ARG on invalid parameters.
@@ -2909,8 +2930,12 @@ TEST_CASE("writing the identical content does not write or erase", "[nvs]")
     CHECK(NVSPartitionTestHelper::get_read_ops()  != 0);
 
     // Test writing a multi-page blob, then changing it
+    // The content must not be uniform: with every byte equal, each chunk's data is identical to the
+    // start of the blob, which would hide a chunk being compared against the wrong part of it.
     uint8_t blob[nvs::Page::CHUNK_MAX_SIZE * 3] = {0};
-    memset(blob, 1, sizeof(blob));
+    for (size_t i = 0; i < sizeof(blob); ++i) {
+        blob[i] = static_cast<uint8_t>(i * 31 + (i >> 8));
+    }
     nvs_set_blob(misc_handle, "test_blob", blob, sizeof(blob));
     NVSPartitionTestHelper::clear_stats();
     nvs_set_blob(misc_handle, "test_blob", blob, sizeof(blob));

@@ -253,7 +253,7 @@ config SOC_RNG_SUPPORTED
 
 config SOC_KEY_MANAGER_SUPPORTED
     bool
-    default y
+    default n
 
 config SOC_HUK_SUPPORTED
     bool
@@ -491,6 +491,10 @@ config SOC_CPU_HAS_LOCKUP_RESET
     bool
     default y
 
+config SOC_CPU_HAS_ZC_EXTENSIONS
+    bool
+    default y
+
 config SOC_CPU_ZCMP_WORKAROUND
     bool
     default y
@@ -534,10 +538,6 @@ config SOC_GDMA_SUPPORT_SLEEP_RETENTION
 config SOC_GDMA_SUPPORT_WEIGHTED_ARBITRATION
     bool
     default y
-
-config SOC_GDMA_EXT_MEM_ENC_ALIGNMENT
-    int
-    default 16
 
 config SOC_GPIO_PORT
     int
@@ -940,6 +940,10 @@ config SOC_ECDSA_SUPPORT_EXPORT_PUBKEY
     default y
 
 config SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE
+    bool
+    default y
+
+config SOC_ECDSA_USES_MPI
     bool
     default y
 
@@ -1391,10 +1395,6 @@ config SOC_EXTERNAL_COEX_ADVANCE
     bool
     default y
 
-config SOC_EXTERNAL_COEX_LEADER_TX_LINE
-    bool
-    default n
-
 config SOC_WIFI_LIGHT_SLEEP_CLK_WIDTH
     int
     default 12
@@ -1463,6 +1463,10 @@ config SOC_PM_SUPPORT_RTC_PERIPH_PD
     bool
     default y
 
+config SOC_PM_SUPPORT_REGDMA_TRIGGERED_PHY
+    bool
+    default y
+
 config SOC_PM_SUPPORT_PMU_MODEM_STATE
     bool
     default y
@@ -1495,21 +1499,21 @@ config SOC_PM_PAU_REGDMA_LINK_CONFIGURABLE
     bool
     default y
 
-config SOC_PM_PAU_REGDMA_LINK_IDX_WIFIMAC
-    int
-    default 4
-
 config SOC_PM_PAU_REGDMA_COMMON_PHY_LINK_ENTRY
     bool
     default y
 
-config SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED
+config SOC_PM_PAU_REGDMA_MODEM_WIFIMAC_WORKAROUND
     bool
     default y
 
-config SOC_PM_RETENTION_MODULE_NUM
+config SOC_PM_PAU_REGDMA_LINK_IDX_PHY
     int
-    default 32
+    default 4
+
+config SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED
+    bool
+    default y
 
 config SOC_CLK_RC_FAST_SUPPORT_CALIBRATION
     bool
@@ -1540,6 +1544,10 @@ config SOC_CLK_LP_FAST_SUPPORT_XTAL_D2
     default y
 
 config SOC_RCC_IS_INDEPENDENT
+    bool
+    default y
+
+config SOC_CLK_ROOT_CLK_SWITCH_PROTECT
     bool
     default y
 
@@ -1663,6 +1671,10 @@ config SOC_PHY_CALIBRATION_CLOCK_IS_INDEPENDENT
     bool
     default y
 
+config SOC_DEBUG_HAVE_OCD_STUB_BINS
+    bool
+    default y
+
 config SOC_LP_CORE_SINGLE_INTERRUPT_VECTOR
     bool
     default y
@@ -1672,5 +1684,13 @@ config SOC_LP_CORE_SUPPORT_ETM
     default y
 
 config SOC_LP_CORE_SUPPORT_STORE_LOAD_EXCEPTIONS
+    bool
+    default y
+
+config SOC_LP_CORE_LP_UART_WAKEUP_KEEP_TRIGGERED
+    bool
+    default y
+
+config SOC_LP_CORE_HW_AUTO_CLRWAKEUPCAUSE
     bool
     default y

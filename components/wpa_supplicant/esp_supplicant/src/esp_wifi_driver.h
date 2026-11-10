@@ -148,6 +148,7 @@ struct wpa_funcs {
     int (*owe_process_assoc_resp)(const u8 *rsn_ie, size_t rsn_len, const uint8_t *dh_ie, size_t dh_len);
     void (*wpa_sta_clear_curr_pmksa)(void);
     void (*wpa_config_reload)(void);
+    int (*wpa_parse_wpa_ie_scan_only)(const u8 *wpa_ie, size_t wpa_ie_len, wifi_wpa_ie_t *data);
 };
 
 struct wpa2_funcs {
@@ -282,7 +283,7 @@ uint16_t esp_wifi_sta_pmf_enabled(void);
 wifi_cipher_type_t esp_wifi_sta_get_mgmt_group_cipher(void);
 int esp_wifi_set_igtk_internal(uint8_t if_index, const wifi_wpa_igtk_t *igtk);
 esp_err_t esp_wifi_internal_issue_disconnect(uint8_t reason_code);
-bool esp_wifi_skip_supp_pmkcaching(void);
+bool esp_wifi_use_supp_pmk_cache(void);
 bool esp_wifi_is_rm_enabled_internal(uint8_t if_index);
 bool esp_wifi_is_btm_enabled_internal(uint8_t if_index);
 esp_err_t esp_wifi_register_mgmt_frame_internal(uint32_t type, uint32_t subtype);
@@ -297,6 +298,7 @@ uint8_t esp_wifi_sta_get_config_sae_pk_internal(void);
 void esp_wifi_sta_disable_sae_pk_internal(void);
 void esp_wifi_sta_disable_wpa2_authmode_internal(void);
 void esp_wifi_sta_disable_owe_trans_internal(void);
+void esp_wifi_sta_notify_dpp_config_set_internal(bool configured);
 uint8_t esp_wifi_ap_get_max_sta_conn(void);
 uint8_t esp_wifi_get_config_sae_pwe_h2e_internal(uint8_t ifx);
 bool esp_wifi_ap_notify_node_sae_auth_done(uint8_t *mac);

@@ -63,7 +63,7 @@ Another alternative would be to download the finished list directly from the cur
 
 The common certificates bundle were made by selecting the authorities with a market share of more than 1% from w3tech's `SSL Survey <https://w3techs.com/technologies/overview/ssl_certificate>`_.
 
-These authorities were then used to pick the names of the certificates for the filter list, ``cmn_crt_authorities.csv``, from `this list <https://ccadb-public.secure.force.com/mozilla/IncludedCACertificateReportPEMCSV>`_ provided by Mozilla.
+These authorities were then used to pick the names of the certificates for the filter list, ``cmn_crt_authorities.csv``, from Mozilla's `Included CA Certificate List <https://ccadb.my.salesforce-sites.com/mozilla/IncludedRootCertificateReportCSVFormat>`_.
 
 
 Updating the Certificate Bundle
@@ -91,7 +91,7 @@ With this functionality enabled, certificate verification is performed in a mann
 
 .. note::
 
-    Enabling cross-signed certificate support increases run-time heap utilization by approximately 700 bytes, but reduces the flash footprint as the bundle size is reduced.
+    Enabling cross-signed certificate support increases peak run-time heap usage during the TLS handshake by approximately 1 KB. This is a transient allocation (a candidate CA certificate built during certificate verification) that is freed once the handshake completes, and the exact amount scales with the maximum supported RSA key size. It also reduces the flash footprint, as the bundle size is reduced.
 
 Key Points:
 

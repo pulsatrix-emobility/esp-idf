@@ -40,6 +40,7 @@ void btc_gattc_arg_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src)
             memcpy(dst->write_char.value, src->write_char.value, src->write_char.value_len);
         } else {
             BTC_TRACE_ERROR("%s %d no mem\n", __func__, msg->act);
+            dst->write_char.value_len = 0;
         }
         break;
     }
@@ -49,6 +50,7 @@ void btc_gattc_arg_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src)
             memcpy(dst->write_descr.value, src->write_descr.value, src->write_descr.value_len);
         } else {
             BTC_TRACE_ERROR("%s %d no mem\n", __func__, msg->act);
+            dst->write_descr.value_len = 0;
         }
         break;
     }
@@ -58,6 +60,7 @@ void btc_gattc_arg_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src)
             memcpy(dst->prep_write.value, src->prep_write.value, src->prep_write.value_len);
         } else {
             BTC_TRACE_ERROR("%s %d no mem\n", __func__, msg->act);
+            dst->prep_write.value_len = 0;
         }
         break;
     }
@@ -67,6 +70,7 @@ void btc_gattc_arg_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src)
             memcpy(dst->prep_write_descr.value, src->prep_write_descr.value, src->prep_write_descr.value_len);
         } else {
             BTC_TRACE_ERROR("%s %d no mem\n", __func__, msg->act);
+            dst->prep_write_descr.value_len = 0;
         }
         break;
     }
@@ -199,7 +203,7 @@ static void btc_gattc_cback(tBTA_GATTC_EVT event, tBTA_GATTC *p_data)
 
 static void btc_gattc_app_register(btc_ble_gattc_args_t *arg)
 {
-    tBT_UUID app_uuid;
+    tBT_UUID app_uuid = {0};
     app_uuid.len = 2;
     app_uuid.uu.uuid16 = arg->app_reg.app_id;
     BTA_GATTC_AppRegister(&app_uuid, btc_gattc_cback);
@@ -337,6 +341,11 @@ esp_gatt_status_t btc_ble_gattc_get_service(uint16_t conn_id, esp_bt_uuid_t *svc
     tBT_UUID *bta_uuid = NULL;
     if (svc_uuid) {
         bta_uuid = osi_malloc(sizeof(tBT_UUID));
+        if (bta_uuid == NULL) {
+            *count = 0;
+            return ESP_GATT_NO_RESOURCES;
+        }
+
         btc_to_bta_uuid(bta_uuid, svc_uuid);
     }
 
@@ -621,16 +630,16 @@ static void btc_gattc_read_char(btc_ble_gattc_args_t *arg)
 static void btc_gattc_read_multiple_char(btc_ble_gattc_args_t *arg)
 {
     tBTA_GATTC_MULTI bta_multi;
-    bta_multi.num_attr = arg->read_multiple.num_attr;
-    memcpy(bta_multi.handles, arg->read_multiple.handles, BTA_GATTC_MULTI_MAX);
+    bta_multi.num_attr = (arg->read_multiple.num_attr > BTA_GATTC_MULTI_MAX) ? BTA_GATTC_MULTI_MAX : arg->read_multiple.num_attr;
+    memcpy(bta_multi.handles, arg->read_multiple.handles, sizeof(uint16_t) * bta_multi.num_attr);
     BTA_GATTC_ReadMultiple(arg->read_multiple.conn_id, &bta_multi, arg->read_multiple.auth_req);
 }
 
 static void btc_gattc_read_multiple_variable_char(btc_ble_gattc_args_t *arg)
 {
     tBTA_GATTC_MULTI bta_multi;
-    bta_multi.num_attr = arg->read_multiple.num_attr;
-    memcpy(bta_multi.handles, arg->read_multiple.handles, BTA_GATTC_MULTI_MAX);
+    bta_multi.num_attr = (arg->read_multiple.num_attr > BTA_GATTC_MULTI_MAX) ? BTA_GATTC_MULTI_MAX : arg->read_multiple.num_attr;
+    memcpy(bta_multi.handles, arg->read_multiple.handles, sizeof(uint16_t) * bta_multi.num_attr);
     BTA_GATTC_ReadMultipleVariable(arg->read_multiple.conn_id, &bta_multi, arg->read_multiple.auth_req);
 }
 
@@ -681,7 +690,11 @@ static void btc_gattc_prepare_write(btc_ble_gattc_args_t *arg)
 static void btc_gattc_prepare_write_char_descr(btc_ble_gattc_args_t *arg)
 {
     tBTA_GATT_UNFMT descr_val;
-
+    /*
+    According to the Bluetooth Core Specification, a Prepare Write Request can have a zero-length value.
+    The underlying BTA layer function BTA_GATTC_PrepareWriteCharDescr is implemented to handle zero-length data correctly by skipping the memory copy
+    but still sending the message to the stack.
+    */
     descr_val.len = arg->prep_write_descr.value_len;
     descr_val.p_value = arg->prep_write_descr.value;
     BTA_GATTC_PrepareWriteCharDescr(arg->prep_write_descr.conn_id,
@@ -972,14 +985,16 @@ void btc_gattc_cb_handler(btc_msg_t *msg)
         param.connect.conn_params.timeout = connect->conn_params.timeout;
         param.connect.ble_addr_type = connect->ble_addr_type;
         param.connect.conn_handle = connect->conn_handle;
+#if (BT_BLE_FEAT_PAWR_EN == TRUE)
+        param.connect.adv_handle = connect->adv_handle;
+        param.connect.sync_handle = connect->sync_handle;
+#endif // #if (BT_BLE_FEAT_PAWR_EN == TRUE)
         btc_gattc_cb_to_app(ESP_GATTC_CONNECT_EVT, gattc_if, &param);
         break;
     }
     case BTA_GATTC_CLOSE_EVT: {
         tBTA_GATTC_CLOSE *close = &arg->close;
 
-        // Free gattc clcb in BTC task to avoid race condition
-        bta_gattc_clcb_dealloc_by_conn_id(close->conn_id);
         gattc_if = close->client_if;
         param.close.status = close->status;
         param.close.conn_id = BTC_GATT_GET_CONN_ID(close->conn_id);

@@ -73,6 +73,8 @@
 #define SDP_INCLUDED                TRUE
 #define BTA_DM_QOS_INCLUDED         TRUE
 
+#define BR_EDR_MAX_RECONNECT_ON_COLLISION UC_BT_CLASSIC_MAX_RECONNECT_ON_COLLISION
+
 #define ENC_KEY_SIZE_CTRL_MODE_NONE 0
 #define ENC_KEY_SIZE_CTRL_MODE_STD  1
 #define ENC_KEY_SIZE_CTRL_MODE_VSC  2
@@ -103,6 +105,9 @@
 #define BTC_AV_CA_INCLUDED          TRUE
 #define AVRC_CA_INCLUDED            TRUE
 #endif /* UC_BT_AVRCP_CT_COVER_ART_ENABLED */
+#if (UC_BT_A2DP_AUDIO_STATS == TRUE)
+#define BTC_A2DP_AUDIO_STATS        TRUE
+#endif
 #endif /* UC_BT_A2DP_ENABLED */
 
 #if (UC_BT_SPP_ENABLED == TRUE)
@@ -244,6 +249,42 @@
 #define BLE_50_FEATURE_SUPPORT   FALSE
 #endif
 
+/* Peripheral dual local-identity bond isolation via Host-internal pseudo
+ * address. Guarded so default builds keep the legacy single-bond behavior. */
+#if (UC_BT_BLE_PERIPH_PSEUDO_ADDR_BOND == TRUE)
+#define BLE_PERIPH_PSEUDO_ADDR_BOND   TRUE
+#else
+#define BLE_PERIPH_PSEUDO_ADDR_BOND   FALSE
+#endif
+
+/* Refuse a re-pairing that would end up weaker than the bond it replaces. */
+#if (UC_BT_BLE_SMP_HARDENED_REPAIRING == TRUE)
+#define BLE_SMP_HARDENED_REPAIRING    TRUE
+#else
+#define BLE_SMP_HARDENED_REPAIRING    FALSE
+#endif
+
+/* Erase the NVS bond when pairing/encryption fails while local device is Central. */
+#if (UC_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL == TRUE)
+#define BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL TRUE
+#else
+#define BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL FALSE
+#endif
+
+/* Erase the NVS bond when pairing/encryption fails while local device is Peripheral. */
+#if (UC_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL == TRUE)
+#define BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL TRUE
+#else
+#define BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_PERIPHERAL FALSE
+#endif
+
+/* Discard the local LE keys when the peer rejects encryption with "PIN or Key Missing". */
+#if (UC_BT_BLE_SMP_UNBOND_ON_KEY_MISSING == TRUE)
+#define BLE_SMP_UNBOND_ON_KEY_MISSING TRUE
+#else
+#define BLE_SMP_UNBOND_ON_KEY_MISSING FALSE
+#endif
+
 #if (UC_BT_BLE_ENABLED ==TRUE)
 #if (UC_BT_BLE_42_FEATURES_SUPPORTED == TRUE || BLE_50_FEATURE_SUPPORT == FALSE)
 #define BLE_42_FEATURE_SUPPORT   TRUE
@@ -339,10 +380,10 @@
 #define BLE_FEAT_ISO_60_EN     FALSE
 #endif
 
-#if (UC_BT_BLE_FEAT_ISO_BIG_BROCASTER == TRUE)
-#define BLE_FEAT_ISO_BIG_BROCASTER_EN   TRUE
+#if (UC_BT_BLE_FEAT_ISO_BIG_BROADCASTER == TRUE)
+#define BLE_FEAT_ISO_BIG_BROADCASTER_EN   TRUE
 #else
-#define BLE_FEAT_ISO_BIG_BROCASTER_EN   FALSE
+#define BLE_FEAT_ISO_BIG_BROADCASTER_EN   FALSE
 #endif
 
 #if (UC_BT_BLE_FEAT_ISO_BIG_SYNCER == TRUE)
@@ -441,6 +482,49 @@
 #define BT_BLE_FEAT_CHANNEL_SOUNDING     FALSE
 #endif
 
+#if (BT_BLE_FEAT_CHANNEL_SOUNDING == TRUE) && (UC_BT_BLE_FEAT_CS_SECURITY_REQUIREMENTS == TRUE)
+#define BT_BLE_FEAT_CS_SECURITY_REQUIREMENTS     TRUE
+#else
+#define BT_BLE_FEAT_CS_SECURITY_REQUIREMENTS     FALSE
+#endif
+
+/* LE Monitor Advertisement (Bluetooth Core 6.0) */
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (defined UC_BT_BLE_FEAT_ADV_MONITOR) && (UC_BT_BLE_FEAT_ADV_MONITOR == TRUE)
+#define BLE_FEAT_ADV_MONITOR     TRUE
+#else
+#define BLE_FEAT_ADV_MONITOR     FALSE
+#endif
+
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (UC_BT_BLE_FEAT_DBAF == TRUE)
+#define BLE_FEAT_DBAF     TRUE
+#else
+#define BLE_FEAT_DBAF     FALSE
+#endif
+
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (UC_BT_BLE_FEAT_FRAME_SPACE_UPDATE == TRUE)
+#define BLE_FEAT_FRAME_SPACE_UPDATE     TRUE
+#else
+#define BLE_FEAT_FRAME_SPACE_UPDATE     FALSE
+#endif
+
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (UC_BT_BLE_FEAT_LL_EXT_FEAT == TRUE)
+#define BLE_FEAT_LL_EXT_FEAT     TRUE
+#else
+#define BLE_FEAT_LL_EXT_FEAT     FALSE
+#endif
+
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (UC_BT_BLE_FEAT_SHORTER_CONN_INTERVALS == TRUE)
+#define BLE_FEAT_SHORTER_CONN_INTERVALS     TRUE
+#else
+#define BLE_FEAT_SHORTER_CONN_INTERVALS     FALSE
+#endif
+
+#if (BLE_50_FEATURE_SUPPORT == TRUE) && (UC_BT_BLE_FEAT_LE_UTP == TRUE)
+#define BLE_FEAT_LE_UTP     TRUE
+#else
+#define BLE_FEAT_LE_UTP     FALSE
+#endif
+
 #if (UC_BT_BLE_VENDOR_HCI_EN == TRUE)
 #define BLE_VENDOR_HCI_EN TRUE
 #else
@@ -451,6 +535,24 @@
 #define BLE_HIGH_DUTY_ADV_INTERVAL TRUE
 #else
 #define BLE_HIGH_DUTY_ADV_INTERVAL FALSE
+#endif
+
+/* Host-side parameter validation floor (in 1.25 ms units) for the BLE
+ * connection interval. Internal to the Bluedroid host: not sent on air, not
+ * exposed via the GATT Preferred Connection Parameters Characteristic, and
+ * not a public API constant - those use BTM_BLE_CONN_INT_MIN (0x0006).
+ *
+ * When UC_BT_BLE_HOST_ALLOW_SUB_SPEC_MIN_CONN_INT == 1 the host stops
+ * enforcing a minimum (the actual lower limit is then defined entirely by
+ * the controller). 0x0001 is used rather than 0x0000 so the existing
+ * `uint16_t < MIN` range checks remain well-defined under GCC
+ * `-Wtype-limits`. */
+#ifndef BLE_CONN_INT_MIN_HOST_CHECK
+#if (UC_BT_BLE_HOST_ALLOW_SUB_SPEC_MIN_CONN_INT == 1)
+#define BLE_CONN_INT_MIN_HOST_CHECK             0x0001
+#else
+#define BLE_CONN_INT_MIN_HOST_CHECK             0x0006
+#endif
 #endif
 
 #if (UC_BT_BLE_RPA_SUPPORTED  == TRUE)
@@ -506,6 +608,13 @@
 #define SMP_INCLUDED                FALSE
 #define BLE_PRIVACY_SPT             FALSE
 #endif  /* UC_BT_SMP_ENABLE */
+
+/* CTKD: BR↔LE key derivation via SMP over BR (CID 7) and LE LK bit. */
+#if (UC_BT_SMP_CTKD_ENABLE && (CLASSIC_BT_INCLUDED == TRUE) && (BLE_INCLUDED == TRUE) && (SMP_INCLUDED == TRUE))
+#define SMP_CTKD_INCLUDED           TRUE
+#else
+#define SMP_CTKD_INCLUDED           FALSE
+#endif
 
 #if(UC_BT_SMP_SLAVE_CON_PARAMS_UPD_ENABLE)
 #define SMP_SLAVE_CON_PARAMS_UPD_ENABLE     TRUE
@@ -620,6 +729,10 @@
 #define BTC_AV_INCLUDED FALSE
 #endif
 
+#ifndef BTC_A2DP_AUDIO_STATS
+#define BTC_A2DP_AUDIO_STATS FALSE
+#endif
+
 #ifndef BTC_AV_CA_INCLUDED
 #define BTC_AV_CA_INCLUDED FALSE
 #endif
@@ -679,10 +792,6 @@
 
 #ifndef BTA_DM_QOS_INCLUDED
 #define BTA_DM_QOS_INCLUDED FALSE
-#endif
-
-#ifndef BTA_PAN_INCLUDED
-#define BTA_PAN_INCLUDED FALSE
 #endif
 
 #ifndef BTA_HD_INCLUDED
@@ -905,6 +1014,12 @@
 #ifndef BT_DEFAULT_BUFFER_SIZE
 #define BT_DEFAULT_BUFFER_SIZE          (4096 + 16)
 #endif
+
+/* Largest L2CAP information payload the HCI fragmenter will reassemble.
+ * LE CoC receive MPS must not be advertised above this: a larger K-frame is
+ * dropped before credit accounting. */
+#define L2CAP_MAX_RX_PAYLOAD \
+    (BT_DEFAULT_BUFFER_SIZE - L2CAP_PKT_OVERHEAD - HCI_ACL_PREAMBLE_SIZE - BT_HDR_SIZE)
 
 #ifndef BT_SMALL_BUFFER_SIZE
 #define BT_SMALL_BUFFER_SIZE            660
@@ -1437,7 +1552,85 @@
 
 /* Support status of L2CAP connection-oriented dynamic channels over LE transport with dynamic CID */
 #ifndef BLE_L2CAP_COC_INCLUDED
-#define BLE_L2CAP_COC_INCLUDED          FALSE // LE COC not use by default
+#if (UC_BT_BLE_L2CAP_COC_ENABLED == TRUE)
+#define BLE_L2CAP_COC_INCLUDED          TRUE
+#else
+#define BLE_L2CAP_COC_INCLUDED          FALSE
+#endif
+#endif
+
+#if (BLE_L2CAP_COC_INCLUDED == TRUE)
+#undef BLE_MAX_L2CAP_CLIENTS
+#define BLE_MAX_L2CAP_CLIENTS           UC_BT_BLE_L2CAP_COC_MAX_CHAN
+#endif
+
+/* Initial LE CoC/ECFC RX credit window (K-frames) from
+ * CONFIG_BT_BLE_L2CAP_COC_INIT_CREDITS. Defined even when CoC is disabled so
+ * that internal headers that reference L2CAP_LE_INIT_CREDITS remain valid. */
+#ifndef L2CAP_LE_INIT_CREDITS
+#define L2CAP_LE_INIT_CREDITS           UC_BT_BLE_L2CAP_COC_INIT_CREDITS
+#endif
+
+/* Default LE CoC/ECFC MPS from CONFIG_BT_BLE_L2CAP_COC_MPS. */
+#ifndef L2CAP_LE_COC_MPS
+#define L2CAP_LE_COC_MPS                UC_BT_BLE_L2CAP_COC_MPS
+#endif
+
+#ifndef BLE_L2CAP_COC_CLIENT_INCLUDED
+#if (BLE_L2CAP_COC_INCLUDED == TRUE) && (GATTC_INCLUDED == TRUE)
+#define BLE_L2CAP_COC_CLIENT_INCLUDED     TRUE
+#else
+#define BLE_L2CAP_COC_CLIENT_INCLUDED     FALSE
+#endif
+#endif
+
+#ifndef BLE_L2CAP_COC_SERVER_INCLUDED
+#if (BLE_L2CAP_COC_INCLUDED == TRUE) && (GATTS_INCLUDED == TRUE)
+#define BLE_L2CAP_COC_SERVER_INCLUDED     TRUE
+#else
+#define BLE_L2CAP_COC_SERVER_INCLUDED     FALSE
+#endif
+#endif
+
+#ifndef BLE_L2CAP_ENHANCED_COC_INCLUDED
+#if (UC_BT_BLE_L2CAP_ENHANCED_COC == TRUE) && (BLE_L2CAP_COC_INCLUDED == TRUE)
+#define BLE_L2CAP_ENHANCED_COC_INCLUDED TRUE
+#else
+#define BLE_L2CAP_ENHANCED_COC_INCLUDED FALSE
+#endif
+#endif
+
+#ifndef BLE_EATT_INCLUDED
+#if (UC_BT_BLE_EATT_ENABLE == TRUE) && (BLE_L2CAP_ENHANCED_COC_INCLUDED == TRUE)
+#define BLE_EATT_INCLUDED               TRUE
+#else
+#define BLE_EATT_INCLUDED               FALSE
+#endif
+#endif
+
+#ifndef BLE_EATT_CLIENT_INCLUDED
+#if (BLE_EATT_INCLUDED == TRUE) && (GATTC_INCLUDED == TRUE)
+#define BLE_EATT_CLIENT_INCLUDED          TRUE
+#else
+#define BLE_EATT_CLIENT_INCLUDED          FALSE
+#endif
+#endif
+
+#ifndef BLE_EATT_SERVER_INCLUDED
+#if (BLE_EATT_INCLUDED == TRUE) && (GATTS_INCLUDED == TRUE)
+#define BLE_EATT_SERVER_INCLUDED          TRUE
+#else
+#define BLE_EATT_SERVER_INCLUDED          FALSE
+#endif
+#endif
+
+/* EATT bearer count and MTU from CONFIG_BT_BLE_EATT_CHAN_NUM / CONFIG_BT_BLE_EATT_MTU. */
+#ifndef GATT_EATT_MAX_CHAN
+#define GATT_EATT_MAX_CHAN              UC_BT_BLE_EATT_CHAN_NUM
+#endif
+
+#ifndef GATT_EATT_MTU
+#define GATT_EATT_MTU                   UC_BT_BLE_EATT_MTU
 #endif
 
 /* Support status of L2CAP connection-oriented dynamic channels over LE or BR/EDR transport with dynamic CID */
@@ -1505,7 +1698,7 @@
 
 /* If host flow control enabled, this is the number of buffers the controller can have unacknowledged. */
 #ifndef L2CAP_HOST_FC_ACL_BUFS
-#define L2CAP_HOST_FC_ACL_BUFS      20
+#define L2CAP_HOST_FC_ACL_BUFS      100
 #endif
 
 /* This is set to enable L2CAP to  take the ACL link out of park mode when ACL data is to be sent. */
@@ -1970,7 +2163,7 @@
 
 /* The port receive queue low watermark level, in number of buffers. */
 #ifndef PORT_RX_BUF_LOW_WM
-#define PORT_RX_BUF_LOW_WM          4
+#define PORT_RX_BUF_LOW_WM          6
 #endif
 
 /* The port receive queue high watermark level, in number of buffers. */
@@ -2268,6 +2461,11 @@
 #define AVDT_NUM_SEPS               3
 #endif
 
+/* Maximum number of peer SEPs accepted in AVDTP Discover results. */
+#ifndef AVDT_DIS_RES_MAX_NUM_SEPS
+#define AVDT_DIS_RES_MAX_NUM_SEPS    32
+#endif
+
 /* Number of transport channels setup per media stream(audio or video) */
 #ifndef AVDT_NUM_CHANNELS
 
@@ -2410,11 +2608,6 @@
 
 #ifndef GAP_INCLUDED
 #define GAP_INCLUDED                TRUE
-#endif
-
-/* This is set to enable posting event for data write */
-#ifndef GAP_CONN_POST_EVT_INCLUDED
-#define GAP_CONN_POST_EVT_INCLUDED  FALSE
 #endif
 
 /* The maximum number of simultaneous GAP L2CAP connections. */

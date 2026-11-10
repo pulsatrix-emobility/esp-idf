@@ -31,17 +31,18 @@ include_directories("${COMPONENT_DIR}/port/include")
 # Add PSA driver include directory globally for mbedtls targets
 include_directories("${COMPONENT_DIR}/port/psa_driver/include")
 
-# Import mbedtls library targets
-add_subdirectory(mbedtls)
-
-# Set TF_PSA_CRYPTO_CONFIG_FILE before processing subdirectories to prevent override
+# Set TF_PSA_CRYPTO_USER_CONFIG_FILE before add_subdirectory so that
+# all targets (including extras, platform, utilities) pick it up
 set(
     TF_PSA_CRYPTO_USER_CONFIG_FILE "${COMPONENT_DIR}/esp_tee/esp_tee_mbedtls_config.h"
     CACHE STRING "Path to the PSA Crypto configuration file"
     FORCE
 )
 
-set(mbedtls_targets mbedtls tfpsacrypto builtin mbedx509 everest p256m)
+# Import mbedtls library targets
+add_subdirectory(mbedtls)
+
+set(mbedtls_targets mbedtls tfpsacrypto builtin mbedx509 everest p256-m extras platform utilities)
 
 target_sources(tfpsacrypto PRIVATE "${COMPONENT_DIR}/port/esp_hardware.c")
 
@@ -50,6 +51,7 @@ foreach(target ${mbedtls_targets})
                                     -DMBEDTLS_CONFIG_FILE="${COMPONENT_DIR}/esp_tee/esp_tee_mbedtls_config.h")
     set_config_files_compile_definitions(${target})
     target_compile_definitions(${target} PUBLIC MBEDTLS_MAJOR_VERSION=4)
+    target_compile_definitions(${target} PUBLIC __STDC_WANT_LIB_EXT1__=0)
     if(CONFIG_COMPILER_STATIC_ANALYZER AND CMAKE_C_COMPILER_ID STREQUAL "GNU") # TODO IDF-10087
         target_compile_options(${target} PRIVATE "-fno-analyzer")
     endif()
@@ -81,31 +83,29 @@ if(CONFIG_SOC_AES_SUPPORTED)
                                         "${COMPONENT_DIR}/port/aes/esp_aes_common.c"
                                         "${COMPONENT_DIR}/port/aes/esp_aes_xts.c")
     target_include_directories(tfpsacrypto PRIVATE "${COMPONENT_DIR}/port/include/aes")
-    if(CONFIG_MBEDTLS_HARDWARE_AES)
-        target_sources(tfpsacrypto PRIVATE
-                "${COMPONENT_DIR}/port/psa_driver/esp_aes/psa_crypto_driver_esp_aes.c"
-                "${COMPONENT_DIR}/port/psa_driver/esp_aes/psa_crypto_driver_esp_aes_gcm.c"
-        )
-    endif()
-
+    target_sources(tfpsacrypto PRIVATE
+            "${COMPONENT_DIR}/port/psa_driver/esp_aes/psa_crypto_driver_esp_aes.c"
+            "${COMPONENT_DIR}/port/psa_driver/esp_aes/psa_crypto_driver_esp_aes_gcm.c"
+    )
 endif()
 # SHA implementation
 if(CONFIG_SOC_SHA_SUPPORTED)
     target_sources(tfpsacrypto PRIVATE
         "${COMPONENT_DIR}/port/psa_driver/esp_sha/psa_crypto_driver_esp_sha.c"
-        "${COMPONENT_DIR}/port/psa_driver/esp_sha/core/psa_crypto_driver_esp_sha1.c"
         "${COMPONENT_DIR}/port/psa_driver/esp_sha/core/psa_crypto_driver_esp_sha256.c"
-        "${COMPONENT_DIR}/port/psa_driver/esp_sha/core/psa_crypto_driver_esp_sha512.c"
         "${COMPONENT_DIR}/port/sha/core/sha.c"
         "${COMPONENT_DIR}/port/sha/esp_sha.c"
-        "${COMPONENT_DIR}/port/psa_driver/esp_mac/psa_crypto_driver_esp_hmac_transparent.c"
-        )
-endif()
-
-if(CONFIG_MBEDTLS_ROM_MD5)
-    target_sources(tfpsacrypto PRIVATE
-        "${COMPONENT_DIR}/port/psa_driver/esp_md/psa_crypto_driver_esp_md5.c"
     )
+    if(CONFIG_MBEDTLS_SHA1_C)
+        target_sources(tfpsacrypto PRIVATE
+            "${COMPONENT_DIR}/port/psa_driver/esp_sha/core/psa_crypto_driver_esp_sha1.c"
+        )
+    endif()
+    if(CONFIG_SOC_SHA_SUPPORT_SHA512 AND CONFIG_MBEDTLS_SHA512_C)
+        target_sources(tfpsacrypto PRIVATE
+            "${COMPONENT_DIR}/port/psa_driver/esp_sha/core/psa_crypto_driver_esp_sha512.c"
+        )
+    endif()
 endif()
 
 if(CONFIG_SOC_ECC_SUPPORTED)
@@ -118,6 +118,9 @@ if(CONFIG_SOC_HMAC_SUPPORTED)
     target_sources(tfpsacrypto PRIVATE "${COMPONENT_DIR}/port/psa_driver/esp_mac/psa_crypto_driver_esp_hmac_opaque.c")
     target_sources(tfpsacrypto PRIVATE "${COMPONENT_DIR}/port/esp_hmac_pbkdf2.c")
     target_link_libraries(tfpsacrypto PRIVATE idf::efuse)
+else()
+    target_sources(tfpsacrypto PRIVATE
+        "${COMPONENT_DIR}/port/psa_driver/esp_mac/psa_crypto_driver_esp_hmac_transparent.c")
 endif()
 
 # PSA Attestation

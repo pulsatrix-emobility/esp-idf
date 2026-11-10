@@ -255,7 +255,8 @@ char * ets_strdup(const char *s);
 #define os_memcmp(s1, s2, n) memcmp((s1), (s2), (n))
 #endif
 #ifndef os_memcmp_const
-#define os_memcmp_const(s1, s2, n) memcmp((s1), (s2), (n))
+int os_memcmp_const_impl(const void *a, const void *b, size_t len);
+#define os_memcmp_const(s1, s2, n) os_memcmp_const_impl((s1), (s2), (n))
 #endif
 
 #ifndef os_strlen
@@ -353,7 +354,7 @@ extern const wifi_osi_funcs_t *wifi_funcs;
 #define os_mutex_lock(a) wifi_funcs->_mutex_lock((a))
 #define os_mutex_unlock(a) wifi_funcs->_mutex_unlock((a))
 #define os_recursive_mutex_create() wifi_funcs->_recursive_mutex_create()
-#define os_mutex_create() wifi_funcs->_mutex_create();
+#define os_mutex_create() wifi_funcs->_mutex_create()
 #define os_mutex_delete(a) wifi_funcs->_mutex_delete(a)
 
 #define os_queue_create(a, b) wifi_funcs->_queue_create((a), (b))

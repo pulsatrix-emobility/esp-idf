@@ -127,8 +127,8 @@ TEST_CASE("Test TEE OTA - Corrupted image", "[ota_neg_2]")
     /* Corrupting the image */
     ESP_LOGI(TAG, "Corrupting the image at some offset...");
     uint32_t corrupt[8] = {[0 ... 7] = 0x0BADC0DE};
-    curr_write_offset -= (2 * FLASH_SECTOR_SIZE + sizeof(corrupt));
-    TEST_ESP_OK(esp_tee_ota_write(curr_write_offset, (const void *)corrupt, sizeof(corrupt)));
+    uint32_t offs = SOC_MMU_PAGE_SIZE + 0x200;
+    TEST_ESP_OK(esp_tee_ota_write(offs, (const void *)corrupt, sizeof(corrupt)));
 
     TEST_ESP_ERR(ESP_ERR_IMAGE_INVALID, esp_tee_ota_end());
 }
@@ -151,11 +151,8 @@ TEST_CASE("Test TEE OTA - Valid image", "[ota_valid_img]")
     uint32_t bytes_wr = copy_tee_update();
     ESP_LOGI(TAG, "Total binary data written: %lu", bytes_wr);
 
+    /* NOTE: On success, the TEE restarts the device */
     TEST_ESP_OK(esp_tee_ota_end());
-    ESP_LOGI(TAG, "TEE OTA update successful!");
-
-    ESP_LOGI(TAG, "Prepare to restart system!");
-    esp_restart();
 }
 
 TEST_CASE("Test TEE OTA - Rollback", "[ota_rollback]")
@@ -165,9 +162,6 @@ TEST_CASE("Test TEE OTA - Rollback", "[ota_rollback]")
     uint32_t bytes_wr = copy_tee_update();
     ESP_LOGI(TAG, "Total binary data written: %lu", bytes_wr);
 
+    /* NOTE: On success, the TEE restarts the device */
     TEST_ESP_OK(esp_tee_ota_end());
-
-    ESP_LOGI(TAG, "TEE OTA update successful!");
-    ESP_LOGI(TAG, "Prepare to restart system!");
-    esp_restart();
 }

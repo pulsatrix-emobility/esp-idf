@@ -31,10 +31,11 @@
 #include "hal/ppa_hal.h"
 #include "hal/ppa_ll.h"
 #include "hal/ppa_types.h"
+#include "hal/ppa_periph.h"
 #include "hal/color_hal.h"
 #include "hal/color_types.h"
 #include "esp_private/periph_ctrl.h"
-#include "esp_efuse.h"
+#include "esp_private/sleep_retention.h"
 #include "soc/soc_caps.h"
 
 static const char *TAG = "ppa_core";
@@ -54,6 +55,25 @@ const dma2d_trans_on_picked_callback_t ppa_oper_trans_on_picked_func[PPA_OPERATI
     [PPA_OPERATION_BLEND] = ppa_blend_transaction_on_picked,
     [PPA_OPERATION_FILL] = ppa_fill_transaction_on_picked,
 };
+
+/** PPA Power Management Strategy
+ *
+ * SRM and Blending have separate CPU_FREQ_MAX PM locks, and each PM lock is acquired whenever there is PPA operation in process.
+ *
+ * When no PPA operation is in process, sleep can happen, and PPA domain can be powered down if allow_pd is set.
+ * Necessary register context will be saved and restored by sleep retention.
+ */
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
+static esp_err_t ppa_create_sleep_retention_link_cb(void *arg)
+{
+    sleep_retention_module_t module = ppa_reg_retention_info.module;
+    esp_err_t err = sleep_retention_entries_create(ppa_reg_retention_info.regdma_entry_array,
+                                                   ppa_reg_retention_info.array_size,
+                                                   REGDMA_LINK_PRI_PPA, module);
+    return err;
+}
+#endif
 
 static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engine_t **ret_engine)
 {
@@ -77,17 +97,14 @@ static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engin
     if (config->engine == PPA_ENGINE_TYPE_SRM) {
         if (!s_platform.srm) {
             ppa_srm_engine_t *srm_engine = heap_caps_calloc(1, sizeof(ppa_srm_engine_t), PPA_MEM_ALLOC_CAPS);
-            SemaphoreHandle_t srm_sem = xSemaphoreCreateBinaryWithCaps(PPA_MEM_ALLOC_CAPS);
             dma2d_descriptor_t *srm_tx_dma_desc = (dma2d_descriptor_t *)heap_caps_aligned_calloc(alignment, 1, s_platform.dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
             dma2d_descriptor_t *srm_rx_dma_desc = (dma2d_descriptor_t *)heap_caps_aligned_calloc(alignment, 1, s_platform.dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-            if (srm_engine && srm_sem && srm_tx_dma_desc && srm_rx_dma_desc) {
+            if (srm_engine && srm_tx_dma_desc && srm_rx_dma_desc) {
                 srm_engine->dma_tx_desc = srm_tx_dma_desc;
                 srm_engine->dma_rx_desc = srm_rx_dma_desc;
                 srm_engine->base.platform = &s_platform;
                 srm_engine->base.type = PPA_ENGINE_TYPE_SRM;
                 srm_engine->base.spinlock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-                srm_engine->base.sem = srm_sem;
-                xSemaphoreGive(srm_engine->base.sem);
                 STAILQ_INIT(&srm_engine->base.trans_stailq);
                 s_platform.srm = srm_engine;
                 s_platform.srm_engine_ref_count++;
@@ -99,9 +116,6 @@ static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engin
                 ret = ESP_ERR_NO_MEM;
                 ESP_LOGE(TAG, "no mem to register PPA SRM engine");
                 free(srm_engine);
-                if (srm_sem) {
-                    vSemaphoreDeleteWithCaps(srm_sem);
-                }
                 free(srm_tx_dma_desc);
                 free(srm_rx_dma_desc);
             }
@@ -122,19 +136,16 @@ static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engin
     } else if (config->engine == PPA_ENGINE_TYPE_BLEND) {
         if (!s_platform.blending) {
             ppa_blend_engine_t *blending_engine = heap_caps_calloc(1, sizeof(ppa_blend_engine_t), PPA_MEM_ALLOC_CAPS);
-            SemaphoreHandle_t blending_sem = xSemaphoreCreateBinaryWithCaps(PPA_MEM_ALLOC_CAPS);
             dma2d_descriptor_t *blending_tx_bg_dma_desc = (dma2d_descriptor_t *)heap_caps_aligned_calloc(alignment, 1, s_platform.dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
             dma2d_descriptor_t *blending_tx_fg_dma_desc = (dma2d_descriptor_t *)heap_caps_aligned_calloc(alignment, 1, s_platform.dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
             dma2d_descriptor_t *blending_rx_dma_desc = (dma2d_descriptor_t *)heap_caps_aligned_calloc(alignment, 1, s_platform.dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-            if (blending_engine && blending_sem && blending_tx_bg_dma_desc && blending_tx_fg_dma_desc && blending_rx_dma_desc) {
+            if (blending_engine && blending_tx_bg_dma_desc && blending_tx_fg_dma_desc && blending_rx_dma_desc) {
                 blending_engine->dma_tx_bg_desc = blending_tx_bg_dma_desc;
                 blending_engine->dma_tx_fg_desc = blending_tx_fg_dma_desc;
                 blending_engine->dma_rx_desc = blending_rx_dma_desc;
                 blending_engine->base.platform = &s_platform;
                 blending_engine->base.type = PPA_ENGINE_TYPE_BLEND;
                 blending_engine->base.spinlock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-                blending_engine->base.sem = blending_sem;
-                xSemaphoreGive(blending_engine->base.sem);
                 STAILQ_INIT(&blending_engine->base.trans_stailq);
                 s_platform.blending = blending_engine;
                 s_platform.blend_engine_ref_count++;
@@ -143,9 +154,6 @@ static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engin
                 ret = ESP_ERR_NO_MEM;
                 ESP_LOGE(TAG, "no mem to register PPA Blending engine");
                 free(blending_engine);
-                if (blending_sem) {
-                    vSemaphoreDeleteWithCaps(blending_sem);
-                }
                 free(blending_tx_bg_dma_desc);
                 free(blending_tx_fg_dma_desc);
                 free(blending_rx_dma_desc);
@@ -187,6 +195,35 @@ static esp_err_t ppa_engine_acquire(const ppa_engine_config_t *config, ppa_engin
                 ESP_LOGE(TAG, "install 2D-DMA failed");
                 goto wrap_up;
             }
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
+            s_platform.flags.allow_pd = config->flags.allow_pd; // Uses the first acquired engine's allow_pd flag as the platform's allow_pd flag
+
+            // Initialize sleep retention module for PPA
+            sleep_retention_module_t module = ppa_reg_retention_info.module;
+            sleep_retention_module_init_param_t init_param = {
+                .cbs = {
+                    .create = {
+                        .handle = ppa_create_sleep_retention_link_cb,
+                        .arg = NULL,
+                    },
+                },
+                .depends = RETENTION_MODULE_BITMAP_INIT(CLOCK_SYSTEM)
+            };
+            if (sleep_retention_module_init(module, &init_param) != ESP_OK) {
+                // even though the sleep retention module init failed, PPA driver should still work, so just warning here
+                ESP_LOGW(TAG, "init sleep retention failed, power domain may be turned off during sleep");
+            } else if (s_platform.flags.allow_pd) {
+                if (sleep_retention_module_allocate(module) != ESP_OK) {
+                    ESP_LOGW(TAG, "fail to allocate retention link list");
+                    // don't call sleep_retention_module_deinit here, otherwise PPA peripheral may be powered off during sleep
+                }
+            }
+        } else {
+            if (s_platform.flags.allow_pd != config->flags.allow_pd) {
+                ESP_LOGW(TAG, "allow_pd flag mismatch among clients, will follow flags.allow_pd = %d", s_platform.flags.allow_pd);
+            }
+#endif
         }
     }
 wrap_up:
@@ -194,6 +231,7 @@ wrap_up:
 
     if (ret != ESP_OK && *ret_engine != NULL) {
         ppa_engine_release(*ret_engine);
+        *ret_engine = NULL;
     }
 
     return ret;
@@ -214,7 +252,6 @@ static esp_err_t ppa_engine_release(ppa_engine_t *ppa_engine)
             s_platform.srm = NULL;
             free(srm_engine->dma_tx_desc);
             free(srm_engine->dma_rx_desc);
-            vSemaphoreDeleteWithCaps(srm_engine->base.sem);
 #if CONFIG_PM_ENABLE
             if (srm_engine->base.pm_lock) {
                 ret = esp_pm_lock_delete(srm_engine->base.pm_lock);
@@ -233,7 +270,6 @@ static esp_err_t ppa_engine_release(ppa_engine_t *ppa_engine)
             free(blending_engine->dma_tx_bg_desc);
             free(blending_engine->dma_tx_fg_desc);
             free(blending_engine->dma_rx_desc);
-            vSemaphoreDeleteWithCaps(blending_engine->base.sem);
 #if CONFIG_PM_ENABLE
             if (blending_engine->base.pm_lock) {
                 ret = esp_pm_lock_delete(blending_engine->base.pm_lock);
@@ -246,6 +282,17 @@ static esp_err_t ppa_engine_release(ppa_engine_t *ppa_engine)
 
     if (!s_platform.srm && !s_platform.blending) {
         assert(s_platform.srm_engine_ref_count == 0 && s_platform.blend_engine_ref_count == 0);
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
+        sleep_retention_module_t module = ppa_reg_retention_info.module;
+        if (sleep_retention_is_module_created(module)) {
+            sleep_retention_module_free(module);
+        }
+        if (sleep_retention_is_module_inited(module)) {
+            sleep_retention_module_deinit(module);
+        }
+        s_platform.flags.allow_pd = false;
+#endif
 
         if (s_platform.dma2d_pool_handle) {
             dma2d_release_pool(s_platform.dma2d_pool_handle); // TODO: check return value. If not ESP_OK, then must be error on other 2D-DMA clients :( Give a warning log?
@@ -281,18 +328,17 @@ esp_err_t ppa_register_client(const ppa_client_config_t *config, ppa_client_hand
     client->oper_type = config->oper_type;
     client->spinlock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     client->data_burst_length = config->data_burst_length ? config->data_burst_length : PPA_DATA_BURST_LENGTH_128;
-    if (esp_efuse_is_flash_encryption_enabled() && (client->data_burst_length < SOC_MEMSPI_ENCRYPTION_ALIGNMENT)) {
-        ESP_LOGW(TAG, "flash encryption is enabled, but selected data burst length does not meet encryption alignment restriction if accessing external memory, will be automatically adjusted later on");
-    }
 
     if (config->oper_type == PPA_OPERATION_SRM) {
         ppa_engine_config_t engine_config = {
             .engine = PPA_ENGINE_TYPE_SRM,
+            .flags.allow_pd = config->flags.allow_pd,
         };
         ESP_GOTO_ON_ERROR(ppa_engine_acquire(&engine_config, &client->engine), err, TAG, "unable to acquire SRM engine");
     } else if (config->oper_type == PPA_OPERATION_BLEND || config->oper_type == PPA_OPERATION_FILL) {
         ppa_engine_config_t engine_config = {
             .engine = PPA_ENGINE_TYPE_BLEND,
+            .flags.allow_pd = config->flags.allow_pd,
         };
         ESP_GOTO_ON_ERROR(ppa_engine_acquire(&engine_config, &client->engine), err, TAG, "unable to acquire Blending engine");
     }
@@ -356,7 +402,8 @@ static bool ppa_malloc_transaction(QueueHandle_t trans_elm_ptr_queue, uint32_t t
     assert(ppa_trans_desc_size != 0);
     size_t trans_elm_storage_size = sizeof(ppa_trans_t) + SIZEOF_DMA2D_TRANS_T + sizeof(dma2d_trans_config_t) + sizeof(ppa_dma2d_trans_on_picked_config_t) + ppa_trans_desc_size;
     for (int i = 0; i < trans_elm_num; i++) {
-        void *trans_elm_storage = heap_caps_calloc(1, trans_elm_storage_size, PPA_MEM_ALLOC_CAPS);
+        // always allocate memory from internal memory because the transaction storage embeds a dma2d_trans_t which contains atomic variable
+        void *trans_elm_storage = heap_caps_calloc(1, trans_elm_storage_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         SemaphoreHandle_t ppa_trans_sem = xSemaphoreCreateBinaryWithCaps(PPA_MEM_ALLOC_CAPS);
 
         if (!trans_elm_storage || !ppa_trans_sem) {
@@ -418,59 +465,51 @@ esp_err_t ppa_do_operation(ppa_client_handle_t ppa_client, ppa_engine_t *ppa_eng
 {
     esp_err_t ret = ESP_OK;
     esp_err_t pm_lock_ret __attribute__((unused));
+    bool start_now = false;
 
+    trans_elm->blocking = (mode == PPA_TRANS_MODE_BLOCKING);
+    if (trans_elm->blocking) {
+        // Ensure no transaction semaphore before transaction starts
+        // A recycled transaction element may still hold the give from a previous
+        // non-blocking use (the ISR gives it unconditionally and nobody took it)
+        xSemaphoreTake(trans_elm->sem, 0);
+    }
+
+    // Send transaction into PPA engine queue. Whether it starts now or is chained
+    // by the ISR is decided under the engine spinlock, together with the insert:
+    // the ISR makes the matching "queue empty -> engine idle" decision under the
+    // same lock, so a submission from another core cannot slip in between the
+    // ISR's decision and the engine becoming idle (see ppa_transaction_done_cb)
     portENTER_CRITICAL(&ppa_client->spinlock);
-    // Send transaction into PPA engine queue
     portENTER_CRITICAL(&ppa_engine_base->spinlock);
     STAILQ_INSERT_TAIL(&ppa_engine_base->trans_stailq, trans_elm, entry);
+    if (!ppa_engine_base->busy) {
+        ppa_engine_base->busy = true;
+        start_now = true;
+    }
     portEXIT_CRITICAL(&ppa_engine_base->spinlock);
     ppa_client->trans_cnt++;
     portEXIT_CRITICAL(&ppa_client->spinlock);
 
-    TickType_t ticks_to_wait = (mode == PPA_TRANS_MODE_NON_BLOCKING) ? 0 : portMAX_DELAY;
-    if (xSemaphoreTake(ppa_engine_base->sem, ticks_to_wait) == pdTRUE) {
-        // Check if the transaction has already been started from the ISR
-        // If so, then the transaction should have been removed from queue at this moment (transaction completed)
-        bool found = false;
-        ppa_trans_t *temp = NULL;
-        portENTER_CRITICAL(&ppa_engine_base->spinlock);
-        STAILQ_FOREACH(temp, &ppa_engine_base->trans_stailq, entry) {
-            if (temp == trans_elm) {
-                found = true;
-                break;
-            }
-        }
-        portEXIT_CRITICAL(&ppa_engine_base->spinlock);
-        if (found) {
+    if (start_now) {
+        // The engine was idle, so the queue held nothing but this transaction
 #if CONFIG_PM_ENABLE
-            pm_lock_ret = esp_pm_lock_acquire(ppa_engine_base->pm_lock);
-            assert((pm_lock_ret == ESP_OK) && "acquire pm_lock failed");
+        pm_lock_ret = esp_pm_lock_acquire(ppa_engine_base->pm_lock);
+        assert((pm_lock_ret == ESP_OK) && "acquire pm_lock failed");
 #endif
-            ret = ppa_dma2d_enqueue(trans_elm);
-            if (ret != ESP_OK) {
-                portENTER_CRITICAL(&ppa_engine_base->spinlock);
-                STAILQ_REMOVE(&ppa_engine_base->trans_stailq, trans_elm, ppa_trans_s, entry);
-                portEXIT_CRITICAL(&ppa_engine_base->spinlock);
-                xSemaphoreGive(ppa_engine_base->sem);
-#if CONFIG_PM_ENABLE
-                pm_lock_ret = esp_pm_lock_release(ppa_engine_base->pm_lock);
-                assert((pm_lock_ret == ESP_OK) && "release pm_lock failed");
-#endif
-                portENTER_CRITICAL(&ppa_client->spinlock);
-                ppa_client->trans_cnt--;
-                portEXIT_CRITICAL(&ppa_client->spinlock);
-                goto err;
-            }
-        } else {
-            xSemaphoreGive(ppa_engine_base->sem);
-        }
+        ret = ppa_dma2d_enqueue(trans_elm);
+        assert((ret == ESP_OK) && "enqueue to 2D-DMA failed");
     }
 
     if (mode == PPA_TRANS_MODE_BLOCKING) {
         xSemaphoreTake(trans_elm->sem, portMAX_DELAY); // Given in the ISR
+        // Recycle transaction elm after the semaphore take
+        portENTER_CRITICAL(&ppa_client->spinlock);
+        ppa_recycle_transaction(ppa_client, trans_elm);
+        ppa_client->trans_cnt--;
+        portEXIT_CRITICAL(&ppa_client->spinlock);
     }
 
-err:
     return ret;
 }
 
@@ -491,6 +530,11 @@ bool ppa_transaction_done_cb(dma2d_channel_handle_t dma2d_chan, dma2d_event_data
     // Remove this transaction from transaction queue
     STAILQ_REMOVE(&engine_base->trans_stailq, trans_elm, ppa_trans_s, entry);
     next_start_trans = STAILQ_FIRST(&engine_base->trans_stailq);
+    if (!next_start_trans) {
+        // Nothing queued: the engine goes idle HERE, under the same lock a
+        // submitting task takes to insert and check (ppa_do_operation)
+        engine_base->busy = false;
+    }
     portEXIT_CRITICAL_ISR(&engine_base->spinlock);
 
     portENTER_CRITICAL_ISR(&client->spinlock);
@@ -498,21 +542,24 @@ bool ppa_transaction_done_cb(dma2d_channel_handle_t dma2d_chan, dma2d_event_data
     xSemaphoreGiveFromISR(trans_elm->sem, &HPTaskAwoken);
     need_yield |= (HPTaskAwoken == pdTRUE);
 
-    // Then recycle transaction elm
-    need_yield |= ppa_recycle_transaction(client, trans_elm);
-
-    client->trans_cnt--;
+    // Non-blocking callers already returned, so recycle transaction elm here
+    // Blocking callers still wait on `sem` and recycle after that take (ppa_do_operation)
+    if (!trans_elm->blocking) {
+        need_yield |= ppa_recycle_transaction(client, trans_elm);
+        client->trans_cnt--;
+    }
     portEXIT_CRITICAL_ISR(&client->spinlock);
 
-    // If there is next trans in PPA engine queue, send it to DMA queue; otherwise, release the engine semaphore
+    // If there is next trans in PPA engine queue, send it to DMA queue; otherwise the engine is idle (flag cleared above)
     if (next_start_trans) {
-        ppa_dma2d_enqueue(next_start_trans);
+        esp_err_t ret = ppa_dma2d_enqueue(next_start_trans);
+        assert(ret == ESP_OK);
+        (void)ret;
     } else {
-        xSemaphoreGiveFromISR(engine_base->sem, &HPTaskAwoken);
-        need_yield |= (HPTaskAwoken == pdTRUE);
 #if CONFIG_PM_ENABLE
         esp_err_t pm_lock_ret = esp_pm_lock_release(engine_base->pm_lock);
         assert(pm_lock_ret == ESP_OK);
+        (void)pm_lock_ret;
 #endif
     }
 
@@ -549,28 +596,24 @@ bool ppa_check_buffer_alignment(ppa_client_handle_t ppa_client, const void *pic_
         }
     }
 
-    // 2. check with mspi encryption alignment
-    // When flash encryption is enabled, and in/out buffer are in PSRAM (if located in internal RAM, there is no alignment restriction due to encryption):
-    // - The width of the window multiply byte number of one pixel should align to SOC_MEMSPI_ENCRYPTION_ALIGNMENT
-    // - The starting address of every row of the window should align to SOC_MEMSPI_ENCRYPTION_ALIGNMENT
-    // (which also implies the address and size of the in/out buffer will align to SOC_MEMSPI_ENCRYPTION_ALIGNMENT)
-
-    // check pic_width, block_width, block_head
+    // 2. check with DMA2D/MSPI 2D transaction alignment
+    // When MSPI strict alignment is required, and in/out buffer are in PSRAM (if located in internal RAM, there is no alignment restriction):
+    // - The width of the window multiply byte number of one pixel should align to MSPI alignment
+    // - The starting address of every row of the window should align to MSPI alignment
+    // (which also implies the address and size of the in/out buffer will align to MSPI alignment)
     const void *buffer = (is_input) ? ((ppa_in_pic_blk_config_t *)pic_blk_config)->buffer : ((ppa_out_pic_blk_config_t *)pic_blk_config)->buffer;
-    if (esp_efuse_is_flash_encryption_enabled() && !esp_ptr_internal(buffer)) {
+    size_t dma2d_align = dma2d_get_buffer_alignment_constraint(buffer);
+    if (dma2d_align > 1) {
         if (ppa_client->engine->type == PPA_ENGINE_TYPE_SRM) {
-            ESP_LOGE(TAG, "SRM processes by macro blocks, where alignment is uncontrollable, makes it unable to work with flash encrypted if buffer is in external memory");
+            ESP_LOGE(TAG, "SRM processes by macro blocks, where alignment is uncontrollable, makes it unable to work with MSPI strict alignment if buffer is in external memory");
             return false;
         }
         uint32_t pic_width = (is_input) ? ((ppa_in_pic_blk_config_t *)pic_blk_config)->pic_w : ((ppa_out_pic_blk_config_t *)pic_blk_config)->pic_w;
         uint32_t block_offset_x = (is_input) ? ((ppa_in_pic_blk_config_t *)pic_blk_config)->block_offset_x : ((ppa_out_pic_blk_config_t *)pic_blk_config)->block_offset_x;
         esp_color_fourcc_t color_mode = (is_input) ? ((ppa_in_pic_blk_config_t *)pic_blk_config)->cm : ((ppa_out_pic_blk_config_t *)pic_blk_config)->cm;
-        uint32_t pixel_depth_bytes = color_hal_pixel_format_fourcc_get_bit_depth(color_mode) / 8;
-
-        if (((pic_width * pixel_depth_bytes) & (SOC_MEMSPI_ENCRYPTION_ALIGNMENT - 1)) != 0 ||
-                ((block_width * pixel_depth_bytes) & (SOC_MEMSPI_ENCRYPTION_ALIGNMENT - 1)) != 0 ||
-                ((block_offset_x * pixel_depth_bytes) & (SOC_MEMSPI_ENCRYPTION_ALIGNMENT - 1)) != 0) {
-            ESP_LOGE(TAG, "(pic_width/block_width/block_offset_x * pixel_depth_bytes) not aligned to SOC_MEMSPI_ENCRYPTION_ALIGNMENT");
+        uint32_t bit_depth = color_hal_pixel_format_fourcc_get_bit_depth(color_mode);
+        if (!dma2d_check_transaction_alignment_constraint(buffer, pic_width, block_width, block_offset_x, bit_depth)) {
+            ESP_LOGE(TAG, "buffer/pic_width/block_width/block_offset_x does not satisfy DMA2D/MSPI alignment (%zu)", dma2d_align);
             return false;
         }
     }
