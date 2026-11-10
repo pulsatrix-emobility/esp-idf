@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,6 +21,7 @@
 #include "esp_app_desc.h"
 #include "bootloader_memory_utils.h"
 #include "soc/soc_caps.h"
+#include "hal/mmu_types.h"
 #include "hal/cache_ll.h"
 #include "spi_flash_mmap.h"
 #include "hal/efuse_hal.h"
@@ -74,15 +75,27 @@ static bool should_load(uint32_t load_addr);
 /* Return true if load_addr is an address the bootloader should map via flash cache */
 static bool should_map(uint32_t load_addr);
 
-static esp_err_t process_segments(esp_image_metadata_t *data, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum);
+static esp_err_t process_segments(esp_image_metadata_t *data, uint32_t part_len, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum);
 /* Load or verify a segment */
-static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segment_header_t *header, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata);
+static esp_err_t process_segment(int index, uint32_t flash_addr, uint32_t part_len, esp_image_segment_header_t *header, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata);
+
+typedef struct {
+    int segment;
+    intptr_t load_addr;
+    uint32_t data_addr;
+    uint32_t data_len;
+    bool do_load;
+    bool is_segment_start;
+    bootloader_sha256_handle_t sha_handle;
+    uint32_t *checksum;
+    esp_image_metadata_t *metadata;
+} process_segment_data_t;
 
 /* split segment and verify if data_len is too long */
-static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t data_addr, uint32_t data_len, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata);
+static esp_err_t process_segment_data(const process_segment_data_t *segment_data);
 
 /* Verify the main image header */
-static esp_err_t verify_image_header(uint32_t src_addr, const esp_image_header_t *image, bool silent);
+static esp_err_t verify_image_header(uint32_t src_addr, const esp_image_header_t *image, bool do_verify, bool silent);
 
 /* Verify a segment header */
 static esp_err_t verify_segment_header(int index, const esp_image_segment_header_t *segment, uint32_t segment_data_offs, esp_image_metadata_t *metadata, bool silent);
@@ -119,15 +132,15 @@ uint32_t esp_image_bootloader_offset_get(void)
 void esp_image_bootloader_offset_set(const uint32_t offset)
 {
     s_bootloader_partition_offset = offset;
-    ESP_LOGI(TAG, "Bootloader offsets for PRIMARY: 0x%x, Secondary: 0x%" PRIx32, ESP_PRIMARY_BOOTLOADER_OFFSET, s_bootloader_partition_offset);
+    ESP_LOGD(TAG, "Bootloader offsets for PRIMARY: 0x%x, Secondary: 0x%" PRIx32, ESP_PRIMARY_BOOTLOADER_OFFSET, s_bootloader_partition_offset);
 #if SOC_RECOVERY_BOOTLOADER_SUPPORTED
     uint32_t recovery_offset = efuse_hal_get_recovery_bootloader_address();
     if (efuse_hal_recovery_bootloader_enabled()) {
-        ESP_LOGI(TAG, "Bootloader offset for RECOVERY: 0x%" PRIx32, recovery_offset);
+        ESP_LOGD(TAG, "Bootloader offset for RECOVERY: 0x%" PRIx32, recovery_offset);
     } else if (recovery_offset == 0) {
-        ESP_LOGI(TAG, "Bootloader offset for RECOVERY: has not been set yet");
+        ESP_LOGD(TAG, "Bootloader offset for RECOVERY: has not been set yet");
     } else {
-        ESP_LOGI(TAG, "Bootloader offset for RECOVERY: is disabled");
+        ESP_LOGD(TAG, "Bootloader offset for RECOVERY: is disabled");
     }
 #endif
 }
@@ -201,7 +214,7 @@ static esp_err_t image_load(esp_image_load_mode_t mode, const esp_partition_pos_
 
     bootloader_sha256_handle_t *p_sha_handle = &sha_handle;
     CHECK_ERR(process_image_header(data, part->offset, (verify_sha) ? p_sha_handle : NULL, do_verify, silent));
-    CHECK_ERR(process_segments(data, silent, do_load, sha_handle, checksum));
+    CHECK_ERR(process_segments(data, part->size, silent, do_load, sha_handle, checksum));
     bool skip_check_checksum = !do_verify || esp_cpu_dbgr_is_attached();
     CHECK_ERR(process_checksum(sha_handle, checksum_word, data, silent, skip_check_checksum));
     CHECK_ERR(process_appended_hash_and_sig(data, part->offset, part->size, do_verify, silent));
@@ -361,7 +374,7 @@ esp_err_t esp_image_get_metadata(const esp_partition_pos_t *part, esp_image_meta
     bool do_verify = false;
     bool do_load = false;
     CHECK_ERR(process_image_header(metadata, part->offset, NULL, do_verify, silent));
-    CHECK_ERR(process_segments(metadata, silent, do_load, NULL, NULL));
+    CHECK_ERR(process_segments(metadata, part->size, silent, do_load, NULL, NULL));
     bool skip_check_checksum = true;
     CHECK_ERR(process_checksum(NULL, 0, metadata, silent, skip_check_checksum));
     CHECK_ERR(process_appended_hash_and_sig(metadata, part->offset, part->size, true, silent));
@@ -370,7 +383,7 @@ err:
     return err;
 }
 
-static esp_err_t verify_image_header(uint32_t src_addr, const esp_image_header_t *image, bool silent)
+static esp_err_t verify_image_header(uint32_t src_addr, const esp_image_header_t *image, bool do_verify, bool silent)
 {
     esp_err_t err = ESP_OK;
 
@@ -385,11 +398,13 @@ static esp_err_t verify_image_header(uint32_t src_addr, const esp_image_header_t
         FAIL_LOAD("image at 0x%"PRIx32" has invalid magic byte (nothing flashed here?)", src_addr);
     }
 
-    // Checking the chip revision header *will* print a bunch of other info
-    // regardless of silent setting as this may be important, but don't bother checking it
-    // if it looks like the app partition is erased or otherwise garbage
-    esp_image_type image_type = is_bootloader(src_addr) ? ESP_IMAGE_BOOTLOADER : ESP_IMAGE_APPLICATION;
-    CHECK_ERR(bootloader_common_check_chip_validity(image, image_type));
+    if (do_verify) {
+        // Checking the chip revision header *will* print a bunch of other info
+        // regardless of silent setting as this may be important, but don't bother checking it
+        // if it looks like the app partition is erased or otherwise garbage
+        esp_image_type image_type = is_bootloader(src_addr) ? ESP_IMAGE_BOOTLOADER : ESP_IMAGE_APPLICATION;
+        CHECK_ERR(bootloader_common_check_chip_validity(image, image_type));
+    }
 
     if (image->segment_count > ESP_IMAGE_MAX_SEGMENTS) {
         FAIL_LOAD("image at 0x%"PRIx32" segment count %d exceeds max %d", src_addr, image->segment_count, ESP_IMAGE_MAX_SEGMENTS);
@@ -564,15 +579,17 @@ static esp_err_t process_image_header(esp_image_metadata_t *data, uint32_t part_
                 bootloader_sha256_data(*sha_handle, &data->image, sizeof(esp_image_header_t));
             }
         }
-        CHECK_ERR(verify_image_header(data->start_addr, &data->image, silent));
     }
+
+    CHECK_ERR(verify_image_header(data->start_addr, &data->image, do_verify, silent));
+
     data->image_len = sizeof(esp_image_header_t);
     return ESP_OK;
 err:
     return err;
 }
 
-static esp_err_t process_segments(esp_image_metadata_t *data, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum)
+static esp_err_t process_segments(esp_image_metadata_t *data, uint32_t part_len, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum)
 {
     esp_err_t err = ESP_OK;
     uint32_t start_segments = data->start_addr + data->image_len;
@@ -580,7 +597,7 @@ static esp_err_t process_segments(esp_image_metadata_t *data, bool silent, bool 
     for (int i = 0; i < data->image.segment_count; i++) {
         esp_image_segment_header_t *header = &data->segments[i];
         ESP_LOGV(TAG, "loading segment header %d at offset 0x%"PRIx32, i, next_addr);
-        CHECK_ERR(process_segment(i, next_addr, header, silent, do_load, sha_handle, checksum, data));
+        CHECK_ERR(process_segment(i, next_addr, part_len, header, silent, do_load, sha_handle, checksum, data));
         next_addr += sizeof(esp_image_segment_header_t);
         data->segment_data[i] = next_addr;
         next_addr += header->data_len;
@@ -601,9 +618,16 @@ err:
     return err;
 }
 
-static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segment_header_t *header, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata)
+static esp_err_t process_segment(int index, uint32_t flash_addr, uint32_t part_len, esp_image_segment_header_t *header, bool silent, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata)
 {
-    esp_err_t err;
+    esp_err_t err = ESP_ERR_IMAGE_INVALID;
+
+    /* Segment header must lie inside the partition */
+    const uint32_t seg_offs = flash_addr - metadata->start_addr;
+    if (seg_offs > part_len || part_len - seg_offs < sizeof(esp_image_segment_header_t)) {
+        FAIL_LOAD("segment %d header at 0x%"PRIx32" exceeds partition size 0x%"PRIx32, index, flash_addr, part_len);
+    }
+    const uint32_t max_data_len = part_len - seg_offs - sizeof(esp_image_segment_header_t);
 
     /* read segment header */
     err = bootloader_flash_read(flash_addr, header, sizeof(esp_image_segment_header_t), true);
@@ -620,6 +644,12 @@ static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segme
     uint32_t data_addr = flash_addr + sizeof(esp_image_segment_header_t);
 
     ESP_LOGV(TAG, "segment data length 0x%"PRIx32" data starts 0x%"PRIx32, data_len, data_addr);
+
+    /* Reject segment data extending past the partition before hashing it,
+       otherwise a corrupted data_len makes the loop below walk up to 4GB of flash */
+    if (data_len > max_data_len) {
+        FAIL_LOAD("segment %d length 0x%"PRIx32" exceeds partition size 0x%"PRIx32, index, data_len, part_len);
+    }
 
     CHECK_ERR(verify_segment_header(index, header, data_addr, metadata, silent));
 
@@ -650,13 +680,24 @@ static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segme
     uint32_t free_page_count = bootloader_mmap_get_free_pages();
     ESP_LOGD(TAG, "free data page_count 0x%08"PRIx32, free_page_count);
 
+    process_segment_data_t segment_data = {
+        .segment = index,
+        .load_addr = load_addr,
+        .data_addr = data_addr,
+        .do_load = do_load,
+        .is_segment_start = true,
+        .sha_handle = sha_handle,
+        .checksum = checksum,
+        .metadata = metadata,
+    };
     uint32_t data_len_remain = data_len;
     while (data_len_remain > 0) {
 #if (SECURE_BOOT_CHECK_SIGNATURE == 1) && defined(BOOTLOADER_BUILD)
         /* Double check the address verification done above */
-        ESP_FAULT_ASSERT(!do_load || verify_load_addresses(0, load_addr, load_addr + data_len_remain, false, false));
+        ESP_FAULT_ASSERT(!do_load || verify_load_addresses(0, segment_data.load_addr,
+                         segment_data.load_addr + data_len_remain, false, false));
 #endif
-        uint32_t offset_page = ((data_addr & MMAP_ALIGNED_MASK) != 0) ? 1 : 0;
+        uint32_t offset_page = ((segment_data.data_addr & MMAP_ALIGNED_MASK) != 0) ? 1 : 0;
         /* Data we could map in case we are not aligned to PAGE boundary is one page size lesser. */
         uint32_t max_pages = (free_page_count > offset_page) ? (free_page_count - offset_page) : 0;
         if (max_pages == 0) {
@@ -667,10 +708,12 @@ static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segme
         if (__builtin_mul_overflow(max_pages, SPI_FLASH_MMU_PAGE_SIZE, &max_image_len)) {
             max_image_len = UINT32_MAX;
         }
-        data_len = MIN(data_len_remain, max_image_len);
-        CHECK_ERR(process_segment_data(index, load_addr, data_addr, data_len, do_load, sha_handle, checksum, metadata));
-        data_addr += data_len;
-        data_len_remain -= data_len;
+        segment_data.data_len = MIN(data_len_remain, max_image_len);
+        CHECK_ERR(process_segment_data(&segment_data));
+        segment_data.data_addr += segment_data.data_len;
+        segment_data.load_addr += segment_data.data_len;
+        data_len_remain -= segment_data.data_len;
+        segment_data.is_segment_start = false;
     }
 
     return ESP_OK;
@@ -718,26 +761,27 @@ static size_t process_esp_app_desc_data(const uint32_t *src, bootloader_sha256_h
 }
 #endif // CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
 
-static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t data_addr, uint32_t data_len, bool do_load, bootloader_sha256_handle_t sha_handle, uint32_t *checksum, esp_image_metadata_t *metadata)
+static esp_err_t process_segment_data(const process_segment_data_t *segment_data)
 {
     // If we are not loading, and the checksum is empty, skip processing this
     // segment for data
-    if (!do_load && checksum == NULL) {
+    if (!segment_data->do_load && segment_data->checksum == NULL) {
         ESP_LOGD(TAG, "skipping checksum for segment");
         return ESP_OK;
     }
 
-    const uint32_t *data = (const uint32_t *)bootloader_mmap(data_addr, data_len);
+    const uint32_t *data = (const uint32_t *)bootloader_mmap(segment_data->data_addr,
+                                                             segment_data->data_len);
     if (!data) {
         ESP_LOGE(TAG, "bootloader_mmap(0x%"PRIx32", 0x%"PRIx32") failed",
-                 data_addr, data_len);
+                 segment_data->data_addr, segment_data->data_len);
         return ESP_FAIL;
     }
 
-    if (checksum == NULL && sha_handle == NULL) {
-        memcpy((void *)load_addr, data, data_len);
+    if (segment_data->checksum == NULL && segment_data->sha_handle == NULL) {
+        memcpy((void *)segment_data->load_addr, data, segment_data->data_len);
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-        if (esp_ptr_in_iram((uint32_t *)load_addr)) {
+        if (esp_ptr_in_iram((uint32_t *)segment_data->load_addr)) {
             /* If we have manipulated data over dcache that will be read over icache then we need
                to writeback, else the data read might be invalid */
             cache_ll_writeback_all(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA, CACHE_LL_ID_ALL);
@@ -757,28 +801,36 @@ static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t 
         ram_obfs_value[1] ^= 0x66;
 #endif
     }
-    uint32_t *dest = (uint32_t *)load_addr;
+    uint32_t *dest = (uint32_t *)segment_data->load_addr;
 #endif // BOOTLOADER_BUILD
 
     const uint32_t *src = data;
+    uint32_t data_len = segment_data->data_len;
 
     // Case I: Bootloader verifying application
     // Case II: Bootloader verifying bootloader
     // The esp_app_desc_t structure is located in DROM and is always in segment #0.
     // Anti-rollback check and efuse block version check should handle only Case I from above.
-    if (segment == 0 && !is_bootloader(metadata->start_addr)) {
+    if (segment_data->segment == 0 && segment_data->is_segment_start &&
+            !is_bootloader(segment_data->metadata->start_addr)) {
 /* ESP32 doesn't have more memory and more efuse bits for block major version. */
 #if !CONFIG_IDF_TARGET_ESP32
         const esp_app_desc_t *app_desc = (const esp_app_desc_t *)src;
-        esp_err_t ret = bootloader_common_check_efuse_blk_validity(app_desc->min_efuse_blk_rev_full, app_desc->max_efuse_blk_rev_full);
+        esp_err_t ret = bootloader_common_check_efuse_blk_validity(app_desc->min_efuse_blk_rev_full,
+                            app_desc->max_efuse_blk_rev_full);
         if (ret != ESP_OK) {
             bootloader_munmap(data);
             return ret;
         }
 #endif  // !CONFIG_IDF_TARGET_ESP32
 #if CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
-        ESP_LOGD(TAG, "additional anti-rollback check 0x%"PRIx32, data_addr);
-        size_t len = process_esp_app_desc_data(src, sha_handle, checksum, metadata);
+        ESP_LOGD(TAG, "additional anti-rollback check 0x%"PRIx32, segment_data->data_addr);
+        size_t len = process_esp_app_desc_data(src, segment_data->sha_handle,
+                                               segment_data->checksum, segment_data->metadata);
+        if (len > data_len) {
+            bootloader_munmap(data);
+            return ESP_ERR_IMAGE_INVALID;
+        }
         data_len -= len;
         src += len / 4;
         // In BOOTLOADER_BUILD, for DROM (segment #0) we do not load it into dest (only map it), do_load = false.
@@ -788,11 +840,11 @@ static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t 
     for (size_t i = 0; i < data_len; i += 4) {
         int w_i = i / 4; // Word index
         uint32_t w = src[w_i];
-        if (checksum != NULL) {
-            *checksum ^= w;
+        if (segment_data->checksum != NULL) {
+            *segment_data->checksum ^= w;
         }
 #ifdef BOOTLOADER_BUILD
-        if (do_load) {
+        if (segment_data->do_load) {
             dest[w_i] = w ^ ((w_i & 1) ? ram_obfs_value[0] : ram_obfs_value[1]);
         }
 #endif
@@ -801,13 +853,13 @@ static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t 
         // counter-intuitive, but it's ~3ms better than using the
         // SHA256 block size.
         const size_t SHA_CHUNK = 1024;
-        if (sha_handle != NULL && i % SHA_CHUNK == 0) {
-            bootloader_sha256_data(sha_handle, &src[w_i],
+        if (segment_data->sha_handle != NULL && i % SHA_CHUNK == 0) {
+            bootloader_sha256_data(segment_data->sha_handle, &src[w_i],
                                    MIN(SHA_CHUNK, data_len - i));
         }
     }
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-    if (do_load && esp_ptr_in_iram((uint32_t *)load_addr)) {
+    if (segment_data->do_load && esp_ptr_in_iram((uint32_t *)segment_data->load_addr)) {
         /* If we have manipulated data over dcache that will be read over icache then we need
            to writeback, else the data read might be invalid */
         cache_ll_writeback_all(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA, CACHE_LL_ID_ALL);
@@ -832,6 +884,14 @@ static esp_err_t verify_segment_header(int index, const esp_image_segment_header
     uint32_t load_addr = segment->load_addr;
     bool map_segment = should_map(load_addr);
 
+    // Validate minimum length for segment #0
+    if (index == 0 && !is_bootloader(metadata->start_addr)) {
+        if (segment->data_len < sizeof(esp_app_desc_t)) {
+            ESP_LOGE(TAG, "Segment %d: length 0x%"PRIx32" is too short for app description", index, segment->data_len);
+            return ESP_ERR_IMAGE_INVALID;
+        }
+    }
+
 #if SOC_MMU_PAGE_SIZE_CONFIGURABLE
     esp_err_t err = ESP_FAIL;
 
@@ -850,7 +910,15 @@ static esp_err_t verify_segment_header(int index, const esp_image_segment_header
         }
 
         // Convert from log base 2 number to actual size while handling legacy image case (value 0)
-        metadata->mmu_page_size = (mmu_page_size > 0) ? (1UL << mmu_page_size) : SPI_FLASH_MMU_PAGE_SIZE;
+        const uint32_t min_mmu_page_size = __builtin_ctz(MMU_PAGE_SIZE_MIN);
+        const uint32_t max_mmu_page_size = __builtin_ctz(MMU_PAGE_SIZE_MAX);
+        if (mmu_page_size >= min_mmu_page_size && mmu_page_size <= max_mmu_page_size) {
+            metadata->mmu_page_size = (1UL << mmu_page_size);
+        } else {
+            // Fall back to default MMU page size
+            metadata->mmu_page_size = SPI_FLASH_MMU_PAGE_SIZE;
+        }
+
         if (metadata->mmu_page_size != SPI_FLASH_MMU_PAGE_SIZE) {
             ESP_LOGI(TAG, "MMU page size mismatch, configured: 0x%x, found: 0x%"PRIx32, SPI_FLASH_MMU_PAGE_SIZE, metadata->mmu_page_size);
         }

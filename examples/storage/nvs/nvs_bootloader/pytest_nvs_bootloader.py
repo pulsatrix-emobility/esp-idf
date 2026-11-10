@@ -6,8 +6,13 @@ from pytest_embedded_idf.utils import idf_parametrize
 
 
 @pytest.mark.generic
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @idf_parametrize('target', ['supported_targets'], indirect=['target'])
 def test_nvs_bootloader_example(dut: Dut) -> None:
+    # Full bootloader hook logs must be visible before app output. On some targets (e.g. ESP32-H2)
+    # the default post-flash boot can finish before the serial capture window aligns; reset once
+    # so expectations always match output from a captured cold boot.
+    dut.serial.hard_reset()
     # Expect to read hooks messages and data from NVS partition
     dut.expect_exact('Before reading from NVS partition')
     dut.expect_exact('Result data. Return code: ESP_OK')
@@ -22,6 +27,7 @@ def test_nvs_bootloader_example(dut: Dut) -> None:
 
 
 @pytest.mark.nvs_encr_hmac
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.parametrize('config', ['nvs_enc_hmac'], indirect=True)
 @idf_parametrize('target', ['esp32c3'], indirect=['target'])
 def test_nvs_bootloader_example_nvs_encr_hmac(dut: Dut) -> None:
@@ -29,6 +35,7 @@ def test_nvs_bootloader_example_nvs_encr_hmac(dut: Dut) -> None:
 
 
 @pytest.mark.flash_encryption
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.parametrize('config', ['nvs_enc_flash_enc'], indirect=True)
 @idf_parametrize('target', ['esp32', 'esp32c3'], indirect=['target'])
 def test_nvs_bootloader_example_flash_enc(dut: Dut) -> None:

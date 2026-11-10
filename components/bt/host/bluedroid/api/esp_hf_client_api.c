@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -68,6 +68,9 @@ esp_err_t esp_hf_client_connect(esp_bd_addr_t remote_bda)
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (remote_bda == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     bt_status_t stat;
     btc_hf_client_args_t arg;
@@ -89,6 +92,9 @@ esp_err_t esp_hf_client_disconnect(esp_bd_addr_t remote_bda)
 {
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (remote_bda == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     bt_status_t stat;
@@ -112,6 +118,9 @@ esp_err_t esp_hf_client_connect_audio(esp_bd_addr_t remote_bda)
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (remote_bda == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     bt_status_t stat;
     btc_hf_client_args_t arg;
@@ -133,6 +142,9 @@ esp_err_t esp_hf_client_disconnect_audio(esp_bd_addr_t remote_bda)
 {
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (remote_bda == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     bt_status_t stat;
@@ -190,6 +202,9 @@ esp_err_t esp_hf_client_volume_update(esp_hf_volume_control_target_t type, int v
 {
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (volume < 0 || volume > 15) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     btc_msg_t msg;
@@ -391,6 +406,10 @@ esp_err_t esp_hf_client_send_dtmf(char code)
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (!((code >= '0' && code <= '9') || code == '*' || code == '#' ||
+          (code >= 'A' && code <= 'D'))) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     btc_msg_t msg;
     btc_hf_client_args_t arg;
@@ -553,6 +572,9 @@ esp_err_t esp_hf_client_pkt_stat_nums_get(uint16_t sync_conn_handle)
 
 void esp_hf_client_outgoing_data_ready(void)
 {
+    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
+        return;
+    }
     BTA_HfClientCiData();
 }
 
@@ -560,6 +582,9 @@ esp_err_t esp_hf_client_register_audio_data_callback(esp_hf_client_audio_data_cb
 {
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (callback == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     btc_msg_t msg;
@@ -616,14 +641,19 @@ esp_err_t esp_hf_client_audio_data_send(esp_hf_sync_conn_hdl_t sync_conn_hdl, es
     if (audio_buf == NULL || audio_buf->data_len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (audio_buf->data_len > audio_buf->buff_size) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-    BTA_HfClientAudioDataSend(sync_conn_hdl, (uint8_t *)audio_buf, audio_buf->data, audio_buf->data_len);
-    return ESP_OK;
+    if (btc_hf_client_audio_data_send(sync_conn_hdl, (uint8_t *)audio_buf, audio_buf->data, audio_buf->data_len) == BT_STATUS_SUCCESS) {
+        return ESP_OK;
+    }
+    return ESP_FAIL;
 }
 
-void esp_hf_client_pcm_resample_init(uint32_t src_sps, uint32_t bits, uint32_t channels)
+esp_err_t esp_hf_client_pcm_resample_init(uint32_t src_sps, uint32_t bits, uint32_t channels)
 {
-    BTA_DmPcmInitSamples(src_sps, bits, channels);
+    return (BTA_DmPcmInitSamples(src_sps, bits, channels) == BTA_SUCCESS) ? ESP_OK : ESP_FAIL;
 }
 
 void esp_hf_client_pcm_resample_deinit(void)

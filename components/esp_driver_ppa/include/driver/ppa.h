@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -39,10 +39,17 @@ typedef struct {
     ppa_data_burst_length_t data_burst_length;  /*!< The desired data burst length for all the transactions of the client.
                                                      Use a small burst length will decrease PPA performance, but can save burst bandwidth for other peripheral usages.
                                                      By default, it will be at the maximum burst length, `PPA_DATA_BURST_LENGTH_128` */
+    struct {
+        uint32_t allow_pd: 1;                   /*!< If set, driver allows the power domain to be powered off when system enters sleep mode.
+                                                     This can save power, but at the expense of more RAM being consumed to save register context.
+                                                     All clients must have the same value for this flag. */
+    } flags;                                    /*!< Configuration flags */
 } ppa_client_config_t;
 
 /**
  * @brief Register a PPA client to do a specific PPA operation
+ *
+ * No two tasks should share the same PPA client.
  *
  * @param[in] config Pointer to a collection of configurations for the client
  * @param[out] ret_client Returned client handle

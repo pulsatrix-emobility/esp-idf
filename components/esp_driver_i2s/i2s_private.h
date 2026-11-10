@@ -128,6 +128,38 @@ typedef struct {
 } i2s_dma_t;
 
 /**
+ * @brief Duplex candidate information extracted from channel configuration
+ * @note  Used by the generic duplex constitution function to check whether two channels can form duplex.
+ *        Two channels can share the BCLK/WS lines only when the BCLK/WS configurations are identical
+ *        and the per-frame bit count (sample_rate * total_frame_bits) is the same. The slot layout,
+ *        clock source, external clock frequency and MCLK configuration are allowed to differ as long
+ *        as the BCLK/WS frequency and frame timing match.
+ */
+typedef struct {
+    int ws_pin;                 /*!< WS GPIO pin number, -1 if unused */
+    int bclk_pin;               /*!< BCLK GPIO pin number, -1 if unused */
+    uint32_t sample_rate_hz;    /*!< Sample rate in Hz */
+    uint32_t total_frame_bits;  /*!< Total bits per frame: total_slot * slot_bit_width */
+    i2s_clock_src_t clk_src;    /*!< Clock source (informational, not compared) */
+    bool bclk_inv;              /*!< Whether the BCLK is inverted */
+    bool ws_inv;                /*!< Whether the WS is inverted */
+} i2s_duplex_candidate_t;
+
+/**
+ * @brief Try to constitute full-duplex between two channels on the same controller
+ * @note  The two channels can constitute full-duplex only when they share the same valid WS/BCK pins,
+ *        the same BCLK/WS invert flags, the same sample rate and the same total frame bits.
+ *        The slot layout, clock source, external clock frequency and MCLK configuration may differ
+ *        as long as the BCLK/WS frequency and frame timing match (e.g. STD 2ch/32bit can pair
+ *        with TDM 4ch/16bit).
+ *        If the conditions match, mark the controller as full-duplex. If both channels are master,
+ *        the later one is forced to slave.
+ * @param handle       Current channel being initialized
+ * @param candidate    Duplex configuration of the current channel
+ */
+void i2s_channel_try_to_constitute_duplex(i2s_chan_handle_t handle, const i2s_duplex_candidate_t *candidate);
+
+/**
  * @brief i2s controller level configurations
  * @note  Both i2s rx and tx channel are under its control
  */
@@ -167,9 +199,6 @@ struct i2s_channel_obj_t {
         bool                is_raw_pdm: 1;     /*!< Flag of whether send/receive PDM in raw data, i.e., no PCM2PDM/PDM2PCM filter enabled */
         bool                is_external: 1;    /*!< Whether use external clock */
         bool                full_duplex_slave: 1; /*!< whether the channel is forced to switch to slave role for full duplex */
-#if SOC_I2S_SUPPORTS_APLL
-        bool                apll_en: 1;        /*!< Flag of whether APLL enabled */
-#endif
     };
     uint32_t                active_slot;    /*!< Active slot number */
     uint32_t                total_slot;     /*!< Total slot number */

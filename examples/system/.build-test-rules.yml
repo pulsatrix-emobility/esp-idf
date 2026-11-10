@@ -1,14 +1,5 @@
 # Documentation: .gitlab/ci/README.md#manifest-file-to-control-the-buildtest-apps
 
-examples/system/app_trace_basic:
-  disable_test:
-    - if: IDF_TARGET == "esp32h21"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1081
-    - if: IDF_TARGET == "esp32h4"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1137
-
 examples/system/base_mac_address:
   depends_components:
     - *common_components
@@ -97,18 +88,6 @@ examples/system/freertos/real_time_stats:
   depends_components:
     - *common_components
     - freertos
-
-examples/system/gcov:
-  disable_test:
-    - if: IDF_TARGET == "esp32h21"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1079
-    - if: IDF_TARGET == "esp32h4"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1138
-    - if: IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: p4 rev3 migration # TODO: IDF-14440
 
 examples/system/heap_task_tracking:
   disable:
@@ -278,28 +257,6 @@ examples/system/select:
     - *common_components
     - vfs
 
-examples/system/sysview_tracing:
-  disable:
-    - if: SOC_GPTIMER_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32h21"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1082
-    - if: IDF_TARGET == "esp32h4"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1136
-
-examples/system/sysview_tracing_heap_log:
-  disable:
-    - if: SOC_GPTIMER_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32h21"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1082
-    - if: IDF_TARGET == "esp32h4"
-      temporary: true
-      reason: not supported yet #TODO: OCD-1136
-
 examples/system/task_watchdog:
   disable:
     - if: IDF_TARGET != "esp32" and (NIGHTLY_RUN != "1" or IDF_TARGET == "linux")
@@ -318,6 +275,10 @@ examples/system/ulp/lp_core/build_system:
 examples/system/ulp/lp_core/debugging:
   enable:
     - if: SOC_LP_CORE_SUPPORTED == 1
+  disable_test:
+    - if: IDF_TARGET in ["esp32c5", "esp32c6", "esp32p4"]
+      temporary: true
+      reason: unstable test
   depends_components:
     - *common_components
     - ulp

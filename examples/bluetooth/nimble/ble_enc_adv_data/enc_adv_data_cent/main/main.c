@@ -78,6 +78,7 @@ enc_adv_data_cent_on_read(uint16_t conn_handle,
 {
     int rc;
     struct ble_store_value_ead value_ead = {0};
+    struct ble_gap_conn_desc desc;
     struct peer *p;
 
     MODLOG_DFLT(INFO, "Read complete; status=%d conn_handle=%d", error->status,
@@ -101,50 +102,36 @@ enc_adv_data_cent_on_read(uint16_t conn_handle,
 
     value_ead.km_present = 1;
 
-    value_ead.km = (struct key_material *) malloc (sizeof(struct key_material));
-
-    if (value_ead.km == NULL) {
-        MODLOG_DFLT(ERROR, "Failed to allocate memory for key material");
-        goto err;
-    }
-
-    memset(value_ead.km, 0, sizeof(struct key_material));
+    memset(&value_ead.km, 0, sizeof(struct key_material));
 
     /* Validate mbuf has enough data before copying */
     if (attr->om == NULL || OS_MBUF_PKTLEN(attr->om) < (BLE_EAD_KEY_SIZE + BLE_EAD_IV_SIZE)) {
         MODLOG_DFLT(ERROR, "Invalid mbuf or insufficient data size");
-        free(value_ead.km);
-        value_ead.km = NULL;
         goto err;
     }
 
-    os_mbuf_copydata(attr->om, 0, BLE_EAD_KEY_SIZE, &value_ead.km->session_key);
-    os_mbuf_copydata(attr->om, BLE_EAD_KEY_SIZE, BLE_EAD_IV_SIZE, &value_ead.km->iv);
+    os_mbuf_copydata(attr->om, 0, BLE_EAD_KEY_SIZE, &value_ead.km.session_key);
+    os_mbuf_copydata(attr->om, BLE_EAD_KEY_SIZE, BLE_EAD_IV_SIZE, &value_ead.km.iv);
 
     MODLOG_DFLT(DEBUG, "Session key:");
-    print_bytes(value_ead.km->session_key, BLE_EAD_KEY_SIZE);
+    print_bytes(value_ead.km.session_key, BLE_EAD_KEY_SIZE);
 
     MODLOG_DFLT(DEBUG, "IV:");
-    print_bytes(value_ead.km->iv, BLE_EAD_IV_SIZE);
+    print_bytes(value_ead.km.iv, BLE_EAD_IV_SIZE);
 
     memcpy(&value_ead.peer_addr.val, &p->peer_addr, PEER_ADDR_VAL_SIZE);
+    rc = ble_gap_conn_find(conn_handle, &desc);
+    if (rc == 0) {
+        value_ead.peer_addr.type = desc.peer_id_addr.type;
+    }
 
     rc = ble_store_write_ead(&value_ead);
     if (rc == 0) {
         MODLOG_DFLT(INFO, "Writing of session key, iv, and peer addr to NVS success");
     }
 
-    if (value_ead.km != NULL) {
-        free(value_ead.km);
-        value_ead.km = NULL;
-    }
-
 err:
     /* Terminate the connection. */
-    if (value_ead.km != NULL) {
-        free(value_ead.km);
-        value_ead.km = NULL;
-    }
     return ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
 }
 
@@ -202,6 +189,8 @@ enc_adv_data_cent_on_disc_complete(const struct peer *peer, int status, void *ar
     if (!enc_adv_data_check_km_exist(peer->peer_addr)) {
         /* Now perform GATT read procedures against the peer */
         enc_adv_data_cent_read(peer);
+    } else {
+        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 }
 #endif
@@ -296,8 +285,9 @@ enc_adv_data_cent_decrypt(uint8_t length_data, const uint8_t *data, const uint8_
                 MODLOG_DFLT(INFO, "Read session key and iv from NVS successfully");
             }
 
-            rc = ble_ead_decrypt(value_ead.km->session_key, value_ead.km->iv, enc_data,
+            rc = ble_ead_decrypt(value_ead.km.session_key, value_ead.km.iv, enc_data,
                                  enc_payload_len, temp);
+
             if (rc == 0) {
                 MODLOG_DFLT(INFO, "Decryption of adv data done successfully");
             } else {
@@ -306,7 +296,17 @@ enc_adv_data_cent_decrypt(uint8_t length_data, const uint8_t *data, const uint8_
                 return 0;
             }
 
+            uint8_t actual_dec_len = enc_payload_len - (BLE_EAD_RANDOMIZER_SIZE + BLE_EAD_MIC_SIZE);
+            if (actual_dec_len == 0) {
+                free(enc_data);
+                return 0;
+            }
             dec_data_len = temp[0];
+            if ((uint16_t)dec_data_len + 1 > actual_dec_len) {
+                MODLOG_DFLT(ERROR, "Decrypted length field exceeds payload");
+                free(enc_data);
+                return 0;
+            }
 
             MODLOG_DFLT(INFO, "Data after decryption:");
             for (int i = 0; i < dec_data_len + 1; i++) {
@@ -329,17 +329,78 @@ enc_adv_data_cent_decrypt(uint8_t length_data, const uint8_t *data, const uint8_
  * advertisement.  The function returns a positive result if the device
  * advertises connectability and support for the Key Characteristic service.
  */
+#if MYNEWT_VAL(BLE_EXT_ADV)
+static int
+enc_adv_data_cent_ext_should_connect(const struct ble_gap_ext_disc_desc *disc)
+{
+    int offset = 0;
+    int ad_struct_len = 0;
+    uint8_t test_addr[6] = {0};
+    if (!(disc->props & BLE_HCI_ADV_CONN_MASK)) {
+        return 0;
+    }
+    if (strlen(CONFIG_EXAMPLE_PEER_ADDR) &&
+            (strncmp(CONFIG_EXAMPLE_PEER_ADDR, "ADDR_ANY", strlen("ADDR_ANY")) != 0)) {
+        ESP_LOGI(tag, "Peer address from menuconfig: %s", CONFIG_EXAMPLE_PEER_ADDR);
+        /* Convert string to address */
+        peer_addr_parse(CONFIG_EXAMPLE_PEER_ADDR, test_addr);
+        if (memcmp(test_addr, disc->addr.val, sizeof(disc->addr.val)) != 0) {
+            return 0;
+        }
+    }
+
+    /* The device has to advertise support for the Key Characteristic
+    * service (0x2B88)
+    *
+    * Check if custom UUID 0x2C01 is advertised
+    */
+    while(offset < disc->length_data) {
+        ad_struct_len = disc->data[offset];
+
+        if (ad_struct_len == 0 || offset + ad_struct_len + 1 > disc->length_data) {
+            break;
+        }
+
+        /* Search if Custom UUID 0x2C01 is advertised */
+        if (ad_struct_len >= 3 && (disc->data[offset + 1] == 0x02 || disc->data[offset + 1] == 0x03)) {
+            for (int i = 2; i + 1 <= ad_struct_len; i+= 2) {
+                if (disc->data[offset + i] == 0x2C && disc->data[offset + i + 1] == 0x01) {
+                    if (enc_adv_data_find_peer(disc->addr.val) != -1) {
+                        MODLOG_DFLT(INFO, "Peer was already added with addr : %s",
+                                    addr_str(&disc->addr.val));
+                    } else {
+                        MODLOG_DFLT(INFO, "Adding peer addr : %s", addr_str(&disc->addr.val));
+
+                        memcpy(&kmp[counter].peer_addr, &disc->addr.val, PEER_ADDR_VAL_SIZE);
+                        kmp[counter].key_material_exist = false;
+                        counter++;
+
+                        if (counter > CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
+                            counter = 0;
+                        }
+                    }
+                    if (enc_adv_data_check_km_exist(disc->addr.val)) {
+                        return enc_adv_data_cent_decrypt(disc->length_data, disc->data, disc->addr.val);
+                    } else {
+                        return 1;
+                    }
+                }
+            }
+        }
+
+        offset += ad_struct_len + 1;
+    }
+
+    return 0;
+}
+#else
 static int
 enc_adv_data_cent_should_connect(const struct ble_gap_disc_desc *disc)
 {
     struct ble_hs_adv_fields fields;
     int rc;
     int i;
-    uint8_t test_addr[6];
-    uint32_t peer_addr[6];
-
-    memset(peer_addr, 0x0, sizeof peer_addr);
-
+    uint8_t test_addr[6] = {0};
     if (disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_ADV_IND &&
             disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_DIR_IND) {
         return 0;
@@ -350,18 +411,11 @@ enc_adv_data_cent_should_connect(const struct ble_gap_disc_desc *disc)
         return 0;
     }
 
-    if (strlen(CONFIG_EXAMPLE_PEER_ADDR) && (strncmp(CONFIG_EXAMPLE_PEER_ADDR, "ADDR_ANY", strlen    ("ADDR_ANY")) != 0)) {
+    if (strlen(CONFIG_EXAMPLE_PEER_ADDR) &&
+            (strncmp(CONFIG_EXAMPLE_PEER_ADDR, "ADDR_ANY", strlen("ADDR_ANY")) != 0)) {
         MODLOG_DFLT(INFO, "Peer address from menuconfig: %s", CONFIG_EXAMPLE_PEER_ADDR);
         /* Convert string to address */
-        sscanf(CONFIG_EXAMPLE_PEER_ADDR, "%lx:%lx:%lx:%lx:%lx:%lx",
-               &peer_addr[5], &peer_addr[4], &peer_addr[3],
-               &peer_addr[2], &peer_addr[1], &peer_addr[0]);
-
-	/* Conversion */
-        for (int i=0; i<6; i++) {
-            test_addr[i] = (uint8_t )peer_addr[i];
-	}
-
+        peer_addr_parse(CONFIG_EXAMPLE_PEER_ADDR, test_addr);
         if (memcmp(test_addr, disc->addr.val, sizeof(disc->addr.val)) != 0) {
             return 0;
         }
@@ -381,6 +435,7 @@ enc_adv_data_cent_should_connect(const struct ble_gap_disc_desc *disc)
                 MODLOG_DFLT(INFO, "Adding peer addr : %s", addr_str(&disc->addr.val));
 
                 memcpy(&kmp[counter].peer_addr, &disc->addr.val, PEER_ADDR_VAL_SIZE);
+                kmp[counter].key_material_exist = false;
                 counter++;
 
                 if (counter > CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
@@ -397,6 +452,7 @@ enc_adv_data_cent_should_connect(const struct ble_gap_disc_desc *disc)
 
     return 0;
 }
+#endif
 
 /**
  * Connects to the sender of the specified advertisement of it looks
@@ -411,9 +467,15 @@ enc_adv_data_cent_connect_if_interesting(void *disc)
     ble_addr_t *addr;
 
     /* Don't do anything if we don't care about this advertiser. */
+#if MYNEWT_VAL(BLE_EXT_ADV)
+    if(!enc_adv_data_cent_ext_should_connect((struct ble_gap_ext_disc_desc *) disc)) {
+        return;
+    }
+#else
     if (!enc_adv_data_cent_should_connect((struct ble_gap_disc_desc *)disc)) {
         return;
     }
+#endif
 
 #if !(MYNEWT_VAL(BLE_HOST_ALLOW_CONNECT_WITH_SCAN))
     /* Scanning must be stopped before a connection can be initiated. */
@@ -428,13 +490,20 @@ enc_adv_data_cent_connect_if_interesting(void *disc)
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
     if (rc != 0) {
         MODLOG_DFLT(ERROR, "error determining address type; rc=%d\n", rc);
+#if !(MYNEWT_VAL(BLE_HOST_ALLOW_CONNECT_WITH_SCAN))
+        enc_adv_data_cent_scan();
+#endif
         return;
     }
 
     /* Try to connect the the advertiser.  Allow 30 seconds (30000 ms) for
      * timeout.
      */
+#if MYNEWT_VAL(BLE_EXT_ADV)
+    addr = &((struct ble_gap_ext_disc_desc *)disc)->addr;
+#else
     addr = &((struct ble_gap_disc_desc *)disc)->addr;
+#endif
 
     rc = ble_gap_connect(own_addr_type, addr, 30000, NULL,
                          enc_adv_data_cent_gap_event, NULL);
@@ -442,6 +511,9 @@ enc_adv_data_cent_connect_if_interesting(void *disc)
         MODLOG_DFLT(ERROR, "Error: Failed to connect to device; addr_type=%d "
                     "addr=%s; rc=%d\n",
                     addr->type, addr_str(addr->val), rc);
+#if !(MYNEWT_VAL(BLE_HOST_ALLOW_CONNECT_WITH_SCAN))
+        enc_adv_data_cent_scan();
+#endif
         return;
     }
 }
@@ -509,12 +581,15 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
             rc = peer_add(event->connect.conn_handle);
             if (rc != 0) {
                 MODLOG_DFLT(ERROR, "Failed to add peer; rc=%d\n", rc);
+                ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
                 return 0;
             }
 
             rc = peer_set_addr(event->connect.conn_handle, desc.peer_id_addr.val);
             if (rc != 0) {
                 MODLOG_DFLT(ERROR, "Failed to set peer addr; rc=%d\n", rc);
+                peer_delete(event->connect.conn_handle);
+                ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
                 return 0;
             }
 
@@ -598,6 +673,8 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_EXT_DISC:
         /* An advertisement report was received during GAP discovery. */
         ext_print_adv_report(&event->ext_disc);
+
+        enc_adv_data_cent_connect_if_interesting(&event->ext_disc);
         return 0;
 #endif
 
@@ -679,11 +756,14 @@ app_main(void)
     /* Initialize data structures to track connected peers. */
 #if MYNEWT_VAL(BLE_INCL_SVC_DISCOVERY) || MYNEWT_VAL(BLE_GATT_CACHING_INCLUDE_SERVICES)
     rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64, 64);
-    assert(rc == 0);
 #else
     rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64);
-    assert(rc == 0);
 #endif
+    if (rc != 0) {
+        ESP_LOGE(tag, "Failed to init peer tracking; rc=%d", rc);
+        nimble_port_deinit();
+        return;
+    }
 
 #if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */

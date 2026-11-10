@@ -618,11 +618,11 @@ static inline uint32_t esp_bt_gap_get_cod_major_dev(uint32_t cod)
 }
 
 /**
- * @brief           get minor service field of COD
+ * @brief           get minor device field of COD
  *
  * @param[in]       cod: Class of Device
  *
- * @return          minor service bits
+ * @return          minor device bits
  */
 static inline uint32_t esp_bt_gap_get_cod_minor_dev(uint32_t cod)
 {
@@ -667,6 +667,8 @@ static inline bool esp_bt_gap_is_valid_cod(uint32_t cod)
  *
  * @return
  *                  - ESP_OK : Succeed
+ *                  - ESP_ERR_INVALID_ARG: if argument invalid
+ *                  - ESP_ERR_INVALID_STATE: if bluetooth stack is not yet enabled
  *                  - ESP_FAIL: others
  */
 esp_err_t esp_bt_gap_register_callback(esp_bt_gap_cb_t callback);
@@ -930,7 +932,7 @@ esp_err_t esp_bt_gap_remove_bond_device(esp_bd_addr_t bd_addr);
 *                  It will return the device bonded number immediately.
 *
 * @return          - >= 0 : bonded devices number
-*                  - ESP_FAIL  : failed
+*                  - < 0 : failed
 *
 */
 int esp_bt_gap_get_bond_device_num(void);

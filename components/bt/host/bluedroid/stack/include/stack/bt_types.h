@@ -32,7 +32,7 @@ typedef int32_t INT32;
 // #define INLINE  __inline
 
 #define BCM_STRCPY_S(x1,x2)      strcpy((x1),(x2))
-#define BCM_STRNCPY_S(x1,x2,x3)  strncpy((x1),(x2),(x3))
+#define BCM_STRLCPY_S(x1,x2,x3)  strlcpy((x1),(x2),(x3))
 #define BCM_STRCMP_S(x1,x2)      strcmp((x1),(x2))
 #define BCM_STRNCMP_S(x1,x2,x3)  strncmp((x1),(x2),(x3))
 
@@ -260,6 +260,7 @@ typedef struct {
 
 #define STREAM_SKIP_UINT8(p)  do { (p) += 1; } while (0)
 #define STREAM_SKIP_UINT16(p) do { (p) += 2; } while (0)
+#define STREAM_SKIP_UINT24(p) do { (p) += 3; } while (0)
 
 /********************************************************************************
 ** Macros to get and put bytes to and from a field (Little Endian format).

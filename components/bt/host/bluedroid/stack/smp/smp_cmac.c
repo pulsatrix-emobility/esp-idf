@@ -153,6 +153,11 @@ static BOOLEAN cmac_aes_k_calculate(BT_OCTET16 key, UINT8 *p_signature, UINT16 t
 
     SMP_TRACE_EVENT ("cmac_aes_k_calculate ");
 
+    if (cmac_cb.round == 0) {
+        SMP_TRACE_ERROR("%s round is 0", __func__);
+        return FALSE;
+    }
+
     while (i <= cmac_cb.round) {
         smp_xor_128(&cmac_cb.text[(cmac_cb.round - i)*BT_OCTET16_LEN], x); /* Mi' := Mi (+) X  */
 
@@ -303,6 +308,11 @@ BOOLEAN aes_cipher_msg_auth_code(BT_OCTET16 key, UINT8 *input, UINT16 length,
     BOOLEAN ret = FALSE;
 
     SMP_TRACE_EVENT ("%s", __func__);
+
+    if (tlen == 0 || tlen > BT_OCTET16_LEN) {
+        SMP_TRACE_ERROR("%s invalid tlen=%d", __func__, tlen);
+        return FALSE;
+    }
 
 #if (SMP_CRYPTO_MBEDTLS == TRUE)
     {
@@ -474,8 +484,8 @@ BOOLEAN aes_cipher_msg_auth_code(BT_OCTET16 key, UINT8 *input, UINT16 length,
     }
 #else
     {
-        UINT16  len, diff;
-        UINT16  n = (length + BT_OCTET16_LEN - 1) / BT_OCTET16_LEN;
+        UINT32  len, diff;
+        UINT32  n = (length + BT_OCTET16_LEN - 1) / BT_OCTET16_LEN;
 
         if (n == 0) {
             n = 1;

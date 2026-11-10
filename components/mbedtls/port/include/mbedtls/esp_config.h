@@ -31,10 +31,9 @@
 #if (defined(MBEDTLS_MAJOR_VERSION) && (MBEDTLS_MAJOR_VERSION < 4))
 #include "mbedtls/mbedtls_config.h"
 #endif // MBEDTLS_MAJOR_VERSION < 4
+#ifndef CONFIG_IDF_TARGET_LINUX
 #include "soc/soc_caps.h"
 
-
-#ifndef CONFIG_IDF_TARGET_LINUX
 #undef MBEDTLS_PSA_BUILTIN_GET_ENTROPY
 #define MBEDTLS_PSA_DRIVER_GET_ENTROPY
 #define MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG
@@ -59,6 +58,11 @@
  *       not to be supported by PSA functions.
  */
 #define MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+
+/* In ECB mode, reject an input/output overlap that cannot be honoured, rather than returning a wrong result. */
+#ifdef MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+#define MBEDTLS_PSA_CHECK_ECB_BUFFER_OVERLAP
+#endif // MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
 
 /**
  * \name SECTION: System support
@@ -205,6 +209,7 @@
     #if SOC_SHA_SUPPORT_SHA256
         #define MBEDTLS_PSA_ACCEL_ALG_SHA_256
         #undef MBEDTLS_PSA_BUILTIN_ALG_SHA_256
+        #undef MBEDTLS_SHA256_C
     #endif // SOC_SHA_SUPPORT_SHA256
     #if SOC_SHA_SUPPORT_SHA512
         #define MBEDTLS_PSA_ACCEL_ALG_SHA_512
@@ -258,6 +263,18 @@
 #undef MBEDTLS_MPI_MUL_MPI_ALT
 #endif
 
+/* mbedtls 4.1.1 made the small-factor test used in prime
+ * generation constant-time, which slows RSA key generation down roughly
+ * tenfold and starves the idle task (the computation never yields the CPU).
+ * The non constant-time variant is the default; when it is disabled,
+ * fall back to the variable-time trial division from earlier releases. See
+ * MBEDTLS_MPI_PRIME_SIEVE_VARIABLE_TIME in
+ * tf-psa-crypto/drivers/builtin/src/bignum.c.
+ */
+#ifndef CONFIG_MBEDTLS_CONSTANT_TIME_PRIME_GEN
+#define MBEDTLS_MPI_PRIME_SIEVE_VARIABLE_TIME
+#endif
+
 #if defined(CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY) || defined(CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN) || defined(CONFIG_MBEDTLS_TEE_SEC_STG_ECDSA_SIGN)
 #define ESP_ECDSA_DRIVER_ENABLED
 #ifdef CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY
@@ -268,17 +285,13 @@
 #endif
 #endif
 
-#ifdef CONFIG_MBEDTLS_ATCA_HW_ECDSA_SIGN
-#define MBEDTLS_ECDSA_SIGN_ALT
-#endif
-
-#ifdef CONFIG_MBEDTLS_ATCA_HW_ECDSA_VERIFY
-#define MBEDTLS_ECDSA_VERIFY_ALT
+#ifdef CONFIG_MBEDTLS_SECURE_ELEMENT_DRIVER_ENABLED
+#define SECURE_ELEMENT_DRIVER_ENABLED
 #endif
 
 #ifdef CONFIG_MBEDTLS_HARDWARE_ECC
 #ifdef CONFIG_MBEDTLS_ECC_OTHER_CURVES_SOFT_FALLBACK
-    /* Use hardware accelerator for SECP192R1 and SECP256R1 curves,
+    /* Use hardware accelerator for SECP256R1 curves,
      * software implementation for rest of the curves
      */
     #define MBEDTLS_ECP_MUL_ALT_SOFT_FALLBACK
@@ -526,63 +539,53 @@
 #endif
 
 /**
- * \def MBEDTLS_ECP_DP_SECP192R1_ENABLED
  *
  * MBEDTLS_ECP_XXXX_ENABLED: Enables specific curves within the Elliptic Curve
  * module.  By default all supported curves are enabled.
  *
  * Comment macros to disable the curve and functions for it
  */
-/* Short Weierstrass curves (supporting ECP, ECDH, ECDSA) */
+/* Short Weierstrass curves (supporting ECDH, ECDSA) */
 #ifdef CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED
-#define MBEDTLS_ECP_DP_SECP256R1_ENABLED
+#define PSA_WANT_ECC_SECP_R1_256 1
 #else
-#undef MBEDTLS_ECP_DP_SECP256R1_ENABLED
+#undef PSA_WANT_ECC_SECP_R1_256
 #endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_SECP384R1_ENABLED
-#define MBEDTLS_ECP_DP_SECP384R1_ENABLED
+#define PSA_WANT_ECC_SECP_R1_384 1
 #else
-#undef MBEDTLS_ECP_DP_SECP384R1_ENABLED
 #undef PSA_WANT_ECC_SECP_R1_384
 #endif
-#ifdef CONFIG_SECURE_BOOT_ECDSA_KEY_LEN_192_BITS
-#define PSA_WANT_ECC_SECP_R1_192 1
-#else
-#undef PSA_WANT_ECC_SECP_R1_192
-#endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_SECP521R1_ENABLED
-#define MBEDTLS_ECP_DP_SECP521R1_ENABLED
+#define PSA_WANT_ECC_SECP_R1_521 1
 #else
-#undef MBEDTLS_ECP_DP_SECP521R1_ENABLED
+#undef PSA_WANT_ECC_SECP_R1_521
 #endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED
-#define MBEDTLS_ECP_DP_SECP256K1_ENABLED
+#define PSA_WANT_ECC_SECP_K1_256 1
 #else
-#undef MBEDTLS_ECP_DP_SECP256K1_ENABLED
+#undef PSA_WANT_ECC_SECP_K1_256
 #endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED
-#define MBEDTLS_ECP_DP_BP256R1_ENABLED
+#define PSA_WANT_ECC_BRAINPOOL_P_R1_256 1
 #else
-#undef MBEDTLS_ECP_DP_BP256R1_ENABLED
+#undef PSA_WANT_ECC_BRAINPOOL_P_R1_256
 #endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED
-#define MBEDTLS_ECP_DP_BP384R1_ENABLED
+#define PSA_WANT_ECC_BRAINPOOL_P_R1_384 1
 #else
-#undef MBEDTLS_ECP_DP_BP384R1_ENABLED
+#undef PSA_WANT_ECC_BRAINPOOL_P_R1_384
 #endif
 #ifdef CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED
-#define MBEDTLS_ECP_DP_BP512R1_ENABLED
+#define PSA_WANT_ECC_BRAINPOOL_P_R1_512 1
 #else
-#undef MBEDTLS_ECP_DP_BP512R1_ENABLED
+#undef PSA_WANT_ECC_BRAINPOOL_P_R1_512
 #endif
-/* Montgomery curves (supporting ECP) */
+/* Montgomery curves */
 #ifdef CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED
-#define MBEDTLS_ECP_DP_CURVE25519_ENABLED
+#define PSA_WANT_ECC_MONTGOMERY_255 1
 #else
-#undef MBEDTLS_ECP_DP_CURVE25519_ENABLED
-#endif
-#ifdef MBEDTLS_ECP_DP_CURVE448_ENABLED
-#undef MBEDTLS_ECP_DP_CURVE448_ENABLED
+#undef PSA_WANT_ECC_MONTGOMERY_255
 #endif
 
 /**
@@ -821,7 +824,9 @@
 #else
 #undef MBEDTLS_FS_IO
 #undef MBEDTLS_PSA_ITS_FILE_C
+#if !defined(ESP_PSA_ITS_AVAILABLE)
 #undef MBEDTLS_PSA_CRYPTO_STORAGE_C
+#endif
 #endif
 
 #ifndef CONFIG_IDF_TARGET_LINUX
@@ -1837,29 +1842,7 @@
 #undef MBEDTLS_BASE64_C
 #endif
 
-/**
- * \def MBEDTLS_BIGNUM_C
- *
- * Enable the multi-precision integer library.
- *
- * Module:  library/bignum.c
- *          library/bignum_core.c
- *          library/bignum_mod.c
- *          library/bignum_mod_raw.c
- * Caller:  library/dhm.c
- *          library/ecp.c
- *          library/ecdsa.c
- *          library/rsa.c
- *          library/rsa_alt_helpers.c
- *          library/ssl_tls.c
- *
- * This module is required for RSA, DHM and ECC (ECDH, ECDSA) support.
- */
-#ifdef CONFIG_MBEDTLS_BIGNUM_C
-#define MBEDTLS_BIGNUM_C
-#else
-#undef MBEDTLS_BIGNUM_C
-#endif
+/* MBEDTLS_BIGNUM_C is deprecated in mbedtls 4.x - PSA handles bignum internally */
 
 /**
  * \def MBEDTLS_CAMELLIA_C
@@ -2121,9 +2104,21 @@
  * Requires: MBEDTLS_ECP_C
  */
 #ifdef CONFIG_MBEDTLS_ECDH_C
-#define MBEDTLS_ECDH_C
+#define PSA_WANT_ALG_ECDH 1
 #else
-#undef MBEDTLS_ECDH_C
+#undef PSA_WANT_ALG_ECDH
+#endif
+
+/**
+ * \def MBEDTLS_ECJPAKE_C
+ *
+ * Enable the ECJPAKE based ciphersuites.
+ */
+#ifdef CONFIG_MBEDTLS_ECJPAKE_C
+#define PSA_WANT_ALG_JPAKE 1
+#else
+#undef PSA_WANT_ALG_JPAKE
+#undef PSA_WANT_ALG_TLS12_ECJPAKE_TO_PMS
 #endif
 
 /**
@@ -2142,51 +2137,26 @@
  *           short Weierstrass curve.
  */
 #ifdef CONFIG_MBEDTLS_ECDSA_C
-#define MBEDTLS_ECDSA_C
+#define PSA_WANT_ALG_ECDSA 1
 #else
-#undef MBEDTLS_ECDSA_C
+#undef PSA_WANT_ALG_ECDSA
 #endif
 
-/**
- * \def MBEDTLS_ECJPAKE_C
- *
- * Enable the elliptic curve J-PAKE library.
- *
- * \warning This is currently experimental. EC J-PAKE support is based on the
- * Thread v1.0.0 specification; incompatible changes to the specification
- * might still happen. For this reason, this is disabled by default.
- *
- * Module:  library/ecjpake.c
- * Caller:
- *
- * This module is used by the following key exchanges:
- *      ECJPAKE
- *
- * Requires: MBEDTLS_ECP_C and MBEDTLS_MD_C
- *
- */
-#ifdef CONFIG_MBEDTLS_ECJPAKE_C
-#define MBEDTLS_ECJPAKE_C
-#else
-#undef MBEDTLS_ECJPAKE_C
-#endif
-
-/**
- * \def MBEDTLS_ECP_C
- *
- * Enable the elliptic curve over GF(p) library.
- *
- * Module:  library/ecp.c
- * Caller:  library/ecdh.c
- *          library/ecdsa.c
- *          library/ecjpake.c
- *
- * Requires: MBEDTLS_BIGNUM_C and at least one MBEDTLS_ECP_DP_XXX_ENABLED
- */
+/* MBEDTLS_ECP_C is deprecated in mbedtls 4.x - use PSA ECC key types instead */
 #ifdef CONFIG_MBEDTLS_ECP_C
-#define MBEDTLS_ECP_C
+#define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_BASIC 1
+#define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT 1
+#define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT 1
+#define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE 1
+#define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_DERIVE 1
+#define PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY 1
 #else
-#undef MBEDTLS_ECP_C
+#undef PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_BASIC
+#undef PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT
+#undef PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT
+#undef PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE
+#undef PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_DERIVE
+#undef PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY
 #endif
 
 /**
@@ -2564,10 +2534,16 @@
  * Requires: MBEDTLS_BIGNUM_C, MBEDTLS_OID_C
  */
 #ifdef CONFIG_MBEDTLS_RSA_C
-#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_BASIC 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_IMPORT 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_EXPORT 1
+#define PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_GENERATE 1
 #define PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY 1
 #else
-#undef PSA_WANT_KEY_TYPE_RSA_KEY_PAIR
+#undef PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_BASIC
+#undef PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_IMPORT
+#undef PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_EXPORT
+#undef PSA_WANT_KEY_TYPE_RSA_KEY_PAIR_GENERATE
 #undef PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY
 #endif
 
@@ -2671,7 +2647,6 @@
  * This module is required for the SSL/TLS 1.2 PRF function.
  */
 #ifdef CONFIG_MBEDTLS_SHA256_C
-#define MBEDTLS_SHA256_C
 #define PSA_WANT_ALG_SHA_256 1
 #define PSA_WANT_ALG_SHA_224 1
 #else

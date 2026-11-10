@@ -120,7 +120,14 @@ extern "C" {
 
 // Allows to place data into RTC_FAST memory and map it to coredump
 #define COREDUMP_RTC_FAST_ATTR _SECTION_ATTR_IMPL(".rtc.fast.coredump", __COUNTER__)
+
+// Allows to place data into RTC_NOINIT memory and map it to coredump
+#define COREDUMP_NOINIT_ATTR _SECTION_ATTR_IMPL(".rtc_noinit.coredump", __COUNTER__)
 #else
+
+// Allows to place data into NOINIT memory and map it to coredump
+#define COREDUMP_NOINIT_ATTR _SECTION_ATTR_IMPL(".noinit.coredump", __COUNTER__)
+
 // RTC memory is not supported on these chips
 #define RTC_DATA_ATTR ESP_STATIC_ASSERT(0, "RTC_DATA_ATTR is not supported on this chip. Use DRAM_ATTR instead.")
 #define RTC_NOINIT_ATTR ESP_STATIC_ASSERT(0, "RTC_NOINIT_ATTR is not supported on this chip. Use DRAM_ATTR instead.")
@@ -135,8 +142,11 @@ extern "C" {
 #if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
 // Forces bss variable into external memory. "
 #define EXT_RAM_BSS_ATTR _SECTION_ATTR_IMPL(".ext_ram.bss", __COUNTER__)
+// Forces data into external memory BSS and maps it to coredump
+#define COREDUMP_EXTRAM_ATTR _SECTION_ATTR_IMPL(".ext_ram.coredump", __COUNTER__)
 #else
 #define EXT_RAM_BSS_ATTR
+#define COREDUMP_EXTRAM_ATTR
 #endif
 
 // Forces data into noinit section to avoid initialization after restart.
@@ -145,9 +155,12 @@ extern "C" {
 #if CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY
 // Forces data into external memory noinit section to avoid initialization after restart.
 #define EXT_RAM_NOINIT_ATTR _SECTION_ATTR_IMPL(".ext_ram_noinit", __COUNTER__)
+// Forces data into external memory noinit section and maps it to coredump
+#define COREDUMP_EXTRAM_NOINIT_ATTR _SECTION_ATTR_IMPL(".ext_ram_noinit.coredump", __COUNTER__)
 #else
 // Place in internal noinit section
 #define EXT_RAM_NOINIT_ATTR __NOINIT_ATTR
+#define COREDUMP_EXTRAM_NOINIT_ATTR
 #endif
 
 // Forces code into DRAM instead of flash and map it to coredump
@@ -158,10 +171,12 @@ extern "C" {
 // Forces to not inline function
 #define NOINLINE_ATTR __attribute__((noinline))
 
-#if !defined(__clang__) && __GNUC__ >= 15
-// Marks a character array as not null-terminated to avoid string-related optimizations or warnings
-#define NONSTRING_ATTR __attribute__ ((nonstring))
-#else
+#if defined(__has_attribute)
+#if __has_attribute(nonstring)
+#define NONSTRING_ATTR __attribute__((nonstring))
+#endif
+#endif
+#ifndef NONSTRING_ATTR
 #define NONSTRING_ATTR
 #endif
 

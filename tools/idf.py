@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -45,6 +45,7 @@ try:
     from idf_py_actions.tools import PropertyDict
     from idf_py_actions.tools import debug_print_idf_version
     from idf_py_actions.tools import get_target
+    from idf_py_actions.tools import idf_version_from_cmake
     from idf_py_actions.tools import merge_action_lists
     from idf_py_actions.tools import print_warning
 
@@ -155,9 +156,48 @@ def _safe_relpath(path: str, start: str | None = None) -> str:
 
 
 def init_cli(verbose_output: list | None = None) -> Any:
-    # Click is imported here to run it after check_environment()
-    import click
+    # rich-click is imported here to run it after check_environment()
+    import rich_click as click
     from click.shell_completion import CompletionItem
+    from rich_click import Context
+    from rich_click import RichHelpConfiguration
+    from rich_click.rich_click import MAX_WIDTH
+
+    # ``RichHelpFormatter`` was promoted to the top-level namespace in
+    # rich-click 1.9; the submodule path is stable across 1.8.x/1.9.x. For
+    # positional/option base classes we deliberately use plain ``click.Argument``
+    # / ``click.Option`` rather than the rich-click 1.9 ``RichArgument`` /
+    # ``RichOption`` subclasses: those subclasses are empty wrappers on 1.9.x
+    # (the only observable difference is the ``isinstance(obj, RichArgument)``
+    # gate that auto-populates an Arguments panel when ``obj.help is not None``
+    # -- idf.py never declares ``help=`` on a positional argument), and the
+    # symbols don't exist on 1.8.x at all. Using the click base classes keeps
+    # one code path for both rich-click lines.
+    from rich_click.rich_help_formatter import RichHelpFormatter
+
+    # click 8.2 made ``Parameter.make_metavar(ctx)`` mandatory. rich-click
+    # versions before 1.8.6 still call ``param.make_metavar()`` with no ctx
+    # (see ``rich_click/rich_help_rendering.py``), which crashes with
+    # ``TypeError`` on click >= 8.2. The crash hits *every* parameter rich-click
+    # iterates -- including click's built-in ``--help`` option, which is a
+    # plain ``click.Option`` instance not under our control. So patch the
+    # ``Parameter.make_metavar`` method itself to accept ctx as optional,
+    # fishing the running context from ``click.get_current_context`` when
+    # rich-click forgets to pass it. The patch is a no-op on click < 8.2
+    # (signature already takes only ``self``) and on click >= 8.2 it simply
+    # bridges the old rich-click call site.
+    if click.Parameter.make_metavar.__code__.co_argcount >= 2:
+        _orig_make_metavar = click.Parameter.make_metavar
+
+        def _make_metavar_with_optional_ctx(self: 'click.Parameter', ctx: 'Context | None' = None) -> str:
+            if ctx is None:
+                try:
+                    ctx = click.get_current_context()
+                except RuntimeError:
+                    ctx = click.Context(click.Command(self.name or '_'))
+            return _orig_make_metavar(self, ctx)  # type: ignore[no-any-return]
+
+        click.Parameter.make_metavar = _make_metavar_with_optional_ctx  # type: ignore[method-assign]
 
     class Deprecation:
         """Construct deprecation notice for help messages"""
@@ -209,7 +249,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
             text = text or ''
             return ('Deprecated! ' + text) if self.deprecated else text
 
-    def check_deprecation(ctx: click.core.Context) -> None:
+    def check_deprecation(ctx: Context) -> None:
         """Prints deprecation warnings for arguments in given context"""
         for option in ctx.command.params:
             default = () if option.multiple else option.default
@@ -231,6 +271,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
             dependencies: list | None,
             order_dependencies: list | None,
             action_args: dict,
+            forbid_chaining: bool = False,
         ) -> None:
             self.callback = callback
             self.name = name
@@ -238,16 +279,15 @@ def init_cli(verbose_output: list | None = None) -> Any:
             self.order_dependencies = order_dependencies
             self.action_args = action_args
             self.aliases = aliases
+            self.forbid_chaining = forbid_chaining
 
-        def __call__(
-            self, context: click.core.Context, global_args: PropertyDict, action_args: dict | None = None
-        ) -> None:
+        def __call__(self, context: Context, global_args: PropertyDict, action_args: dict | None = None) -> None:
             if action_args is None:
                 action_args = self.action_args
 
             self.callback(self.name, context, global_args, **action_args)
 
-    class Action(click.Command):
+    class Action(click.RichCommand):
         callback: Callable
 
         def __init__(
@@ -258,6 +298,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
             dependencies: list | None = None,
             order_dependencies: list | None = None,
             hidden: bool = False,
+            forbid_chaining: bool = False,
             **kwargs: Any,
         ) -> None:
             super().__init__(name, **kwargs)
@@ -265,6 +306,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
             self.name: str = self.name or self.callback.__name__
             self.deprecated: dict | str | bool = deprecated
             self.hidden: bool = hidden
+            self.forbid_chaining: bool = forbid_chaining
 
             if aliases is None:
                 aliases = []
@@ -304,11 +346,12 @@ def init_cli(verbose_output: list | None = None) -> Any:
                         order_dependencies=order_dependencies,
                         action_args=action_args,
                         aliases=self.aliases,
+                        forbid_chaining=self.forbid_chaining,
                     )
 
                 self.callback: Callable = wrapped_callback
 
-        def invoke(self, ctx: click.core.Context) -> click.core.Context:
+        def invoke(self, ctx: Context) -> Context:
             if self.deprecated:
                 deprecation = Deprecation(self.deprecated)
                 message = deprecation.full_message(f'Command "{self.name}"')
@@ -323,6 +366,26 @@ def init_cli(verbose_output: list | None = None) -> Any:
             # Print warnings for options
             check_deprecation(ctx)
             return super().invoke(ctx)
+
+        def format_options(self, ctx: Context, formatter: RichHelpFormatter) -> None:
+            """
+            default_panels_first=True causes the
+            renderer to drop `post_default_panels` for options on non-Group
+            commands, which is exactly where the subcommand "Options" panel
+            lives -- `idf.py <subcmd> --help` would otherwise show only
+            Usage + description. Temporarily flip the flag to False while
+            rendering options.
+            """
+            # default_panels_first=True is introduced in rich-click 1.9.6
+            if not hasattr(formatter.config, 'default_panels_first'):
+                super().format_options(ctx, formatter)
+                return
+            prev_default_first = formatter.config.default_panels_first
+            try:
+                formatter.config.default_panels_first = False
+                super().format_options(ctx, formatter)
+            finally:
+                formatter.config.default_panels_first = prev_default_first
 
     class Argument(click.Argument):
         """
@@ -405,14 +468,14 @@ def init_cli(verbose_output: list | None = None) -> Any:
             if self.scope.is_global:
                 self.help += ' This option can be used at most once either globally, or for one subcommand.'
 
-        def get_help_record(self, ctx: click.core.Context) -> Any:
+        def get_help_record(self, ctx: Context) -> Any:
             # Backport "hidden" parameter to click 5.0
             if self.hidden:
                 return None
 
             return super().get_help_record(ctx)
 
-    class CLI(click.Group):
+    class CLI(click.RichGroup):
         """Action list contains all actions with options available for CLI"""
 
         def __init__(
@@ -420,13 +483,26 @@ def init_cli(verbose_output: list | None = None) -> Any:
             all_actions: dict | None = None,
             verbose_output: list | None = None,
             cli_help: str | None = None,
+            command_groups: dict[str, list[dict[str, Any]]] | None = None,
         ) -> None:
+            rich_help_config_kwargs: dict[str, Any] = {
+                'max_width': MAX_WIDTH,
+                'command_groups': command_groups if command_groups is not None else {},
+            }
+            # ``default_panels_first`` was added in rich-click 1.9.6; on older
+            # versions passing it raises TypeError.
+            if hasattr(RichHelpConfiguration, 'default_panels_first'):
+                rich_help_config_kwargs['default_panels_first'] = True
             super().__init__(
+                PROG,
                 chain=True,
                 invoke_without_command=True,
                 result_callback=self.execute_tasks,
                 no_args_is_help=True,
-                context_settings={'max_content_width': 140},
+                context_settings={
+                    'help_option_names': ['-h', '--help'],
+                    'rich_help_config': RichHelpConfiguration(**rich_help_config_kwargs),
+                },
                 help=cli_help,
             )
             self._actions = {}
@@ -466,6 +542,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
                     options = []
 
                 self._actions[name] = Action(name=name, **action)
+                self.commands[name] = self._actions[name]
                 for alias in [name] + action.get('aliases', []):
                     self.commands_with_aliases[alias] = name
 
@@ -491,10 +568,10 @@ def init_cli(verbose_output: list | None = None) -> Any:
 
                     self._actions[name].params.append(option)
 
-        def list_commands(self, ctx: click.core.Context) -> list:
+        def list_commands(self, ctx: Context) -> list:
             return sorted(filter(lambda name: not self._actions[name].hidden, self._actions))
 
-        def get_command(self, ctx: click.core.Context, name: str) -> Action | None:
+        def get_command(self, ctx: Context, name: str) -> Action | None:
             if name in self.commands_with_aliases:
                 return self._actions.get(self.commands_with_aliases.get(name))
 
@@ -505,7 +582,7 @@ def init_cli(verbose_output: list | None = None) -> Any:
                     return Action(name=name, callback=callback.unwrapped_callback)
                 return None
 
-        def shell_complete(self, ctx: click.core.Context, incomplete: str) -> list[CompletionItem]:
+        def shell_complete(self, ctx: Context, incomplete: str) -> list[CompletionItem]:
             # Enable @-argument completion in bash only if @ is not present in
             # COMP_WORDBREAKS. When @ is included, the @-argument is not considered
             # part of the completion word, causing @-argument completion to function
@@ -519,6 +596,17 @@ def init_cli(verbose_output: list | None = None) -> Any:
                 result = [CompletionItem(f'@{c}') for c in candidates]
                 return result
             return super().shell_complete(ctx, incomplete)  # type: ignore
+
+        def _uses_machine_readable_stdout(self, task: Task) -> bool:
+            """True when stdout must stay free of extra idf.py output (stdio protocol or JSON dump)."""
+            # Actions that own stdout, such as MCP JSON-RPC.
+            stdio_owning_actions = frozenset({'mcp-server'})
+            # Commands that dump JSON on stdout when --json is passed.
+            # Click dest must be json_option.
+            json_stdout_actions = frozenset({'help'})
+            if task.name in stdio_owning_actions:
+                return True
+            return bool(task.action_args.get('json_option', False) and task.name in json_stdout_actions)
 
         def _print_closing_message(self, args: PropertyDict, actions: KeysView) -> None:
             # print a closing message of some kind,
@@ -624,6 +712,15 @@ def init_cli(verbose_output: list | None = None) -> Any:
                     'Only first occurrence will be executed.'
                 )
 
+            # Guard user-requested chaining only; auto-injected dependencies are not counted.
+            if len(tasks) > 1:
+                for task in tasks:
+                    if task.forbid_chaining:
+                        raise FatalError(
+                            f'Command "{task.name}" is not allowed to be chained with other commands. '
+                            'Please use it as a standalone idf.py command.'
+                        )
+
             for task in tasks:
                 # Set propagated global options.
                 # These options may be set on one subcommand, but available in the list of global arguments
@@ -710,18 +807,18 @@ def init_cli(verbose_output: list | None = None) -> Any:
             # Run all tasks in the queue
             # when global_args.dry_run is true idf.py works in idle mode and skips actual task execution
             if not global_args.dry_run:
+                machine_readable_output = any(self._uses_machine_readable_stdout(t) for t in tasks_to_run.values())
                 for task in tasks_to_run.values():
                     name_with_aliases = task.name
                     if task.aliases:
                         name_with_aliases += f' (aliases: {", ".join(task.aliases)})'
 
-                    # When machine-readable json format for help is printed,
-                    # don't show info about executing action so the output is deserializable
-                    if name_with_aliases != 'help' or not task.action_args.get('json_option', False):
+                    if not self._uses_machine_readable_stdout(task):
                         print(f'Executing action: {name_with_aliases}')
                     task(ctx, global_args, task.action_args)
 
-                self._print_closing_message(global_args, tasks_to_run.keys())
+                if not machine_readable_output:
+                    self._print_closing_message(global_args, tasks_to_run.keys())
 
             return tasks_to_run
 
@@ -798,16 +895,98 @@ def init_cli(verbose_output: list | None = None) -> Any:
         build_dir: str = args.build_dir
         return os.path.abspath(build_dir)
 
-    def _extract_relevant_path(path: str) -> str:
-        """
-        Returns part of the path starting from 'components' or 'managed_components'.
-        If neither is found, returns the full path.
-        """
-        for keyword in ('components', 'managed_components'):
-            # arg path is loaded from project_description.json, where paths are always defined with '/'
-            if keyword in path.split('/'):
-                return keyword + path.split(keyword, 1)[1]
+    def _path_relative_to_project(path: str, project_dir: str) -> str:
+        """If ``path`` is under ``project_dir``, return its path relative to the project; else ``path`` unchanged."""
+        path_abs = os.path.abspath(os.path.normpath(path))
+        project_abs = os.path.abspath(os.path.normpath(project_dir))
+        parent_prefix = project_abs.rstrip(os.sep) + os.sep
+        if path_abs == project_abs or path_abs.startswith(parent_prefix):
+            return _safe_relpath(path_abs, project_abs)
+
         return path
+
+    # Mutable dict used as a cache keyed by lock path
+    # Both keys are populated on first call for each path and retained for subsequent calls.
+    _trusted_names_cache: dict[str, set[str]] = {}
+
+    def _get_trusted_names_from_lock(lock_path: str) -> set[str]:
+        """Return set of lock dependency names (e.g. espressif/mdns)
+        that are from the ESP Component Registry under the espressif/ namespace.
+
+        Result is cached by lock_path after the first call.
+        """
+        if lock_path in _trusted_names_cache:
+            return _trusted_names_cache[lock_path]
+        result: set[str] = set()
+        _trusted_names_cache[lock_path] = result
+
+        if not os.path.isfile(lock_path) or os.getenv('IDF_COMPONENT_MANAGER') == '0':
+            return result
+
+        try:
+            from idf_component_tools.constants import IDF_COMPONENT_REGISTRY_URL
+            from idf_component_tools.errors import LockError
+            from idf_component_tools.lock.manager import LockManager
+            from idf_component_tools.sources import WebServiceSource
+
+            solution = LockManager(lock_path).load()
+            registry_url_norm = IDF_COMPONENT_REGISTRY_URL.rstrip('/')
+            for comp in solution.dependencies:
+                if not isinstance(comp.source, WebServiceSource):
+                    continue
+                if comp.source.registry_url.rstrip('/') == registry_url_norm and (comp.name or '').startswith(
+                    'espressif/'
+                ):
+                    result.add(comp.name)
+        except (ImportError, OSError, LockError) as e:
+            print_warning(
+                'WARNING: Could not verify source of external components. '
+                f'No extensions (idf_ext.py) from managed components will be loaded. ({e})'
+            )
+
+        return result
+
+    def _resolve_idf_managed_lock_path() -> str | None:
+        """Return path to dependencies.lock for IDF-managed components, or None if unavailable."""
+        idf_tools_path = os.environ.get('IDF_TOOLS_PATH') or os.path.expanduser(os.path.join('~', '.espressif'))
+        ver = idf_version_from_cmake()  # returns e.g. 'v6.1.0', or None on failure
+        if not ver:
+            return None
+        ver_str = ver.lstrip('v')  # '6.1.0'
+        return os.path.join(idf_tools_path, 'root_managed_components', f'idf{ver_str}', 'dependencies.lock')
+
+    def _is_component_trusted(
+        comp_name: str,
+        source: str | None,
+    ) -> bool:
+        """True iff this component is from a trusted source (IDF, project, or Espressif component from ESP-registry)."""
+        if source in ('idf_components', 'project_components', 'project_extra_components'):
+            return True
+        if source == 'project_managed_components':
+            # Lock key: internal name uses __ (e.g. espressif__mdns), lock uses / (e.g. espressif/mdns)
+            lock_key = comp_name.replace('__', '/', 1) if '__' in comp_name else comp_name
+            return lock_key in _get_trusted_names_from_lock(os.path.join(project_dir, 'dependencies.lock'))
+        if source == 'idf_managed_components':
+            lock_path = _resolve_idf_managed_lock_path()
+            if lock_path is None:
+                return False
+            lock_key = comp_name.replace('__', '/', 1) if '__' in comp_name else comp_name
+            return lock_key in _get_trusted_names_from_lock(lock_path)
+        return False
+
+    def _build_rich_help_command_groups(
+        external_panels: list[tuple[str, list[str]]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Build ``command_groups`` for rich-click's ``RichHelpConfiguration``.
+        ``external_panels`` is a list of ``(title, command_names)`` from ``idf_ext.py`` extension
+        modules and from Python entry-point extensions. Those panels appear on
+        the root ``idf.py --help`` after the default Commands section.
+        """
+        panels: list[dict[str, Any]] = []
+        for title, cmds in external_panels:
+            if cmds:
+                panels.append({'name': title, 'commands': cmds})
+        return {PROG: panels} if panels else {}
 
     # That's a tiny parser that parse project-dir even before constructing
     # fully featured click parser to be sure that extensions are loaded from the right place
@@ -821,6 +1000,20 @@ def init_cli(verbose_output: list | None = None) -> Any:
 
     # Set `complete_var` to not existing environment variable name to prevent early cmd completion
     project_dir = parse_project_dir(standalone_mode=False, complete_var='_IDF.PY_COMPLETE_NOT_EXISTING')
+
+    # Ensure IDF_VERSION is available for in-process component-manager code
+    # (e.g. dependencies.lock `if: idf_version` clauses). Outside a CMake build
+    # this env var is unset; without it idf-component-manager falls back to
+    # spawning `idf.py --version`, which re-enters here -> infinite recursion.
+    if 'IDF_VERSION' not in os.environ:
+        # Best-effort: if idf_version_from_cmake() returns None (corrupt/missing
+        # version.cmake) IDF_VERSION stays unset and the recursion guard does not apply.
+        idf_ver = idf_version_from_cmake()  # 'vX.Y.Z' or None; regex parse, no subprocess
+        if idf_ver:
+            # Strip the leading 'v' to match the value a CMake build provides
+            # (see tools/cmake/version.cmake); component-manager code consumes
+            # this env var verbatim and cannot parse a 'v' prefix.
+            os.environ['IDF_VERSION'] = idf_ver.lstrip('v')
 
     all_actions: dict = {}
     # Load extensions from components dir
@@ -863,39 +1056,75 @@ def init_cli(verbose_output: list | None = None) -> Any:
             print_warning(f'WARNING: Cannot load idf.py extension "{name}"')
 
     component_idf_ext_dirs = []
-    # Get component directories with idf extensions that participate in the build
+    # Get trusted component directories with idf extensions that participate in the build
+    project_desc = None
     build_dir_path = resolve_build_dir()
     project_description_json_file = os.path.join(build_dir_path, 'project_description.json')
     if os.path.exists(project_description_json_file):
         try:
             with open(project_description_json_file, encoding='utf-8') as f:
                 project_desc = json.load(f)
-                all_component_info = project_desc.get('build_component_info', {})
-                for _, comp_info in all_component_info.items():
-                    comp_dir = comp_info.get('dir')
-                    if comp_dir and os.path.isdir(comp_dir) and os.path.exists(os.path.join(comp_dir, 'idf_ext.py')):
-                        component_idf_ext_dirs.append(comp_dir)
         except (OSError, json.JSONDecodeError) as e:
             print_warning(f'Warning: Failed to read component info from project_description.json: {e}')
+    if project_desc is not None:
+        build_component_info = project_desc.get('build_component_info', {})
+        all_component_info = project_desc.get('all_component_info', {})
+
+        # The trust check runs during init_cli, before the main Click CLI is parsed,
+        # so only the env var is supported (a CLI flag would require early argv parsing).
+        skip_extension_trust_check = os.environ.get('IDF_EXTENSION_ALLOW_UNTRUSTED', '').lower() in ('1', 'true', 'yes')
+
+        for comp_name, comp_info in build_component_info.items():
+            comp_dir = comp_info.get('dir')
+            if not comp_dir or not os.path.isdir(comp_dir) or not os.path.exists(os.path.join(comp_dir, 'idf_ext.py')):
+                continue
+            if skip_extension_trust_check:
+                component_idf_ext_dirs.append(comp_dir)
+            else:
+                source = all_component_info.get(comp_name, {}).get('source')
+                if _is_component_trusted(comp_name, source):
+                    component_idf_ext_dirs.append(comp_dir)
+                else:
+                    print_warning(
+                        f'WARNING: Not loading component extension from untrusted source '
+                        f'"{_path_relative_to_project(comp_dir, project_dir)}". '
+                        'Only extensions from trusted sources are loaded. Run '
+                        '"idf.py docs -sp api-guides/tools/idf-py.html#extending-idf-py" '
+                        'for the list of trusted sources. Set IDF_EXTENSION_ALLOW_UNTRUSTED=1 to load all.'
+                    )
+
     # Load extensions from directories that participate in the build (components and project)
+    external_help_panels: list[tuple[str, list[str]]] = []
     for ext_dir in component_idf_ext_dirs + [project_dir]:
         extension_func = load_cli_extension_from_dir(ext_dir)
         if extension_func:
             try:
-                all_actions = merge_action_lists(all_actions, custom_actions=extension_func(all_actions, project_dir))
+                custom_actions = extension_func(all_actions, project_dir)
+                all_actions = merge_action_lists(all_actions, custom_actions=custom_actions)
             except Exception as e:
                 print_warning(f'WARNING: Cannot load directory extension from "{ext_dir}": {e}')
             else:
+                panel_cmds = sorted(n for n in custom_actions.get('actions') or {} if n != 'fallback')
+                if panel_cmds:
+                    panel_title = (
+                        'Project' if ext_dir == project_dir else _path_relative_to_project(ext_dir, project_dir)
+                    )
+                    external_help_panels.append((panel_title, panel_cmds))
                 if ext_dir != project_dir:
-                    print(f'INFO: Loaded component extension from "{_extract_relevant_path(ext_dir)}"')
+                    print(f'INFO: Loaded component extension from "{_path_relative_to_project(ext_dir, project_dir)}"')
 
     # Load extensions from Python entry points
     entry_point_extensions = load_cli_extensions_from_entry_points()
-    for name, extension_func in entry_point_extensions:
+    for ep_name, extension_func in entry_point_extensions:
         try:
-            all_actions = merge_action_lists(all_actions, custom_actions=extension_func(all_actions, project_dir))
+            custom_actions = extension_func(all_actions, project_dir)
+            all_actions = merge_action_lists(all_actions, custom_actions=custom_actions)
         except Exception as e:
-            print_warning(f'WARNING: Cannot load entry point extension "{name}": {e}')
+            print_warning(f'WARNING: Cannot load entry point extension "{ep_name}": {e}')
+        else:
+            panel_cmds = sorted(n for n in (custom_actions.get('actions') or {}) if n != 'fallback')
+            if panel_cmds:
+                external_help_panels.append((ep_name, panel_cmds))
 
     cli_help = (
         'ESP-IDF CLI build management tool. '
@@ -903,7 +1132,13 @@ def init_cli(verbose_output: list | None = None) -> Any:
         f'Selected target: {get_target(project_dir)}'
     )
 
-    return CLI(cli_help=cli_help, verbose_output=verbose_output, all_actions=all_actions)
+    help_command_groups = _build_rich_help_command_groups(external_help_panels)
+    return CLI(
+        cli_help=cli_help,
+        verbose_output=verbose_output,
+        all_actions=all_actions,
+        command_groups=help_command_groups,
+    )
 
 
 def main(argv: list[Any] | None = None) -> None:

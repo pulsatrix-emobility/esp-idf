@@ -262,7 +262,7 @@ int wpa_sta_connect(uint8_t *bssid)
 
 #ifdef CONFIG_DPP
     struct wpa_sm *sm = &gWpaSm;
-    if (sm->key_mgmt == WPA_KEY_MGMT_DPP) {
+    if (wpa_key_mgmt_dpp(sm->key_mgmt)) {
         ret = dpp_connect(bssid, false);
     } else
 #endif
@@ -277,12 +277,15 @@ void wpa_config_done(void)
     esp_set_scan_ie();
 }
 
-int wpa_parse_wpa_ie_wrapper(const u8 *wpa_ie, size_t wpa_ie_len, wifi_wpa_ie_t *data)
+static int wpa_parse_wpa_ie_to_public(const u8 *wpa_ie, size_t wpa_ie_len,
+                                      wifi_wpa_ie_t *data,
+                                      int (*parse_fn)(const u8 *, size_t,
+                                                      struct wpa_ie_data *))
 {
-    struct wpa_ie_data ie;
-    int ret = 0;
+    struct wpa_ie_data ie = {0};
+    int ret;
 
-    ret = wpa_parse_wpa_ie(wpa_ie, wpa_ie_len, &ie);
+    ret = parse_fn(wpa_ie, wpa_ie_len, &ie);
     data->proto = ie.proto;
     data->pairwise_cipher = cipher_type_map_supp_to_public(ie.pairwise_cipher);
     data->group_cipher = cipher_type_map_supp_to_public(ie.group_cipher);
@@ -293,6 +296,18 @@ int wpa_parse_wpa_ie_wrapper(const u8 *wpa_ie, size_t wpa_ie_len, wifi_wpa_ie_t 
     data->rsnxe_capa = ie.rsnxe_capa;
 
     return ret;
+}
+
+int wpa_parse_wpa_ie_wrapper(const u8 *wpa_ie, size_t wpa_ie_len, wifi_wpa_ie_t *data)
+{
+    return wpa_parse_wpa_ie_to_public(wpa_ie, wpa_ie_len, data, wpa_parse_wpa_ie);
+}
+
+int wpa_parse_wpa_ie_scan_only_wrapper(const u8 *wpa_ie, size_t wpa_ie_len,
+                                       wifi_wpa_ie_t *data)
+{
+    return wpa_parse_wpa_ie_to_public(wpa_ie, wpa_ie_len, data,
+                                      wpa_parse_wpa_ie_scan_only);
 }
 
 static void wpa_sta_connected_cb(uint8_t *bssid)
@@ -510,6 +525,7 @@ int esp_supplicant_init(void)
 
     wpa_cb->wpa_config_parse_string  = wpa_config_parse_string;
     wpa_cb->wpa_parse_wpa_ie  = wpa_parse_wpa_ie_wrapper;
+    wpa_cb->wpa_parse_wpa_ie_scan_only = wpa_parse_wpa_ie_scan_only_wrapper;
     wpa_cb->wpa_config_bss = NULL;//wpa_config_bss;
     wpa_cb->wpa_michael_mic_failure = wpa_michael_mic_failure;
     wpa_cb->wpa_config_done = wpa_config_done;
@@ -522,10 +538,23 @@ int esp_supplicant_init(void)
     esp_wifi_register_owe_cb(wpa_cb);
 #endif /* CONFIG_OWE_STA */
 
-    eloop_init();
+    if (eloop_init() != 0) {
+        wpa_printf(MSG_ERROR, "Failed to initialize eloop");
+        os_free(wpa_cb);
+        wpa_cb = NULL;
+        return ESP_FAIL;
+    }
+
     ret = esp_supplicant_common_init(wpa_cb);
 
     if (ret != 0) {
+        /*
+         * Note: We don't need to explicitly call eloop_destroy() here because
+         * returning an error causes the caller (esp_wifi_init) to trigger the
+         * deinit path, which invokes esp_supplicant_deinit() and frees the eloop.
+         */
+        os_free(wpa_cb);
+        wpa_cb = NULL;
         return ret;
     }
 
@@ -543,6 +572,7 @@ int esp_supplicant_deinit(void)
     esp_supplicant_common_deinit();
     esp_supplicant_unset_all_appie();
     eloop_destroy();
+    /* wpa_cb is freed by esp_wifi_unregister_wpa_cb_internal() */
     wpa_cb = NULL;
 #if CONFIG_ESP_WIFI_WAPI_PSK
     esp_wifi_internal_wapi_deinit();

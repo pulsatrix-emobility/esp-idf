@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -58,7 +58,6 @@
 
 #include <tinycrypt/ecc.h>
 #include <tinycrypt/ecc_platform_specific.h>
-#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -303,11 +302,19 @@ void uECC_vli_modAdd(uECC_word_t *result, const uECC_word_t *left,
 		     const uECC_word_t *right, const uECC_word_t *mod,
 		     wordcount_t num_words)
 {
+	wordcount_t i;
+	uECC_word_t tmp[NUM_ECC_WORDS];
+
+	if (num_words <= 0 || num_words > NUM_ECC_WORDS) {
+		return;
+	}
+
 	uECC_word_t carry = uECC_vli_add(result, left, right, num_words);
-	if (carry || uECC_vli_cmp_unsafe(mod, result, num_words) != 1) {
-	/* result > mod (result = mod + remainder), so subtract mod to get
-	 * remainder. */
-		uECC_vli_sub(result, result, mod, num_words);
+	uECC_word_t borrow = uECC_vli_sub(tmp, result, mod, num_words);
+	uECC_word_t do_reduce = (uECC_word_t)(carry || !borrow);
+
+	for (i = 0; i < num_words; ++i) {
+		result[i] = cond_set(tmp[i], result[i], do_reduce);
 	}
 }
 
@@ -315,11 +322,17 @@ void uECC_vli_modSub(uECC_word_t *result, const uECC_word_t *left,
 		     const uECC_word_t *right, const uECC_word_t *mod,
 		     wordcount_t num_words)
 {
+	wordcount_t i;
+	uECC_word_t tmp[NUM_ECC_WORDS];
+
+	if (num_words <= 0 || num_words > NUM_ECC_WORDS) {
+		return;
+	}
+
 	uECC_word_t l_borrow = uECC_vli_sub(result, left, right, num_words);
-	if (l_borrow) {
-		/* In this case, result == -diff == (max int) - diff. Since -x % d == d - x,
-		 * we can get the correct result from result + mod (with overflow). */
-		uECC_vli_add(result, result, mod, num_words);
+	uECC_vli_add(tmp, result, mod, num_words);
+	for (i = 0; i < num_words; ++i) {
+		result[i] = cond_set(tmp[i], result[i], l_borrow);
 	}
 }
 
@@ -332,6 +345,10 @@ void uECC_vli_mmod(uECC_word_t *result, uECC_word_t *product,
 	uECC_word_t tmp[2 * NUM_ECC_WORDS];
 	uECC_word_t *v[2] = {tmp, product};
 	uECC_word_t index;
+
+	if (num_words <= 0 || num_words > NUM_ECC_WORDS) {
+		return;
+	}
 
 	/* Shift mod so its highest set bit is at the maximum position. */
 	bitcount_t shift = (num_words * 2 * uECC_WORD_BITS) -
@@ -354,9 +371,8 @@ void uECC_vli_mmod(uECC_word_t *result, uECC_word_t *product,
 		wordcount_t i;
 		for (i = 0; i < num_words * 2; ++i) {
 			uECC_word_t diff = v[index][i] - mod_multiple[i] - borrow;
-			if (diff != v[index][i]) {
-				borrow = (diff > v[index][i]);
-			}
+			uECC_word_t val = (diff > v[index][i]);
+			borrow = cond_set(val, borrow, (diff != v[index][i]));
 			v[1 - index][i] = diff;
 		}
 		/* Swap the index if there was no borrow */
@@ -373,6 +389,10 @@ void uECC_vli_modMult(uECC_word_t *result, const uECC_word_t *left,
 		      const uECC_word_t *right, const uECC_word_t *mod,
 		      wordcount_t num_words)
 {
+	if (num_words <= 0 || num_words > NUM_ECC_WORDS) {
+		return;
+	}
+
 	uECC_word_t product[2 * NUM_ECC_WORDS];
 	uECC_vli_mult(product, left, right, num_words);
 	uECC_vli_mmod(result, product, mod, num_words);
@@ -643,7 +663,6 @@ void apply_z(uECC_word_t * X1, uECC_word_t * Y1, const uECC_word_t * const Z,
 	uECC_vli_modMult_fast(Y1, Y1, t1, curve); /* y1 * z^3 */
 }
 
-#if !SOC_ECC_SUPPORTED
 /* P = (x1, y1) => 2P, (x2, y2) => P' */
 static void XYcZ_initial_double(uECC_word_t * X1, uECC_word_t * Y1,
 				uECC_word_t * X2, uECC_word_t * Y2,
@@ -677,7 +696,7 @@ static void XYcZ_addC(uECC_word_t * X1, uECC_word_t * Y1,
 		      uECC_Curve curve)
 {
 	/* t1 = X1, t2 = Y1, t3 = X2, t4 = Y2 */
-	uECC_word_t t5[NUM_ECC_WORDS];
+	uECC_word_t t5[NUM_ECC_WORDS] = {0};
 	uECC_word_t t6[NUM_ECC_WORDS];
 	uECC_word_t t7[NUM_ECC_WORDS];
 	wordcount_t num_words = curve->num_words;
@@ -709,14 +728,13 @@ static void XYcZ_addC(uECC_word_t * X1, uECC_word_t * Y1,
 
 	uECC_vli_set(X1, t7, num_words);
 }
-#endif /* !SOC_ECC_SUPPORTED */
 
 void XYcZ_add(uECC_word_t * X1, uECC_word_t * Y1,
 	      uECC_word_t * X2, uECC_word_t * Y2,
 	      uECC_Curve curve)
 {
 	/* t1 = X1, t2 = Y1, t3 = X2, t4 = Y2 */
-	uECC_word_t t5[NUM_ECC_WORDS];
+	uECC_word_t t5[NUM_ECC_WORDS] = {0};
 	wordcount_t num_words = curve->num_words;
 
 	uECC_vli_modSub(t5, X2, X1, curve->p, num_words); /* t5 = x2 - x1 */
@@ -743,15 +761,27 @@ void EccPoint_mult(uECC_word_t * result, const uECC_word_t * point,
 		   bitcount_t num_bits, uECC_Curve curve)
 {
 #if SOC_ECC_SUPPORTED
-    wordcount_t num_words = curve->num_words;
+	wordcount_t num_words = curve->num_words;
 
-    /* Only p256r1 is supported currently. */
-    assert (curve == uECC_secp256r1());
-
-    esp_tinycrypt_calc_ecc_mult((const uint8_t *)&point[0], (const uint8_t *)&point[num_words],
-                                (uint8_t *)scalar, (uint8_t *)&result[0], (uint8_t *)&result[num_words],
-                                num_words * uECC_WORD_SIZE, false);
-#else
+	/*
+	 * The ECC peripheral accepts canonical scalars only.  Calls using the
+	 * regularized software scalar use one additional bit and must stay on
+	 * the software ladder.
+	 */
+	if (initial_Z == 0 && num_bits == curve->num_n_bits &&
+	    (curve == uECC_secp256r1()
+#if uECC_SUPPORTS_secp192r1
+	     || curve == uECC_secp192r1()
+#endif /* uECC_SUPPORTS_secp192r1 */
+	    )) {
+		if (esp_tinycrypt_calc_ecc_mult(point, point + num_words, scalar,
+						result, result + num_words,
+						num_words * uECC_WORD_SIZE, false) == 0) {
+			return;
+		}
+	}
+#endif /* SOC_ECC_SUPPORTED */
+	{
 	/* R0 and R1 */
 	uECC_word_t Rx[2][NUM_ECC_WORDS];
 	uECC_word_t Ry[2][NUM_ECC_WORDS];
@@ -790,7 +820,7 @@ void EccPoint_mult(uECC_word_t * result, const uECC_word_t * point,
 
 	uECC_vli_set(result, Rx[0], num_words);
 	uECC_vli_set(result + num_words, Ry[0], num_words);
-#endif /* SOC_ECC_SUPPORTED */
+	}
 }
 
 uECC_word_t regularize_k(const uECC_word_t * const k, uECC_word_t *k0,
@@ -800,10 +830,22 @@ uECC_word_t regularize_k(const uECC_word_t * const k, uECC_word_t *k0,
 	wordcount_t num_n_words = BITS_TO_WORDS(curve->num_n_bits);
 
 	bitcount_t num_n_bits = curve->num_n_bits;
+	uECC_word_t carry;
+	uECC_word_t bit = 0;
+	bitcount_t max_n_bits;
 
-	uECC_word_t carry = uECC_vli_add(k0, k, curve->n, num_n_words) ||
-			     (num_n_bits < ((bitcount_t)num_n_words * uECC_WORD_SIZE * 8) &&
-			     uECC_vli_testBit(k0, num_n_bits));
+	if (num_n_words <= 0 || num_n_words > NUM_ECC_WORDS) {
+		return 0;
+	}
+
+	max_n_bits = (bitcount_t)num_n_words * uECC_WORD_SIZE * 8;
+	carry = uECC_vli_add(k0, k, curve->n, num_n_words);
+
+	if (num_n_bits < max_n_bits) {
+		bit = (uECC_vli_testBit(k0, num_n_bits) != 0);
+	}
+
+	carry |= bit;
 
 	uECC_vli_add(k1, k0, curve->n, num_n_words);
 
@@ -814,9 +856,25 @@ uECC_word_t EccPoint_compute_public_key(uECC_word_t *result,
 					uECC_word_t *private_key,
 					uECC_Curve curve)
 {
+#if SOC_ECC_SUPPORTED
+	/*
+	 * The ECC peripheral requires a canonical scalar.  regularize_k()
+	 * produces k + n or k + 2n for the software constant-time ladder,
+	 * which is mathematically equivalent but outside the HW input range.
+	 */
+	if (curve == uECC_secp256r1()
+#if uECC_SUPPORTS_secp192r1
+	    || curve == uECC_secp192r1()
+#endif /* uECC_SUPPORTS_secp192r1 */
+	   ) {
+		EccPoint_mult(result, curve->G, private_key, 0,
+			      curve->num_n_bits, curve);
+		return !EccPoint_isZero(result, curve);
+	}
+#endif /* SOC_ECC_SUPPORTED */
 
 	uECC_word_t tmp1[NUM_ECC_WORDS];
- 	uECC_word_t tmp2[NUM_ECC_WORDS];
+	uECC_word_t tmp2[NUM_ECC_WORDS];
 	uECC_word_t *p2[2] = {tmp1, tmp2};
 	uECC_word_t carry;
 
@@ -863,7 +921,7 @@ int uECC_generate_random_int(uECC_word_t *random, const uECC_word_t *top,
 	uECC_word_t tries;
 	bitcount_t num_bits = uECC_vli_numBits(top, num_words);
 
-	if (!g_rng_function) {
+	if (!g_rng_function || num_words <= 0 || num_words > NUM_ECC_WORDS) {
 		return 0;
 	}
 
@@ -898,17 +956,19 @@ int uECC_valid_point(const uECC_word_t *point, uECC_Curve curve)
 	}
 
 #if SOC_ECC_SUPPORTED
-    /* Only p256r1 is supported currently. */
-    if (curve != uECC_secp256r1()) {
-        return -5;
-    }
-
-    if (esp_tinycrypt_verify_ecc_point((const uint8_t *)&point[0],
-                                       (const uint8_t *)&point[num_words],
-                                       num_words * uECC_WORD_SIZE)) {
-        return -3;
-    }
-#else
+	if (curve == uECC_secp256r1()
+#if uECC_SUPPORTS_secp192r1
+	    || curve == uECC_secp192r1()
+#endif /* uECC_SUPPORTS_secp192r1 */
+	   ) {
+		if (esp_tinycrypt_verify_ecc_point((const uint8_t *)&point[0],
+						   (const uint8_t *)&point[num_words],
+						   num_words * uECC_WORD_SIZE) == 0) {
+			return 0;
+		}
+	}
+#endif /* SOC_ECC_SUPPORTED */
+	{
 	uECC_word_t tmp1[NUM_ECC_WORDS];
 	uECC_word_t tmp2[NUM_ECC_WORDS];
 
@@ -916,9 +976,10 @@ int uECC_valid_point(const uECC_word_t *point, uECC_Curve curve)
 	curve->x_side(tmp2, point, curve); /* tmp2 = x^3 + ax + b */
 
 	/* Make sure that y^2 == x^3 + ax + b */
-	if (uECC_vli_equal(tmp1, tmp2, num_words) != 0)
+	if (uECC_vli_equal(tmp1, tmp2, num_words) != 0) {
 		return -3;
-#endif /* SOC_ECC_SUPPORTED */
+	}
+	}
 
 	return 0;
 }

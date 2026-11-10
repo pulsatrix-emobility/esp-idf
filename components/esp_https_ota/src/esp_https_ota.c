@@ -302,6 +302,48 @@ static bool is_server_verification_enabled(const esp_https_ota_config_t *ota_con
             || ota_config->http_config->crt_bundle_attach != NULL);
 }
 
+/*
+ * Copy the caller's HTTP client config. Unless CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is
+ * set, pin the copy to the SSL transport, so a host/path config uses HTTPS, and
+ * reject any other transport_type.
+ * An http:// URL is then rejected by _check_https_transport() (or earlier by
+ * esp_http_client), and an http:// redirect target by esp_http_client.
+ * The copy is shallow; esp_http_client_init() does not keep a pointer to it.
+ */
+static esp_err_t _prepare_http_config(const esp_http_client_config_t *in, esp_http_client_config_t *out)
+{
+    *out = *in;
+#if !CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+    /* esp_http_client_init() treats any value other than OVER_SSL as plain HTTP */
+    if (in->transport_type == HTTP_TRANSPORT_UNKNOWN) {
+        out->transport_type = HTTP_TRANSPORT_OVER_SSL;
+    } else if (in->transport_type != HTTP_TRANSPORT_OVER_SSL) {
+        ESP_LOGE(TAG, "transport_type %d is not HTTPS, plain HTTP needs CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP",
+                 (int)in->transport_type);
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
+    return ESP_OK;
+}
+
+/*
+ * Unless CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is set, fail if the client is not on
+ * the SSL transport. Called before the first request (after init and
+ * http_client_init_cb), as the URL scheme overrides transport_type.
+ * Redirects need no check here: from an https origin,
+ * esp_http_client_set_redirection() rejects any non-https target.
+ */
+static esp_err_t _check_https_transport(esp_http_client_handle_t client)
+{
+#if !CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+    if (esp_http_client_get_transport_type(client) != HTTP_TRANSPORT_OVER_SSL) {
+        ESP_LOGE(TAG, "Plain HTTP needs CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP");
+        return ESP_ERR_INVALID_ARG;
+    }
+#endif
+    return ESP_OK;
+}
+
 esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_https_ota_handle_t *handle)
 {
     esp_https_ota_dispatch_event(ESP_HTTPS_OTA_START, NULL, 0);
@@ -324,6 +366,13 @@ esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_http
         *handle = NULL;
         return ESP_ERR_INVALID_ARG;
 #endif
+    }
+
+    esp_http_client_config_t http_config;
+    err = _prepare_http_config(ota_config->http_config, &http_config);
+    if (err != ESP_OK) {
+        *handle = NULL;
+        return err;
     }
 
 #if CONFIG_ESP_HTTPS_OTA_DECRYPT_CB
@@ -366,7 +415,7 @@ esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_http
     }
 
     /* Initiate HTTP Connection */
-    https_ota_handle->http_client = esp_http_client_init(ota_config->http_config);
+    https_ota_handle->http_client = esp_http_client_init(&http_config);
     if (https_ota_handle->http_client == NULL) {
         ESP_LOGE(TAG, "Failed to initialise HTTP connection");
         err = ESP_FAIL;
@@ -379,6 +428,12 @@ esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_http
             ESP_LOGE(TAG, "http_client_init_cb returned 0x%x", err);
             goto http_cleanup;
         }
+    }
+
+    /* After the callback: it may have changed the URL */
+    err = _check_https_transport(https_ota_handle->http_client);
+    if (err != ESP_OK) {
+        goto http_cleanup;
     }
 
     /*
@@ -411,22 +466,31 @@ esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_http
         err = esp_http_client_perform(https_ota_handle->http_client);
         if (err == ESP_OK) {
             int status = esp_http_client_get_status_code(https_ota_handle->http_client);
-            if (status != HttpStatus_Ok) {
-                // If server doesn't support HEAD request, we need to get image length from GET request
-                // using Range header
+            if (status == HttpStatus_Ok) {
+                https_ota_handle->image_length = esp_http_client_get_content_length(https_ota_handle->http_client);
+            } else if (status == HttpStatus_NotModified) {
+                // No new image to download; report it from the HEAD response instead of issuing a redundant GET
+                err = ESP_ERR_HTTP_NOT_MODIFIED;
+                goto http_cleanup;
+            } else {
+                // HEAD not usable (e.g. 405/501, or 403 for GET-signed URLs); fall back to a ranged GET
+                ESP_LOGD(TAG, "HEAD request returned status %d, falling back to ranged GET", status);
                 esp_http_client_set_header(https_ota_handle->http_client, "Range", "bytes=0-0");
                 esp_http_client_set_method(https_ota_handle->http_client, HTTP_METHOD_GET);
 
                 err = esp_http_client_perform(https_ota_handle->http_client);
-                if (err == ESP_OK) {
-                    status = esp_http_client_get_status_code(https_ota_handle->http_client);
-                    if (status != HttpStatus_Ok && status != HttpStatus_PartialContent) {
-                        ESP_LOGE(TAG, "Received incorrect http status %d", status);
-                        err = ESP_FAIL;
-                        goto http_cleanup;
-                    }
-                } else {
+                if (err != ESP_OK) {
                     ESP_LOGE(TAG, "ESP HTTP client perform failed: %d", err);
+                    goto http_cleanup;
+                }
+                status = esp_http_client_get_status_code(https_ota_handle->http_client);
+                err = _http_handle_response_code(https_ota_handle, status);
+                if (err != ESP_OK) {
+                    goto http_cleanup;
+                }
+                if (status != HttpStatus_Ok && status != HttpStatus_PartialContent) {
+                    ESP_LOGE(TAG, "Received incorrect http status %d", status);
+                    err = ESP_FAIL;
                     goto http_cleanup;
                 }
                 esp_http_client_set_header(https_ota_handle->http_client, "Range", NULL);
@@ -438,8 +502,6 @@ esp_err_t esp_https_ota_begin(const esp_https_ota_config_t *ota_config, esp_http
                     // If server responds with 206 Partial Content, we can get image length from content-range header
                     https_ota_handle->image_length = esp_http_client_get_content_range(https_ota_handle->http_client);
                 }
-            } else {
-                https_ota_handle->image_length = esp_http_client_get_content_length(https_ota_handle->http_client);
             }
         } else {
             ESP_LOGE(TAG, "ESP HTTP client perform failed: %d", err);

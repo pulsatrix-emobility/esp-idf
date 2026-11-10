@@ -62,10 +62,6 @@
 #if CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
 #include "ble_log/ble_log_spi_out.h"
 #endif // CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
-
-#if CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-#include "ble_log/ble_log_uhci_out.h"
-#endif // CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
 #endif /* CONFIG_BT_LE_CONTROLLER_LOG_MODE_BLE_LOG_V2 */
 
 /* Macro definition
@@ -218,9 +214,9 @@ static int esp_ecc_gen_dh_key(const uint8_t *peer_pub_key_x, const uint8_t *peer
                               const uint8_t *our_priv_key, uint8_t *out_dhkey);
 #if CONFIG_BT_LE_CONTROLLER_LOG_ENABLED
 #if !CONFIG_BT_LE_CONTROLLER_LOG_MODE_BLE_LOG_V2
-#if !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED && !CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
+#if !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
 static void esp_bt_controller_log_interface(uint32_t len, const uint8_t *addr, uint32_t len_append, const uint8_t *addr_append, uint32_t flag);
-#endif // !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED && !CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
+#endif // !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
 #if CONFIG_BT_LE_CONTROLLER_LOG_STORAGE_ENABLE
 static void esp_bt_ctrl_log_partition_get_and_erase_first_block(void);
 #endif // CONFIG_BT_LE_CONTROLLER_LOG_STORAGE_ENABLE
@@ -293,18 +289,8 @@ esp_err_t esp_bt_controller_log_init(void)
     }
 #endif // CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
 
-#if CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-    if (ble_log_uhci_out_init() != 0) {
-        goto uhci_out_init_failed;
-    }
-#endif // CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-
 #if CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
     if (r_ble_log_init_simple(ble_log_spi_out_ll_write, ble_log_spi_out_ll_log_ev_proc) != 0) {
-        goto log_init_failed;
-    }
-#elif CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
-    if (r_ble_log_init_simple(ble_log_uhci_out_ll_write, ble_log_uhci_out_ll_log_ev_proc) != 0) {
         goto log_init_failed;
     }
 #else
@@ -337,8 +323,6 @@ esp_err_t esp_bt_controller_log_init(void)
 ctrl_level_init_failed:
 #if CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
     r_ble_log_deinit_simple();
-#elif CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
-    r_ble_log_deinit_simple();
 #else
     r_ble_log_deinit_async();
 #endif
@@ -347,10 +331,6 @@ log_init_failed:
     ble_log_spi_out_deinit();
 spi_out_init_failed:
 #endif // CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
-#if CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-    ble_log_uhci_out_deinit();
-uhci_out_init_failed:
-#endif // CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
     return ESP_FAIL;
 }
 
@@ -360,13 +340,7 @@ void esp_bt_controller_log_deinit(void)
     ble_log_spi_out_deinit();
 #endif // CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
 
-#if CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-    ble_log_uhci_out_deinit();
-#endif // CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-
 #if CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
-    r_ble_log_deinit_simple();
-#elif CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
     r_ble_log_deinit_simple();
 #else
     r_ble_log_deinit_async();
@@ -791,7 +765,7 @@ static esp_err_t sleep_modem_ble_mac_modem_state_init(uint8_t extra)
     int retention_args = extra;
     sleep_retention_module_init_param_t init_param = {
         .cbs     = { .create = { .handle = sleep_modem_ble_mac_retention_init, .arg = &retention_args } },
-        .depends = RETENTION_MODULE_BITMAP_INIT(BT_BB)
+        .depends = RETENTION_MODULE_BITMAP_INIT(CLOCK_MODEM)
     };
     esp_err_t err = sleep_retention_module_init(SLEEP_RETENTION_MODULE_BLE_MAC, &init_param);
     if (err == ESP_OK) {
@@ -1070,12 +1044,6 @@ esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg)
         goto free_mem;
     }
 
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* ble_npl_eventq_init() needs to use npl functions in rom and
-     * must be called after esp_bt_controller_init().
-     */
-    ble_npl_eventq_init(nimble_port_get_dflt_eventq());
-#endif // CONFIG_BT_NIMBLE_ENABLED
     /* Enable BT-related clocks */
     modem_clock_module_enable(PERIPH_BT_MODULE);
     modem_clock_module_mac_reset(PERIPH_BT_MODULE);
@@ -1180,9 +1148,7 @@ modem_deint:
 #endif // CONFIG_BT_LE_CONTROLLER_LOG_ENABLED
     modem_clock_deselect_lp_clock_source(PERIPH_BT_MODULE);
     modem_clock_module_disable(PERIPH_BT_MODULE);
-#if CONFIG_BT_NIMBLE_ENABLED
-    ble_npl_eventq_deinit(nimble_port_get_dflt_eventq());
-#endif // CONFIG_BT_NIMBLE_ENABLED
+
 free_mem:
     npl_freertos_mempool_deinit();
     esp_unregister_npl_funcs();
@@ -1213,11 +1179,6 @@ esp_err_t esp_bt_controller_deinit(void)
 #if CONFIG_BT_LE_CONTROLLER_LOG_ENABLED
     esp_bt_controller_log_deinit();
 #endif // CONFIG_BT_LE_CONTROLLER_LOG_ENABLED
-
-#if CONFIG_BT_NIMBLE_ENABLED
-    /* De-initialize default event queue */
-    ble_npl_eventq_deinit(nimble_port_get_dflt_eventq());
-#endif // CONFIG_BT_NIMBLE_ENABLED
 
     esp_unregister_npl_funcs();
 
@@ -1563,7 +1524,7 @@ void esp_ble_controller_log_dump_all(bool output)
     ble_log_dump_to_console();
 }
 #else /* !CONFIG_BT_LE_CONTROLLER_LOG_MODE_BLE_LOG_V2 */
-#if !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED && !CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
+#if !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
 static void esp_bt_controller_log_interface(uint32_t len, const uint8_t *addr, uint32_t len_append, const uint8_t *addr_append, uint32_t flag)
 {
     bool end = (flag & BIT(BLE_LOG_INTERFACE_FLAG_END));
@@ -1585,7 +1546,7 @@ static void esp_bt_controller_log_interface(uint32_t len, const uint8_t *addr, u
     portEXIT_CRITICAL_SAFE(&spinlock);
 #endif // CONFIG_BT_LE_CONTROLLER_LOG_STORAGE_ENABLE
 }
-#endif // !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED && !CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
+#endif // !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
 
 void esp_ble_controller_log_dump_all(bool output)
 {
@@ -1593,13 +1554,9 @@ void esp_ble_controller_log_dump_all(bool output)
     ble_log_spi_out_dump_all();
 #endif // CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED
 
-#if CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-    ble_log_uhci_out_dump_all();
-#endif // CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED
-
 #if CONFIG_BT_LE_CONTROLLER_LOG_STORAGE_ENABLE
     esp_bt_read_ctrl_log_from_flash(output);
-#elif !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED && !CONFIG_BT_LE_CONTROLLER_LOG_UHCI_OUT_ENABLED
+#elif !CONFIG_BT_LE_CONTROLLER_LOG_SPI_OUT_ENABLED
     portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
     portENTER_CRITICAL_SAFE(&spinlock);
     esp_panic_handler_feed_wdts();

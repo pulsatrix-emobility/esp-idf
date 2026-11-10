@@ -23,6 +23,7 @@ _BASE_CONFIG = {
         'DROM-R1': 'Load access fault',
         'DROM-W1': 'Store access fault',
         'MMU-spillover': 'Illegal instruction',
+        'Corrupted SP': 'Environment call from U-mode',
     },
     'apm_violation': {
         'eFuse': 'APM - Space exception',
@@ -32,7 +33,9 @@ _BASE_CONFIG = {
         'HMAC': 'APM - Space exception',
         'DS': 'APM - Space exception',
         'SHA PCR': 'APM - Space exception',
+        'RSA PCR': 'APM - Space exception',
         'ECC PCR': 'APM - Space exception',
+        'ECDSA PCR': 'APM - Space exception',
     },
 }
 
@@ -56,7 +59,10 @@ _TARGET_OVERRIDES: dict[str, dict[str, Any]] = {
             'HMAC': 'APM - Authority exception',
             'DS': 'APM - Authority exception',
             'SHA PCR': 'APM - Authority exception',
+            'RSA PCR': 'APM - Authority exception',
             'ECC PCR': 'APM - Authority exception',
+            # NOTE: ESP32-C6 has no ECDSA peripheral
+            '_remove': ['ECDSA PCR'],
         },
     },
     'esp32h2': {
@@ -74,13 +80,34 @@ _TARGET_OVERRIDES: dict[str, dict[str, Any]] = {
             'HMAC': 'APM - Authority exception',
             'DS': 'APM - Authority exception',
             'SHA PCR': 'APM - Authority exception',
+            'RSA PCR': 'APM - Authority exception',
             'ECC PCR': 'APM - Authority exception',
+            'ECDSA PCR': 'APM - Authority exception',
+        },
+    },
+    'esp32c5': {
+        'tee_violation': {
+            # NOTE: For ESP32-C5, access to the region before the SRAM does
+            # not generate exceptions due to TEE PMA configuration
+            '_remove': ['IRAM-W1'],
+        },
+        # NOTE: Only ESP32-C5 has the Key Manager and the HUK peripherals
+        'apm_violation': {
+            'HUK': 'Store access fault',
+            'KM PCR': 'APM - Space exception',
         },
     },
     'esp32c61': {
+        # NOTE: On ESP32-C61, MMU-spillover does not raise a CPU panic — the TEE
+        # test fills the bad mapping with a poison pattern and calls esp_restart().
+        # Verified separately in the pytest, so drop it from the panic-driven map.
+        'ree_isolation': {
+            '_remove': ['MMU-spillover'],
+        },
         # NOTE: ESP32-C61 does not support the following peripherals
         'apm_violation': {
-            '_remove': ['AES', 'HMAC', 'DS'],
+            # NOTE: ESP32-C61 has no AES, HMAC or MPI peripheral
+            '_remove': ['AES', 'HMAC', 'DS', 'RSA PCR'],
         },
     },
 }

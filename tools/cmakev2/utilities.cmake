@@ -7,6 +7,10 @@
 # used by toolchain CMake files.
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/deduplicate_flags.cmake)
 
+# __compiler_query is shared with cmakev1. The esp_common and xtensa
+# project_include.cmake files that call it are used by both build systems.
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/compiler_query.cmake)
+
 # Note: CMake does not support nested lists. The functions idf_die, idf_warn,
 # idf_msg, and idf_dbg use ARGV# values because this is the only way to prevent
 # arguments from being altered by CMake. ARGV and ARGN contain a flattened list
@@ -684,6 +688,31 @@ function(add_prefix var prefix)
 endfunction()
 
 #[[
+    idf_target_post_build_msg(<target> <line>...)
+
+    *target[in]*
+
+        Target to attach the post-build message to.
+
+    *line[in]*
+
+        Message lines to print after the target is built.
+
+    Add a post-build step to ``<target>`` that prints the given message lines.
+    The lines are joined with newlines, written to a file at configure time,
+    and printed at build time using a single ``cmake -E cat`` command.
+#]]
+function(idf_target_post_build_msg target)
+    string(MD5 hash "${ARGN}")
+    set(msg_file "${CMAKE_CURRENT_BINARY_DIR}/_post_build_msg_${target}_${hash}.txt")
+    list(JOIN ARGN "\n" msg)
+    file(WRITE "${msg_file}" "${msg}\n")
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E cat "${msg_file}"
+        VERBATIM)
+endfunction()
+
+#[[
     fail_target(<target> <line0> [<line>...])
 
     *target[in]*
@@ -778,7 +807,8 @@ endfunction()
 
 #[[
     target_add_binary_data(<target> <embed_file> <embed_type>
-                           [RENAME_TO <symbol>])
+                           [RENAME_TO <symbol>]
+                           [ALIGN <alignment>]
                            [DEPENDS <dependency>...])
 
     *target[in]*
@@ -798,6 +828,11 @@ endfunction()
         Use the given symbol name for the embedded data. If no symbol name is
         provided, the embed_file file name will be used instead.
 
+    *ALIGN[in,opt]*
+
+        Align the embedded data's start symbol to the given positive power
+        of two.
+
     *DEPENDS[in,opt]*
 
         List of additional dependencies for the generated file containing
@@ -808,16 +843,11 @@ endfunction()
     build process.
 #]]
 function(target_add_binary_data target embed_file embed_type)
-    cmake_parse_arguments(_ "" "RENAME_TO" "DEPENDS" ${ARGN})
+    cmake_parse_arguments(_ "" "RENAME_TO;ALIGN" "DEPENDS" ${ARGN})
     idf_build_get_property(build_dir BUILD_DIR)
     idf_build_get_property(idf_path IDF_PATH)
 
-    # The target_add_binary_data function is also called within the
-    # idf_component_include function, which is not executed in the component
-    # directory context. Therefore, ensure that the absolute path of the
-    # embedded file is resolved relative to the component directory.
-    idf_component_get_property(component_directory "${target}" COMPONENT_DIR)
-    get_filename_component(embed_file "${embed_file}" ABSOLUTE BASE_DIR "${component_directory}")
+    get_filename_component(embed_file "${embed_file}" ABSOLUTE)
 
     get_filename_component(name "${embed_file}" NAME)
     set(embed_srcfile "${build_dir}/${name}.S")
@@ -827,11 +857,24 @@ function(target_add_binary_data target embed_file embed_type)
         set(rename_to_arg -D "VARIABLE_BASENAME=${__RENAME_TO}")
     endif()
 
+    set(align_arg)
+    if(DEFINED __ALIGN)
+        if(NOT __ALIGN MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "ALIGN must be a positive integer")
+        endif()
+        math(EXPR alignment_mask "${__ALIGN} & (${__ALIGN} - 1)")
+        if(NOT alignment_mask EQUAL 0)
+            message(FATAL_ERROR "ALIGN must be a power of two")
+        endif()
+        set(align_arg -D "DATA_ALIGNMENT=${__ALIGN}")
+    endif()
+
     add_custom_command(OUTPUT "${embed_srcfile}"
         COMMAND "${CMAKE_COMMAND}"
         -D "DATA_FILE=${embed_file}"
         -D "SOURCE_FILE=${embed_srcfile}"
         ${rename_to_arg}
+        ${align_arg}
         -D "FILE_TYPE=${embed_type}"
         -P "${idf_path}/tools/cmake/scripts/data_file_embed_asm.cmake"
         MAIN_DEPENDENCY "${embed_file}"

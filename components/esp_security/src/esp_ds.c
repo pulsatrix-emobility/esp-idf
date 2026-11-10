@@ -42,6 +42,9 @@
 #include "hal/key_mgr_hal.h"
 #include "hal/key_mgr_ll.h"
 #endif
+#include "esp_log.h"
+
+#define TAG "esp_ds"
 
 /**
  * The vtask delay \c esp_ds_sign() is using while waiting for completion of the signing operation.
@@ -256,31 +259,38 @@ static void ds_acquire_enable(void)
 {
     esp_crypto_ds_lock_acquire();
 
-    // We also enable SHA and HMAC here. SHA is used by HMAC, HMAC is used by DS.
+    /* DS first: its reset also resets AES, SHA and MPI, so anything enabled
+       before it would be reset again here. */
+    esp_crypto_ds_enable_periph_clk(true);
     esp_crypto_hmac_enable_periph_clk(true);
     esp_crypto_sha_enable_periph_clk(true);
     esp_crypto_mpi_enable_periph_clk(true);
-    esp_crypto_ds_enable_periph_clk(true);
 
 #if SOC_KEY_MANAGER_DS_KEY_DEPLOY
     /*  Key Manager holds the key usage selector register(efuse vs own key).
         Thus, we need to enable the Key Manager peripheral clock to ensure
         that the key usage selector register is properly set.
+        Taken after the DS lock (SHA/AES + MPI) so the order matches HMAC/ECDSA:
+        sha_aes < mpi < key_manager.
      */
-    esp_crypto_key_mgr_enable_periph_clk(true);
+    esp_crypto_key_manager_lock_acquire();
+    /* Clock only: a full KM reset would drop the XTS-AES flash encryption
+       key-usage selector, and spi_flash DMA does not take the KM lock. */
+    esp_crypto_key_mgr_enable_periph_clk_no_reset(true);
 #endif /* SOC_KEY_MANAGER_DS_KEY_DEPLOY */
 }
 
 static void ds_disable_release(void)
 {
 #if SOC_KEY_MANAGER_DS_KEY_DEPLOY
-    esp_crypto_key_mgr_enable_periph_clk(false);
+    esp_crypto_key_mgr_enable_periph_clk_no_reset(false);
+    esp_crypto_key_manager_lock_release();
 #endif /* SOC_KEY_MANAGER_DS_KEY_DEPLOY */
 
-    esp_crypto_ds_enable_periph_clk(false);
     esp_crypto_mpi_enable_periph_clk(false);
     esp_crypto_sha_enable_periph_clk(false);
     esp_crypto_hmac_enable_periph_clk(false);
+    esp_crypto_ds_enable_periph_clk(false);
 
     esp_crypto_ds_lock_release();
 }
@@ -331,11 +341,12 @@ esp_err_t esp_ds_start_sign(const void *message,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (!(data->rsa_length == ESP_DS_RSA_1024
-            || data->rsa_length == ESP_DS_RSA_2048
-            || data->rsa_length == ESP_DS_RSA_3072
+    const uint32_t rsa_length = data->rsa_length;
+    if (!(rsa_length == ESP_DS_RSA_1024
+            || rsa_length == ESP_DS_RSA_2048
+            || rsa_length == ESP_DS_RSA_3072
 #if SOC_RSA_MAX_BIT_LEN == 4096
-            || data->rsa_length == ESP_DS_RSA_4096
+            || rsa_length == ESP_DS_RSA_4096
 #endif
          )) {
         return ESP_ERR_INVALID_ARG;
@@ -344,15 +355,23 @@ esp_err_t esp_ds_start_sign(const void *message,
     ds_acquire_enable();
 
 #if SOC_KEY_MANAGER_DS_KEY_DEPLOY
+#if CONFIG_SECURE_ENABLE_TEE
+    /* NOTE: Key Manager is not supported with ESP-TEE yet - the TEE owns it */
+    const bool key_mgr_avail = false;
+#else
+    const bool key_mgr_avail = key_mgr_ll_is_supported();
+#endif
+
     if (key_id == HMAC_KEY_KM) {
-        if (!key_mgr_ll_is_supported()) {
+        if (!key_mgr_avail) {
+            ESP_LOGE(TAG, "HMAC_KEY_KM requested but Key Manager peripheral is not supported on this chip");
             ds_disable_release();
-            assert(false && "Key manager is not supported");
+            return ESP_ERR_NOT_SUPPORTED;
         }
         key_mgr_hal_set_key_usage(ESP_KEY_MGR_DS_KEY, ESP_KEY_MGR_USE_OWN_KEY);
         ds_hal_set_key_source(DS_KEY_SOURCE_KEY_MGR);
     } else {
-        if (key_mgr_ll_is_supported()) {
+        if (key_mgr_avail) {
             key_mgr_hal_set_key_usage(ESP_KEY_MGR_DS_KEY, ESP_KEY_MGR_USE_EFUSE_KEY);
         }
         ds_hal_set_key_source(DS_KEY_SOURCE_EFUSE);
@@ -389,7 +408,7 @@ esp_err_t esp_ds_start_sign(const void *message,
         return ESP_ERR_NO_MEM;
     }
 
-    size_t rsa_len = (data->rsa_length + 1) * 4;
+    size_t rsa_len = (rsa_length + 1) * 4;
     ds_hal_write_private_key_params(data->c);
     ds_hal_configure_iv((uint32_t *)data->iv);
     ds_hal_write_message(message, rsa_len);
@@ -407,6 +426,14 @@ bool esp_ds_is_busy(void)
     return ds_hal_busy();
 }
 
+static void esp_ds_zeroize(void *buf, size_t len)
+{
+    volatile uint8_t *p = (volatile uint8_t *)buf;
+    for (size_t i = 0; i < len; i++) {
+        *p++ = 0;
+    }
+}
+
 esp_err_t esp_ds_finish_sign(void *signature, esp_ds_context_t *esp_ds_ctx)
 {
     if (!signature || !esp_ds_ctx) {
@@ -414,20 +441,31 @@ esp_err_t esp_ds_finish_sign(void *signature, esp_ds_context_t *esp_ds_ctx)
     }
 
     const esp_ds_data_t *data = (const esp_ds_data_t *)esp_ds_ctx->data;
-    unsigned rsa_len = (data->rsa_length + 1) * 4;
+    esp_err_t return_value = ESP_ERR_INVALID_ARG;
 
     while (ds_hal_busy()) { }
 
-    ds_signature_check_t sig_check_result = ds_hal_read_result((uint8_t *) signature, (size_t) rsa_len);
+    uint32_t rsa_length = data->rsa_length;
+    if (rsa_length == ESP_DS_RSA_1024
+            || rsa_length == ESP_DS_RSA_2048
+            || rsa_length == ESP_DS_RSA_3072
+#if SOC_DS_SIGNATURE_MAX_BIT_LEN == 4096
+            || rsa_length == ESP_DS_RSA_4096
+#endif
+       ) {
+        unsigned rsa_len = (rsa_length + 1) * 4;
 
-    esp_err_t return_value = ESP_OK;
+        ds_signature_check_t res = ds_hal_read_result((uint8_t *) signature, (size_t) rsa_len);
 
-    if (sig_check_result == DS_SIGNATURE_MD_FAIL || sig_check_result == DS_SIGNATURE_PADDING_AND_MD_FAIL) {
-        return_value = ESP_ERR_HW_CRYPTO_DS_INVALID_DIGEST;
-    }
-
-    if (sig_check_result == DS_SIGNATURE_PADDING_FAIL) {
-        return_value = ESP_ERR_HW_CRYPTO_DS_INVALID_PADDING;
+        if (res == DS_SIGNATURE_MD_FAIL || res == DS_SIGNATURE_PADDING_AND_MD_FAIL) {
+            esp_ds_zeroize(signature, rsa_len);
+            return_value = ESP_ERR_HW_CRYPTO_DS_INVALID_DIGEST;
+        } else if (res == DS_SIGNATURE_PADDING_FAIL) {
+            esp_ds_zeroize(signature, rsa_len);
+            return_value = ESP_ERR_HW_CRYPTO_DS_INVALID_PADDING;
+        } else if (res == DS_SIGNATURE_OK) {
+            return_value = ESP_OK;
+        }
     }
 
 #if !ESP_TEE_BUILD

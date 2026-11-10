@@ -267,7 +267,6 @@ bool bootloader_utility_load_partition_table(bootloader_state_t *bs)
 
     bootloader_munmap(partitions);
 
-    ESP_LOGI(TAG, "End of partition table");
     return true;
 }
 
@@ -787,7 +786,7 @@ static void load_image(const esp_image_metadata_t *image_data)
     }
 #endif
 
-    ESP_LOGI(TAG, "Disabling RNG early entropy source...");
+    ESP_LOGD(TAG, "Disabling RNG early entropy source...");
     bootloader_random_disable();
 
     /* Disable glitch reset after all the security checks are completed.
@@ -1051,6 +1050,17 @@ static void set_cache_and_start_app(
     Cache_Read_Disable(0);
     Cache_Flush(0);
 #else
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    // L1 is virtually tagged and keeps the external mappings. cache_hal_disable() drops L2
+    // only, so drop L1 instruction and data lines of the flash and PSRAM windows before it
+    // is disabled and the app mapping is installed. Do not include internal L2MEM in between.
+    cache_ll_invalidate_addr(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_ALL, CACHE_LL_ID_ALL,
+                             SOC_DRAM_FLASH_ADDRESS_LOW,
+                             SOC_DRAM_FLASH_ADDRESS_HIGH - SOC_DRAM_FLASH_ADDRESS_LOW);
+    cache_ll_invalidate_addr(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_ALL, CACHE_LL_ID_ALL,
+                             SOC_DRAM_PSRAM_ADDRESS_LOW,
+                             SOC_DRAM_PSRAM_ADDRESS_HIGH - SOC_DRAM_PSRAM_ADDRESS_LOW);
+#endif
     cache_hal_disable(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_ALL);
 #endif
 
@@ -1083,7 +1093,7 @@ static void set_cache_and_start_app(
     }
     //we use the MMU_LL_END_DROM_ENTRY_ID mmu entry as a map page for app to find the boot partition
     mmu_hal_map_region(0, MMU_TARGET_FLASH0, MMU_DROM_END_ENTRY_VADDR_FROM_VAL(mmu_page_size), drom_addr_aligned, mmu_page_size, &actual_mapped_len);
-    ESP_EARLY_LOGV(TAG, "mapped one page of the rodata, from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, MMU_LL_END_DROM_ENTRY_VADDR, actual_mapped_len);
+    ESP_EARLY_LOGV(TAG, "mapped one page of the rodata, from paddr=0x%08" PRIx32 " and vaddr=0x%08x, 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, MMU_LL_END_DROM_ENTRY_VADDR, actual_mapped_len);
 #endif
 
     //-----------------------MAP IROM--------------------------

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdatomic.h>
 #include "sys/queue.h"
 #include "esp_private/dma2d.h"
@@ -31,6 +32,17 @@ extern "C" {
 #define JPEG_INTR_ALLOC_FLAG              (ESP_INTR_FLAG_SHARED)
 
 #define JPEG_ALIGN_UP(num, align)         (((num) + ((align) - 1)) & ~((align) - 1))
+// Buffers fed to the 2D-DMA must be at least 16-byte aligned.
+#define JPEG_DMA2D_BUFFER_ALIGN           16
+
+// The JPEG codec cannot work with encrypted buffer, because it deals with macro block. When an
+// unencrypted PSRAM region is reserved (CONFIG_SPIRAM_ENC_EXEMPT), codec buffers
+// must come from it; otherwise use normal PSRAM.
+#if CONFIG_SPIRAM_ENC_EXEMPT
+#define JPEG_SPIRAM_ALLOC_CAPS            (MALLOC_CAP_SPIRAM_NO_ENC)
+#else
+#define JPEG_SPIRAM_ALLOC_CAPS            (MALLOC_CAP_SPIRAM)
+#endif
 
 // Use retention link only when the target supports sleep retention and PM is enabled
 #define JPEG_USE_RETENTION_LINK  (CONFIG_PM_ENABLE && CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP)
@@ -82,6 +94,7 @@ typedef struct {
     uint8_t mcux;                                               // the best value of minimum coding unit horizontal unit
     uint8_t mcuy;                                               // minimum coding unit vertical unit
     uint8_t qt_tbl_num;                                         // quantization table number
+    uint8_t qt_tbl_seen_mask;                                   // bit i set => qt_tbl[i] populated by a DQT entry
     uint32_t qt_tbl[JPEG_COMPONENT_NUMBER_MAX][JPEG_QUANTIZATION_TABLE_LEN];            // quantization table content [id]
     uint8_t nf;                                                 // number of frames
     uint8_t ci[JPEG_COMPONENT_NUMBER_MAX];                      // Component identifier.
@@ -150,7 +163,9 @@ typedef struct {
 
 typedef struct {
     uint8_t *header_buf;                           // Pointer to the header of jpeg header buffer
+    uint32_t header_buf_size;                      // Capacity of header_buf in bytes
     uint32_t header_len;                           // Record for header length
+    bool header_buf_overflow;                      // Set when emit exceeds header_buf_size
     uint32_t m_quantization_tables[2][JPEG_QUANTIZATION_TABLE_LEN];         // quantization tables
     uint8_t num_components;                        // number of components
     uint32_t origin_h;                             // horizontal of original picture

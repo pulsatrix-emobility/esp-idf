@@ -28,6 +28,7 @@
 
 #include "gdma_priv.h"
 #include "esp_memory_utils.h"
+#include "esp_private/esp_mspi_align.h"
 
 #define GDMA_INVALID_PERIPH_TRIG  (0x3F)
 #define SEARCH_REQUEST_RX_CHANNEL (1 << 0)
@@ -395,84 +396,104 @@ esp_err_t gdma_config_transfer(gdma_channel_handle_t dma_chan, const gdma_transf
     if (!dma_chan || !config) {
         return ESP_ERR_INVALID_ARG;
     }
+
     uint32_t max_data_burst_size = config->max_data_burst_size;
+    size_t int_mem_alignment = 1;
+    size_t ext_enc_mem_alignment = 1;
+    size_t ext_no_enc_mem_alignment = 1;
+
+    if (config->access_ext_mem) {
+#if (SOC_PSRAM_DMA_CAPABLE || SOC_DMA_CAN_ACCESS_FLASH) && SOC_AHB_GDMA_VERSION != 1
+        // Under Flash Encryption/PSRAM ECC, DMA must use MSPI-aligned bursts.
+        size_t mspi_alignment = esp_mspi_get_alignment(NULL);
+        if (mspi_alignment > 1) {
+            if (max_data_burst_size < mspi_alignment) {
+                max_data_burst_size = mspi_alignment;
+                ESP_LOGW(TAG, "max_data_burst_size is less than mspi_alignment, adjusted to %d", max_data_burst_size);
+            }
+        }
+#endif
+#if GDMA_LL_GET(AHB_PSRAM_CAPABLE) || GDMA_LL_GET(AXI_PSRAM_CAPABLE)
+        ESP_RETURN_ON_FALSE(max_data_burst_size <= GDMA_LL_MAX_BURST_SIZE_PSRAM, ESP_ERR_INVALID_ARG,
+                            TAG, "max_data_burst_size must not exceed %d when accessing external memory", GDMA_LL_MAX_BURST_SIZE_PSRAM);
+#endif
+    }
     if (max_data_burst_size) {
         // burst size must be power of 2
         ESP_RETURN_ON_FALSE((max_data_burst_size & (max_data_burst_size - 1)) == 0, ESP_ERR_INVALID_ARG,
                             TAG, "invalid max_data_burst_size: %"PRIu32, max_data_burst_size);
-#if GDMA_LL_GET(AHB_PSRAM_CAPABLE) || GDMA_LL_GET(AXI_PSRAM_CAPABLE)
-        if (config->access_ext_mem) {
-            ESP_RETURN_ON_FALSE(max_data_burst_size <= GDMA_LL_MAX_BURST_SIZE_PSRAM, ESP_ERR_INVALID_ARG,
-                                TAG, "max_data_burst_size must not exceed %d when accessing external memory", GDMA_LL_MAX_BURST_SIZE_PSRAM);
-        }
-#endif
     }
-    gdma_pair_t *pair = dma_chan->pair;
-    gdma_group_t *group = pair->group;
-    gdma_hal_context_t *hal = &group->hal;
-    size_t int_mem_alignment = 1;
-    size_t ext_mem_alignment = 1;
 
-    // always enable descriptor burst as the descriptor is always word aligned and is in the internal SRAM
-    bool en_desc_burst = true;
     bool en_data_burst = max_data_burst_size > 0;
-
-    // There's auto alignment for AHB GDMA version 1, so we don't need to do anything here
-    // While, for AHB GDMA version 2 and AXI GDMA, we need to ensure the alignment by software
-#if (SOC_PSRAM_DMA_CAPABLE || SOC_DMA_CAN_ACCESS_FLASH) && SOC_AHB_GDMA_VERSION != 1
-    // if MSPI encryption is enabled, and DMA wants to read/write external memory
-    if (esp_efuse_is_flash_encryption_enabled() && config->access_ext_mem) {
-        uint32_t enc_mem_alignment = SOC_MEMSPI_ENCRYPTION_ALIGNMENT;
-        // when DMA access the encrypted external memory, extra alignment is needed for external memory
-        ext_mem_alignment = MAX(ext_mem_alignment, enc_mem_alignment);
-        if (max_data_burst_size < enc_mem_alignment) {
-            ESP_LOGW(TAG, "GDMA channel access encrypted external memory, adjust burst size to %d", enc_mem_alignment);
-            en_data_burst = true;
-            max_data_burst_size = enc_mem_alignment;
-        }
-    }
-#endif // SOC_PSRAM_DMA_CAPABLE || SOC_DMA_CAN_ACCESS_FLASH
-
-    gdma_hal_enable_burst(hal, pair->pair_id, dma_chan->direction, en_data_burst, en_desc_burst);
     if (en_data_burst) {
-        gdma_hal_set_burst_size(hal, pair->pair_id, dma_chan->direction, max_data_burst_size);
 #if CONFIG_GDMA_ENABLE_WEIGHTED_ARBITRATION
         // due to hardware limitation, if weighted arbitration is enabled, the data must be aligned to burst size
         int_mem_alignment = MAX(int_mem_alignment, max_data_burst_size);
-        ext_mem_alignment = MAX(ext_mem_alignment, max_data_burst_size);
+        ext_enc_mem_alignment = MAX(ext_enc_mem_alignment, max_data_burst_size);
+        ext_no_enc_mem_alignment = MAX(ext_no_enc_mem_alignment, max_data_burst_size);
 #endif
     }
 
 #if GDMA_LL_AHB_RX_BURST_NEEDS_ALIGNMENT
     if (en_data_burst && dma_chan->direction == GDMA_CHANNEL_DIRECTION_RX) {
         int_mem_alignment = MAX(int_mem_alignment, 4);
-        ext_mem_alignment = MAX(ext_mem_alignment, max_data_burst_size);
+        ext_enc_mem_alignment = MAX(ext_enc_mem_alignment, max_data_burst_size);
+        ext_no_enc_mem_alignment = MAX(ext_no_enc_mem_alignment, max_data_burst_size);
     }
 #endif
 
-    // if the channel is not allowed to access external memory, set a super big (meaningless) alignment value
-    // so when the upper layer checks the alignment with an external buffer, the check should fail
-    if (!config->access_ext_mem) {
-        ext_mem_alignment = BIT(31);
+    if (config->access_ext_mem) {
+        // ext_enc includes MSPI encryption/ECC constraints; ext_no_enc keeps DMA-only constraints.
+        size_t mspi_alignment = esp_mspi_get_alignment(NULL);
+        ext_enc_mem_alignment = MAX(ext_enc_mem_alignment, mspi_alignment);
+    } else {
+        // if the channel is not allowed to access external memory, set a super big (meaningless) alignment value
+        // so when the upper layer checks the alignment with an external buffer, the check should fail
+        ext_enc_mem_alignment = BIT(31);
+        ext_no_enc_mem_alignment = BIT(31);
+    }
+
+    gdma_pair_t *pair = dma_chan->pair;
+    gdma_group_t *group = pair->group;
+    gdma_hal_context_t *hal = &group->hal;
+
+    // always enable descriptor burst as the descriptor is always word aligned and is in the internal SRAM
+    bool en_desc_burst = true;
+    gdma_hal_enable_burst(hal, pair->pair_id, dma_chan->direction, en_data_burst, en_desc_burst);
+    if (en_data_burst) {
+        gdma_hal_set_burst_size(hal, pair->pair_id, dma_chan->direction, max_data_burst_size);
     }
 
     dma_chan->int_mem_alignment = int_mem_alignment;
-    dma_chan->ext_mem_alignment = ext_mem_alignment;
+    dma_chan->ext_enc_mem_alignment = ext_enc_mem_alignment;
+    dma_chan->ext_no_enc_mem_alignment = ext_no_enc_mem_alignment;
     return ESP_OK;
 }
 
-esp_err_t gdma_get_alignment_constraints(gdma_channel_handle_t dma_chan, size_t *int_mem_alignment, size_t *ext_mem_alignment)
+esp_err_t gdma_get_channel_alignment_constraints(gdma_channel_handle_t dma_chan, gdma_channel_alignment_info_t *info)
 {
-    if (!dma_chan) {
+    if (!dma_chan || !info) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (int_mem_alignment) {
-        *int_mem_alignment = dma_chan->int_mem_alignment;
-    }
-    if (ext_mem_alignment) {
-        *ext_mem_alignment = dma_chan->ext_mem_alignment;
-    }
+    info->int_mem_alignment = dma_chan->int_mem_alignment;
+    info->ext_enc_mem_alignment = dma_chan->ext_enc_mem_alignment;
+    info->ext_no_enc_mem_alignment = dma_chan->ext_no_enc_mem_alignment;
     return ESP_OK;
+}
+
+size_t gdma_get_buffer_alignment_constraint(gdma_channel_handle_t dma_chan, const void *buffer)
+{
+    if (!dma_chan || !buffer) {
+        return BIT(31);
+    }
+
+    // Internal SRAM only needs the DMA-side constraint; MSPI rules apply to PSRAM/Flash.
+    if (!(esp_ptr_external_ram(buffer) || esp_ptr_in_drom(buffer))) {
+        return dma_chan->int_mem_alignment;
+    }
+
+    size_t mspi_alignment = esp_mspi_get_alignment(buffer);
+    return MAX(dma_chan->ext_no_enc_mem_alignment, mspi_alignment);
 }
 
 esp_err_t gdma_apply_strategy(gdma_channel_handle_t dma_chan, const gdma_strategy_config_t *config)
@@ -526,6 +547,12 @@ esp_err_t gdma_register_tx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
     gdma_group_t *group = pair->group;
     gdma_hal_context_t *hal = &group->hal;
     gdma_tx_channel_t *tx_chan = __containerof(dma_chan, gdma_tx_channel_t, base);
+    bool link_switch_event_supported = gdma_hal_is_tx_link_switch_event_supported(hal);
+
+    if (cbs->on_link_switch) {
+        ESP_RETURN_ON_FALSE(link_switch_event_supported,
+                            ESP_ERR_NOT_SUPPORTED, TAG, "on_link_switch not supported");
+    }
 
     if (dma_chan->flags.isr_cache_safe) {
         if (cbs->on_trans_eof) {
@@ -535,6 +562,10 @@ esp_err_t gdma_register_tx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
         if (cbs->on_descr_err) {
             ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_descr_err), ESP_ERR_INVALID_ARG,
                                 TAG, "on_descr_err not in IRAM");
+        }
+        if (cbs->on_link_switch) {
+            ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_link_switch), ESP_ERR_INVALID_ARG,
+                                TAG, "on_link_switch not in IRAM");
         }
         if (user_data) {
             ESP_RETURN_ON_FALSE(esp_ptr_internal(user_data), ESP_ERR_INVALID_ARG,
@@ -547,8 +578,16 @@ esp_err_t gdma_register_tx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
 
     // enable/disable GDMA interrupt events for TX channel
     esp_os_enter_critical(&pair->spinlock);
-    gdma_hal_enable_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, GDMA_LL_EVENT_TX_EOF, cbs->on_trans_eof != NULL);
-    gdma_hal_enable_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, GDMA_LL_EVENT_TX_DESC_ERROR, cbs->on_descr_err != NULL);
+    gdma_hal_enable_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, GDMA_LL_EVENT_TX_EOF,
+                         cbs->on_trans_eof != NULL);
+    gdma_hal_enable_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, GDMA_LL_EVENT_TX_DESC_ERROR,
+                         cbs->on_descr_err != NULL);
+#if GDMA_LL_EVENT_TX_LINK_SWITCH
+    if (link_switch_event_supported) {
+        gdma_hal_enable_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, GDMA_LL_EVENT_TX_LINK_SWITCH,
+                             cbs->on_link_switch != NULL);
+    }
+#endif // GDMA_LL_EVENT_TX_LINK_SWITCH
     esp_os_exit_critical(&pair->spinlock);
 
     memcpy(&tx_chan->cbs, cbs, sizeof(gdma_tx_event_callbacks_t));
@@ -670,6 +709,30 @@ esp_err_t gdma_reset(gdma_channel_handle_t dma_chan)
     esp_os_enter_critical_safe(&dma_chan->spinlock);
     gdma_hal_reset(hal, pair->pair_id, dma_chan->direction);
     esp_os_exit_critical_safe(&dma_chan->spinlock);
+
+    return ESP_OK;
+}
+
+esp_err_t gdma_request_link_switch_event(gdma_channel_handle_t dma_tx_chan)
+{
+    if (!dma_tx_chan || dma_tx_chan->direction != GDMA_CHANNEL_DIRECTION_TX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    gdma_pair_t *pair = dma_tx_chan->pair;
+    gdma_group_t *group = pair->group;
+    gdma_hal_context_t *hal = &group->hal;
+    gdma_tx_channel_t *tx_chan = __containerof(dma_tx_chan, gdma_tx_channel_t, base);
+
+    if (!gdma_hal_is_tx_link_switch_event_supported(hal)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (!tx_chan->cbs.on_link_switch) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_os_enter_critical_safe(&dma_tx_chan->spinlock);
+    gdma_hal_request_link_switch_event(hal, pair->pair_id, dma_tx_chan->direction);
+    esp_os_exit_critical_safe(&dma_tx_chan->spinlock);
 
     return ESP_OK;
 }
@@ -829,18 +892,20 @@ static esp_err_t gdma_del_tx_channel(gdma_channel_t *dma_channel)
     int group_id = group->group_id;
     gdma_tx_channel_t *tx_chan = __containerof(dma_channel, gdma_tx_channel_t, base);
     esp_os_enter_critical(&pair->spinlock);
-    pair->tx_chan = NULL;
-    pair->occupy_code &= ~SEARCH_REQUEST_TX_CHANNEL;
+    gdma_hal_enable_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_TX, UINT32_MAX, false);
+    gdma_hal_clear_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_TX, UINT32_MAX);
     esp_os_exit_critical(&pair->spinlock);
 
     if (dma_channel->intr) {
-        esp_intr_free(dma_channel->intr);
-        esp_os_enter_critical(&pair->spinlock);
-        gdma_hal_enable_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_TX, UINT32_MAX, false); // disable all interrupt events
-        gdma_hal_clear_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_TX, UINT32_MAX); // clear all pending events
-        esp_os_exit_critical(&pair->spinlock);
+        ESP_RETURN_ON_ERROR(esp_intr_free(dma_channel->intr), TAG, "free TX channel interrupt failed");
+        dma_channel->intr = NULL;
         ESP_LOGV(TAG, "uninstall interrupt service for tx channel (%d,%d)", group_id, pair_id);
     }
+
+    esp_os_enter_critical(&pair->spinlock);
+    pair->tx_chan = NULL;
+    pair->occupy_code &= ~SEARCH_REQUEST_TX_CHANNEL;
+    esp_os_exit_critical(&pair->spinlock);
 
     free(tx_chan);
     ESP_LOGV(TAG, "del tx channel (%d,%d)", group_id, pair_id);
@@ -864,18 +929,20 @@ static esp_err_t gdma_del_rx_channel(gdma_channel_t *dma_channel)
     int group_id = group->group_id;
     gdma_rx_channel_t *rx_chan = __containerof(dma_channel, gdma_rx_channel_t, base);
     esp_os_enter_critical(&pair->spinlock);
-    pair->rx_chan = NULL;
-    pair->occupy_code &= ~SEARCH_REQUEST_RX_CHANNEL;
+    gdma_hal_enable_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_RX, UINT32_MAX, false);
+    gdma_hal_clear_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_RX, UINT32_MAX);
     esp_os_exit_critical(&pair->spinlock);
 
     if (dma_channel->intr) {
-        esp_intr_free(dma_channel->intr);
-        esp_os_enter_critical(&pair->spinlock);
-        gdma_hal_enable_intr(hal, pair_id, GDMA_CHANNEL_DIRECTION_RX, UINT32_MAX, false); // disable all interrupt events
-        gdma_hal_clear_intr(hal, pair->pair_id, GDMA_CHANNEL_DIRECTION_RX, UINT32_MAX); // clear all pending events
-        esp_os_exit_critical(&pair->spinlock);
+        ESP_RETURN_ON_ERROR(esp_intr_free(dma_channel->intr), TAG, "free RX channel interrupt failed");
+        dma_channel->intr = NULL;
         ESP_LOGV(TAG, "uninstall interrupt service for rx channel (%d,%d)", group_id, pair_id);
     }
+
+    esp_os_enter_critical(&pair->spinlock);
+    pair->rx_chan = NULL;
+    pair->occupy_code &= ~SEARCH_REQUEST_RX_CHANNEL;
+    esp_os_exit_critical(&pair->spinlock);
 
     free(rx_chan);
     ESP_LOGV(TAG, "del rx channel (%d,%d)", group_id, pair_id);
@@ -965,6 +1032,12 @@ void gdma_default_tx_isr(void *args)
     if ((intr_status & GDMA_LL_EVENT_TX_DESC_ERROR) && tx_chan->cbs.on_descr_err) {
         need_yield |= tx_chan->cbs.on_descr_err(&tx_chan->base, NULL, tx_chan->user_data);
     }
+#if GDMA_LL_EVENT_TX_LINK_SWITCH
+    if (gdma_hal_is_tx_link_switch_event_supported(hal) &&
+            (intr_status & GDMA_LL_EVENT_TX_LINK_SWITCH) && tx_chan->cbs.on_link_switch) {
+        need_yield |= tx_chan->cbs.on_link_switch(&tx_chan->base, NULL, tx_chan->user_data);
+    }
+#endif // GDMA_LL_EVENT_TX_LINK_SWITCH
     if (need_yield) {
         portYIELD_FROM_ISR();
     }
@@ -987,7 +1060,7 @@ static esp_err_t gdma_install_rx_interrupt(gdma_rx_channel_t *rx_chan)
 #endif
     intr_handle_t intr = NULL;
     ret = esp_intr_alloc_intrstatus(gdma_periph_signals.groups[group->group_id].pairs[pair_id].rx_irq_id, isr_flags,
-                                    gdma_hal_get_intr_status_reg(hal, pair_id, GDMA_CHANNEL_DIRECTION_RX), GDMA_LL_RX_EVENT_MASK,
+                                    gdma_hal_get_intr_status_reg(hal, pair_id, GDMA_CHANNEL_DIRECTION_RX), hal->priv_data->rx_event_mask,
                                     gdma_default_rx_isr, rx_chan, &intr);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "alloc interrupt failed");
     rx_chan->base.intr = intr;
@@ -1019,7 +1092,7 @@ static esp_err_t gdma_install_tx_interrupt(gdma_tx_channel_t *tx_chan)
 #endif
     intr_handle_t intr = NULL;
     ret = esp_intr_alloc_intrstatus(gdma_periph_signals.groups[group->group_id].pairs[pair_id].tx_irq_id, isr_flags,
-                                    gdma_hal_get_intr_status_reg(hal, pair_id, GDMA_CHANNEL_DIRECTION_TX), GDMA_LL_TX_EVENT_MASK,
+                                    gdma_hal_get_intr_status_reg(hal, pair_id, GDMA_CHANNEL_DIRECTION_TX), hal->priv_data->tx_event_mask,
                                     gdma_default_tx_isr, tx_chan, &intr);
     ESP_GOTO_ON_ERROR(ret, err, TAG, "alloc interrupt failed");
     tx_chan->base.intr = intr;

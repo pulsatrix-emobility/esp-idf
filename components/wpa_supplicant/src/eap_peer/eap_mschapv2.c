@@ -367,7 +367,7 @@ eap_mschapv2_success(struct eap_sm *sm,
 static int eap_mschapv2_failure_txt(struct eap_sm *sm,
 				    struct eap_mschapv2_data *data, char *txt)
 {
-	char *pos = "";
+	const char *pos = "";
 	int retry = 1;
 	struct eap_peer_config *config = eap_get_config(sm);
 
@@ -398,9 +398,11 @@ static int eap_mschapv2_failure_txt(struct eap_sm *sm,
 	}
 
 	if (pos && os_strncmp(pos, "C=", 2) == 0) {
+		const char *end;
 		int hex_len;
 		pos += 2;
-		hex_len = (char *)os_strchr(pos, ' ') - (char *)pos;
+		end = os_strchr(pos, ' ');
+		hex_len = end ? (int)(end - pos) : -1;
 		if (hex_len == PASSWD_CHANGE_CHAL_LEN * 2) {
 			if (hexstr2bin(pos, data->passwd_change_challenge,
 				       PASSWD_CHANGE_CHAL_LEN)) {

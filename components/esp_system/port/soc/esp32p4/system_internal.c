@@ -33,6 +33,13 @@
 #include "hal/dw_gdma_ll.h"
 #include "hal/dma2d_ll.h"
 #include "hal/efuse_hal.h"
+#include "esp_memory_utils.h"
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD && CONFIG_COMPILER_ENABLE_RISCV_ZCMP
+#include "esp_private/hw_stack_guard.h"
+#endif
+
+#define ALIGN_DOWN(val, align)  ((val) & ~((align) - 1))
+extern int _bss_end;
 
 void esp_system_reset_modules_on_exit(void)
 {
@@ -69,6 +76,12 @@ void esp_system_reset_modules_on_exit(void)
         }
     }
 
+    // The DMA inside SDMMC Host needs to be reset to avoid memory corruption after restart.
+    // Reset it before the peripheral resets that follow: if its DMA is still active when those
+    // reset, the SDMMC DMA cannot access memory after the CPU reset, until a system reset.
+    SET_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_SDMMC);
+    CLEAR_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_SDMMC);
+
     // Set Peripheral clk rst
     SET_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN0_REG, HP_SYS_CLKRST_REG_RST_EN_MSPI_AXI);
     SET_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN0_REG, HP_SYS_CLKRST_REG_RST_EN_DUAL_MSPI_AXI);
@@ -99,9 +112,11 @@ void esp_system_reset_modules_on_exit(void)
     CLEAR_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN2_REG, HP_SYS_CLKRST_REG_RST_EN_ADC);
     CLEAR_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN2_REG, HP_SYS_CLKRST_REG_RST_EN_H264);
 
-    // The DMA inside SDMMC Host needs to be reset to avoid memory corruption after restart.
-    SET_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_SDMMC);
-    CLEAR_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_SDMMC);
+    // Reset the EMAC DMA too: its descriptor ring and receive buffers live in the
+    // heap, so a receive left running across a restart writes incoming frames
+    // into memory the next boot has already handed out.
+    SET_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_EMAC);
+    CLEAR_PERI_REG_MASK(LP_CLKRST_HP_SDMMC_EMAC_RST_CTRL_REG, LP_CLKRST_RST_EN_EMAC);
 
     // Reset crypto peripherals. This ensures a clean state for the crypto peripherals after a CPU restart
     // and hence avoiding any possibility with crypto failure in ROM security workflows.
@@ -123,6 +138,7 @@ void esp_system_reset_modules_on_exit(void)
     CLEAR_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN2_REG, HP_SYS_CLKRST_REG_RST_EN_KM);
     CLEAR_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN2_REG, HP_SYS_CLKRST_REG_RST_EN_RSA);
     CLEAR_PERI_REG_MASK(HP_SYS_CLKRST_HP_RST_EN2_REG, HP_SYS_CLKRST_REG_RST_EN_SHA);
+    CLEAR_PERI_REG_MASK(HP_SYSTEM_ECC_PD_CTRL_REG, HP_SYSTEM_ECC_MEM_FORCE_PD);
 
 #if CONFIG_ESP32P4_REV_MIN_FULL < 101
     if (efuse_hal_chip_revision() < 101) {
@@ -149,42 +165,9 @@ void esp_system_reset_modules_on_exit(void)
 #endif
 }
 
-/* "inner" restart function for after RTOS, interrupts & anything else on this
- * core are already stopped. Stalls other core, resets hardware,
- * triggers restart.
-*/
-void esp_restart_noos(void)
+static void IRAM_ATTR __attribute__((noinline, noreturn)) esp_restart_noos_inner(void)
 {
-    // Disable interrupts
-    rv_utils_intr_global_disable();
-    // Enable RTC watchdog for 1 second
-    wdt_hal_context_t rtc_wdt_ctx;
-    wdt_hal_init(&rtc_wdt_ctx, WDT_RWDT, 0, false);
-    uint32_t stage_timeout_ticks = (uint32_t)(1000ULL * rtc_clk_slow_freq_get_hz() / 1000ULL);
-    wdt_hal_write_protect_disable(&rtc_wdt_ctx);
-    wdt_hal_config_stage(&rtc_wdt_ctx, WDT_STAGE0, stage_timeout_ticks, WDT_STAGE_ACTION_RESET_SYSTEM);
-    wdt_hal_config_stage(&rtc_wdt_ctx, WDT_STAGE1, stage_timeout_ticks, WDT_STAGE_ACTION_RESET_RTC);
-    //Enable flash boot mode so that flash booting after restart is protected by the RTC WDT.
-    wdt_hal_set_flashboot_en(&rtc_wdt_ctx, true);
-    wdt_hal_write_protect_enable(&rtc_wdt_ctx);
-
     const uint32_t core_id = esp_cpu_get_core_id();
-#if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
-    const uint32_t other_core_id = (core_id == 0) ? 1 : 0;
-    esp_cpu_reset(other_core_id);
-    esp_cpu_stall(other_core_id);
-#endif
-
-    // Disable TG0/TG1 watchdogs
-    wdt_hal_context_t wdt0_context = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
-    wdt_hal_write_protect_disable(&wdt0_context);
-    wdt_hal_disable(&wdt0_context);
-    wdt_hal_write_protect_enable(&wdt0_context);
-
-    wdt_hal_context_t wdt1_context = {.inst = WDT_MWDT1, .mwdt_dev = &TIMERG1};
-    wdt_hal_write_protect_disable(&wdt1_context);
-    wdt_hal_disable(&wdt1_context);
-    wdt_hal_write_protect_enable(&wdt1_context);
 
     // Disable cache
 #if CONFIG_SPIRAM
@@ -229,4 +212,64 @@ void esp_restart_noos(void)
 #endif
 
     ESP_INFINITE_LOOP();
+}
+
+/* "inner" restart function for after RTOS, interrupts & anything else on this
+ * core are already stopped. Stalls other core, resets hardware,
+ * triggers restart.
+*/
+void esp_restart_noos(void)
+{
+    // Disable interrupts
+    rv_utils_intr_global_disable();
+#if SOC_RTC_WDT_SUPPORTED
+    // Enable RTC watchdog for 1 second
+    wdt_hal_context_t rtc_wdt_ctx;
+    wdt_hal_init(&rtc_wdt_ctx, WDT_RWDT, 0, false);
+    uint32_t stage_timeout_ticks = (uint32_t)(1000ULL * rtc_clk_slow_freq_get_hz() / 1000ULL);
+    wdt_hal_write_protect_disable(&rtc_wdt_ctx);
+    wdt_hal_config_stage(&rtc_wdt_ctx, WDT_STAGE0, stage_timeout_ticks, WDT_STAGE_ACTION_RESET_SYSTEM);
+    wdt_hal_config_stage(&rtc_wdt_ctx, WDT_STAGE1, stage_timeout_ticks, WDT_STAGE_ACTION_RESET_RTC);
+    //Enable flash boot mode so that flash booting after restart is protected by the RTC WDT.
+    wdt_hal_set_flashboot_en(&rtc_wdt_ctx, true);
+    wdt_hal_write_protect_enable(&rtc_wdt_ctx);
+#endif /* SOC_RTC_WDT_SUPPORTED */
+
+#if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
+    const uint32_t core_id = esp_cpu_get_core_id();
+    const uint32_t other_core_id = (core_id == 0) ? 1 : 0;
+    esp_cpu_reset(other_core_id);
+    esp_cpu_stall(other_core_id);
+#endif
+
+#if SOC_WDT_SUPPORTED
+    // Disable TG0/TG1 watchdogs
+    wdt_hal_context_t wdt0_context = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
+    wdt_hal_write_protect_disable(&wdt0_context);
+    wdt_hal_disable(&wdt0_context);
+    wdt_hal_write_protect_enable(&wdt0_context);
+
+    wdt_hal_context_t wdt1_context = {.inst = WDT_MWDT1, .mwdt_dev = &TIMERG1};
+    wdt_hal_write_protect_disable(&wdt1_context);
+    wdt_hal_disable(&wdt1_context);
+    wdt_hal_write_protect_enable(&wdt1_context);
+#endif /* SOC_WDT_SUPPORTED */
+
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+        // If stack is in external RAM (CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM), switch SP to
+        // internal RAM before disabling the cache to avoid a "Cache disabled but cached memory
+        // region accessed" crash.
+#if CONFIG_ESP_SYSTEM_HW_STACK_GUARD && CONFIG_COMPILER_ENABLE_RISCV_ZCMP
+        // Stop hw stack guard before changing SP: new SP is outside task stack bounds.
+        // rtc_clk_cpu_set_to_default_config() (called later) uses vPortEnterCritical() via
+        // ENABLE_CLK_GATE, which can trigger DIG-661 (assist-debug interrupt with mstatus.mie=0).
+        esp_hw_stack_guard_monitor_stop();
+#endif
+        uint32_t new_sp = ALIGN_DOWN((uint32_t)&_bss_end, 16);
+        rv_utils_set_sp((void *)new_sp);
+    }
+#endif
+
+    esp_restart_noos_inner();
 }

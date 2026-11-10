@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "esp_private/dma2d.h"
 #include "hal/dma2d_types.h"
+#include "hal/dma2d_ll.h"
 #include "hal/ppa_types.h"
 #include "hal/ppa_hal.h"
 #include "esp_pm.h"
@@ -59,7 +60,7 @@ struct ppa_engine_t {
     ppa_platform_t *platform;                     // PPA driver platform
     ppa_engine_type_t type;                       // Type of the PPA engine
     portMUX_TYPE spinlock;                        // Engine level spinlock
-    SemaphoreHandle_t sem;                        // Semaphore for whether the engine is processing a transaction
+    bool busy;                                    // Whether the engine has a transaction running or queued; only read/written under `spinlock`
     STAILQ_HEAD(trans, ppa_trans_s) trans_stailq; // link head of pending transactions for the PPA engine
 #if CONFIG_PM_ENABLE
     esp_pm_lock_handle_t pm_lock;                 // Power management lock
@@ -81,6 +82,9 @@ typedef struct ppa_blend_engine_t {
 
 typedef struct {
     ppa_engine_type_t engine;                     // Engine type
+    struct {
+        uint32_t allow_pd: 1;                     // If set, engine allows the power domain to be powered off when system enters sleep mode
+    } flags;                                      // Configuration flags
 } ppa_engine_config_t;
 
 /******************************** CLIENT *************************************/
@@ -207,6 +211,7 @@ typedef struct ppa_trans_s {
     SemaphoreHandle_t sem;                        // Semaphore to block when the transaction has not finished
     ppa_client_t *client;                         // Pointer to the client who requested the transaction
     void *user_data;                              // User registered event data (per transaction)
+    bool blocking;                                // Set before enqueue when the caller will wait on `sem`; ISR must not recycle until that wait returns
 } ppa_trans_t;
 
 typedef struct {
@@ -246,6 +251,9 @@ struct ppa_platform_t {
     uint32_t blend_engine_ref_count;            // Reference count used to protect PPA blending engine acquire and release
     size_t buf_alignment_size;                  // Alignment requirement for the outgoing buffer addr and size to satisfy cache line size
     uint32_t dma_desc_mem_size;                 // Alignment requirement for the 2D-DMA descriptor to satisfy cache line size
+    struct {
+        uint32_t allow_pd: 1;                   // If set, driver allows the power domain to be powered off when system enters sleep mode
+    } flags;                                    // Configuration flags
 };
 
 #ifdef __cplusplus

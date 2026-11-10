@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -223,14 +223,17 @@ static void s_mspi_ecc_show_info(void)
     uint32_t page_size = psram_ctrlr_ll_get_page_size(PSRAM_CTRLR_LL_MSPI_ID_0);
     ESP_EARLY_LOGV(TAG, "ECC page size: %d", page_size);
 }
+#endif
 
+#if PSRAM_CTRLR_LL_PMS_INT_SUPPORTED
 /**
- * Enable error correcting code feature
+ * Configure error correcting code feature
  *
  * Can add an input parameter for selecting ECC mode if needed
  */
 static void s_configure_psram_ecc(void)
 {
+#if CONFIG_SPIRAM_ECC_ENABLE
     psram_ctrlr_ll_set_ecc_mode(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_LL_ECC_MODE_16TO18);
     psram_ctrlr_ll_enable_skip_page_corner(PSRAM_CTRLR_LL_MSPI_ID_0, true);
     psram_ctrlr_ll_enable_ecc_addr_conversion(PSRAM_CTRLR_LL_MSPI_ID_0, true);
@@ -246,6 +249,14 @@ static void s_configure_psram_ecc(void)
     psram_ctrlr_ll_enable_pms_region_ecc(PSRAM_CTRLR_LL_MSPI_ID_0, 0, true);
     ESP_EARLY_LOGI(TAG, "ECC is enabled");
     s_mspi_ecc_show_info();
+#else
+    psram_ctrlr_ll_set_ecc_mode(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_LL_ECC_MODE_16TO17);
+    psram_ctrlr_ll_enable_ecc_addr_conversion(PSRAM_CTRLR_LL_MSPI_ID_0, false);
+    psram_ctrlr_ll_set_pms_region_start_addr(PSRAM_CTRLR_LL_MSPI_ID_0, 0, 0);
+    psram_ctrlr_ll_set_pms_region_size(PSRAM_CTRLR_LL_MSPI_ID_0, 0, 4096);
+    psram_ctrlr_ll_set_pms_region_attr(PSRAM_CTRLR_LL_MSPI_ID_0, 0, PSRAM_CTRLR_LL_PMS_ATTR_WRITABLE | PSRAM_CTRLR_LL_PMS_ATTR_READABLE);
+    psram_ctrlr_ll_enable_pms_region_ecc(PSRAM_CTRLR_LL_MSPI_ID_0, 0, false);
+#endif
 }
 #endif
 
@@ -340,13 +351,13 @@ esp_err_t esp_psram_impl_enable(void)
 {
     psram_gpio_config();
     psram_set_cs_timing();
-#if CONFIG_SPIRAM_ECC_ENABLE
+#if PSRAM_CTRLR_LL_PMS_INT_SUPPORTED
     s_configure_psram_ecc();
 #endif
 
 #if SOC_SPI_MEM_SUPPORT_TIMING_TUNING
-    //enter MSPI slow mode to init PSRAM device registers
-    mspi_timing_enter_low_speed_mode(true);
+    //enter MSPI slow mode to init PSRAM device registers (early init: see mspi_timing_enter_low_speed_early)
+    mspi_timing_enter_low_speed_early();
 #else
     s_config_psram_clock(true);
 #endif // SOC_SPI_MEM_SUPPORT_TIMING_TUNING
@@ -413,7 +424,7 @@ esp_err_t esp_psram_impl_enable(void)
     //Configure SPI0 PSRAM related SPI Phases
     config_psram_spi_phases();
     //Back to the high speed mode. Flash/PSRAM clocks are set to the clock that user selected. SPI0/1 registers are all set correctly
-    mspi_timing_enter_high_speed_mode(true);
+    mspi_timing_enter_high_speed_early();
 #else
     s_config_psram_clock(false);
     //Configure SPI0 PSRAM related SPI Phases
@@ -432,6 +443,20 @@ static void config_psram_spi_phases(void)
     psram_ctrlr_ll_set_addr_bitlen(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_QUAD_ADDR_LENGTH);
     psram_ctrlr_ll_set_rd_dummy(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_QUAD_FAST_READ_QUAD_DUMMY);
     psram_ctrlr_ll_set_cs_pin(PSRAM_CTRLR_LL_MSPI_ID_0, PSRAM_LL_CS_ID_1);
+}
+
+/******************************* Halfsleep Mode *******************************/
+// This PSRAM device does not support halfsleep mode
+PSRAM_HALFSLEEP_SLEEP_CODE_ATTR void esp_psram_impl_enter_halfsleep_mode(void)
+{
+}
+
+PSRAM_HALFSLEEP_SLEEP_CODE_ATTR void esp_psram_impl_exit_halfsleep_mode(void)
+{
+}
+
+PSRAM_HALFSLEEP_RESUME_CODE_ATTR void esp_psram_impl_resume_from_halfsleep_mode(uint32_t slowclk_period)
+{
 }
 
 /*---------------------------------------------------------------------------------

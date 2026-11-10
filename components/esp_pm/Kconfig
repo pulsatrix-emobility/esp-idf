@@ -84,10 +84,17 @@ menu "Power Management"
         help
             This feature is intended to disable all GPIO pins at automantic sleep to get a lower power mode.
             If enabled, chips will disable all GPIO pins at automantic sleep to reduce about 200~300 uA current.
-            If you want to specifically use some pins normally as chip wakes when chip sleeps,
-            you can call 'gpio_sleep_sel_dis' to disable this feature on those pins.
-            You can also keep this feature on and call 'gpio_sleep_set_direction' and 'gpio_sleep_set_pull_mode'
-            to have a different GPIO configuration at sleep.
+
+            If you want to specifically use some pins normally as chip wakes when chip sleeps, you can
+            call 'gpio_sleep_sel_dis' to disable this feature on those pins.
+
+            Please note, that disabling a GPIO as a wake-up source via `gpio_wakeup_disable` reverts
+            the effect of `gpio_sleep_sel_dis` for that pin.
+            When you disable a GPIO as wake-up source, but want to keep the GPIO powered or some custom
+            GPIO sleep state configurations during sleep, you must call `gpio_sleep_sel_dis` again.
+
+            Alternatively, You can also keep this feature on and call 'gpio_sleep_set_direction' and
+            'gpio_sleep_set_pull_mode' to have a different GPIO configuration at sleep.
 
     config PM_SLP_DEFAULT_PARAMS_OPT
         bool
@@ -286,5 +293,29 @@ menu "Power Management"
             Workaround for frequency limit during encrypted flash writes.
             Only enabled when SPI_FLASH_FREQ_LIMIT_C5_240MHZ is enabled.
             This is an internal configuration, automatically set based on SPI Flash configuration.
+
+    config PM_SLP_SPIRAM_HALFSLEEP_ENABLED
+        bool "Enable halfsleep mode for PSRAM in light sleep"
+        depends on SPIRAM
+        default y
+        help
+            Enable PSRAM halfsleep mode feature to reduce power consumption during light sleep, if the PSRAM used
+            support halfsleep mode.
+
+            When enabled, the PSRAM chip will be configured to enter halfsleep mode (if applicable) before entering
+            light sleep. This reduces power consumption by:
+            1. Setting refresh rate to 0.5x
+            2. Setting PSRAM to halfsleep mode
+
+            The PSRAM will automatically exit halfsleep mode after waking up from light sleep.
+
+    config PM_SLP_SPIRAM_HALFSLEEP_EXIT_WAIT_DELAY
+        int "The time to wait for PSRAM to be able to access after exiting halfsleep mode (in us)"
+        depends on SPIRAM
+        default 150
+        range 50 250
+        help
+            Configure the delay time between waking up PSRAM halfsleep mode and the first access to PSRAM.
+            Refer to the tXHS parameter in datasheet of the used PSRAM to configure this option.
 
 endmenu # "Power Management"

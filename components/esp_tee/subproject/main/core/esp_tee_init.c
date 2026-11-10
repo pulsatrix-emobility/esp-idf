@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -26,6 +26,9 @@
 
 /* TEE symbols */
 extern uint32_t _tee_stack;
+extern uint32_t _tee_stack_bottom;
+extern uint32_t _tee_intr_stack;
+extern uint32_t _tee_intr_stack_bottom;
 extern uint32_t _tee_bss_start;
 extern uint32_t _tee_bss_end;
 extern uint32_t _tee_s_intr_handler;
@@ -73,8 +76,6 @@ static void tee_print_app_info(void)
 #ifdef CONFIG_BOOTLOADER_APP_SECURE_VERSION
     ESP_LOGI(TAG, "Secure version:   %d", app_desc->secure_version);
 #endif
-    ESP_LOGI(TAG, "Compile time:     %s %s", app_desc->date, app_desc->time);
-
     char buf[17];
     esp_app_get_elf_sha256(buf, sizeof(buf));
     ESP_LOGI(TAG, "ELF file SHA256:  %s...", buf);
@@ -119,6 +120,9 @@ void __attribute__((noreturn)) esp_tee_init(uint32_t ree_entry_addr, uint32_t re
 {
     /* Clear BSS */
     memset(&_tee_bss_start, 0, (&_tee_bss_end - &_tee_bss_start) * sizeof(_tee_bss_start));
+    /* Clear the TEE stack and interrupt stack */
+    memset(&_tee_stack_bottom, 0, (&_tee_stack - &_tee_stack_bottom) * sizeof(_tee_stack_bottom));
+    memset(&_tee_intr_stack_bottom, 0, (&_tee_intr_stack - &_tee_intr_stack_bottom) * sizeof(_tee_intr_stack_bottom));
 
     static uint32_t btld_sp;
 

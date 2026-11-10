@@ -6,9 +6,7 @@
 
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 
-#ifdef ESP_PLATFORM
 #include "esp_system.h"
-#endif
 #include "sdkconfig.h"
 #include <errno.h>
 #include "utils/includes.h"
@@ -38,9 +36,11 @@
 
 #define WPA_HEX_ERR(err) ((err) < 0 ? "-" : ""), (unsigned int) ((err) < 0 ? -(err) : (err))
 
+#ifdef CONFIG_FAST_PSK
+#include "fastpsk.h"
+#endif
 #ifdef CONFIG_FAST_PBKDF2
 #include "fastpbkdf2.h"
-#include "fastpsk.h"
 #endif
 
 struct crypto_hash {
@@ -113,13 +113,6 @@ int md5_vector(size_t num_elem, const u8 *addr[], const size_t *len, u8 *mac)
 {
     return digest_vector(PSA_ALG_MD5, num_elem, addr, len, mac);
 }
-
-#ifdef MBEDTLS_MD4_C
-int md4_vector(size_t num_elem, const u8 *addr[], const size_t *len, u8 *mac)
-{
-    return digest_vector(MBEDTLS_MD_MD4, num_elem, addr, len, mac);
-}
-#endif
 
 struct crypto_hash * crypto_hash_init(enum crypto_hash_alg alg, const u8 *key,
                                       size_t key_len)
@@ -421,10 +414,29 @@ int hmac_sha1(const u8 *key, size_t key_len, const u8 *data, size_t data_len,
 }
 #endif
 
+static psa_status_t psa_import_aes_key(const u8 *key, size_t key_len,
+                                       psa_algorithm_t alg,
+                                       psa_key_usage_t usage,
+                                       psa_key_id_t *key_id)
+{
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_status_t status;
+
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+    psa_set_key_bits(&attributes, key_len * 8);
+    psa_set_key_algorithm(&attributes, alg);
+    psa_set_key_usage_flags(&attributes, usage);
+
+    status = psa_import_key(&attributes, key, key_len, key_id);
+    psa_reset_key_attributes(&attributes);
+
+    return status;
+}
+
 static void *aes_crypt_init(int mode, const u8 *key, size_t len)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_usage_t usage = 0;
     psa_key_id_t *key_id = os_malloc(sizeof(psa_key_id_t));
 
     if (key_id == NULL) {
@@ -432,17 +444,15 @@ static void *aes_crypt_init(int mode, const u8 *key, size_t len)
     }
 
     if (mode == MBEDTLS_ENCRYPT) {
-        psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
+        usage = PSA_KEY_USAGE_ENCRYPT;
     } else if (mode == MBEDTLS_DECRYPT) {
-        psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DECRYPT);
+        usage = PSA_KEY_USAGE_DECRYPT;
+    } else {
+        os_free(key_id);
+        return NULL;
     }
 
-    psa_set_key_algorithm(&attributes, PSA_ALG_ECB_NO_PADDING);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, len * 8);
-
-    status = psa_import_key(&attributes, key, len, key_id);
-    psa_reset_key_attributes(&attributes);
+    status = psa_import_aes_key(key, len, PSA_ALG_ECB_NO_PADDING, usage, key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         os_free(key_id);
@@ -537,16 +547,10 @@ void aes_decrypt_deinit(void *ctx)
 int aes_128_cbc_encrypt(const u8 *key, const u8 *iv, u8 *data, size_t data_len)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CBC_NO_PADDING);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, 128);
-
-    status = psa_import_key(&attributes, key, 16, &key_id);
-    psa_reset_key_attributes(&attributes);
+    status = psa_import_aes_key(key, 16, PSA_ALG_CBC_NO_PADDING,
+                                PSA_KEY_USAGE_ENCRYPT, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         return -1;
@@ -596,16 +600,10 @@ int aes_128_cbc_encrypt(const u8 *key, const u8 *iv, u8 *data, size_t data_len)
 int aes_128_cbc_decrypt(const u8 *key, const u8 *iv, u8 *data, size_t data_len)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DECRYPT);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CBC_NO_PADDING);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, 128);
-
-    status = psa_import_key(&attributes, key, 16, &key_id);
-    psa_reset_key_attributes(&attributes);
+    status = psa_import_aes_key(key, 16, PSA_ALG_CBC_NO_PADDING,
+                                PSA_KEY_USAGE_DECRYPT, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         return -1;
@@ -894,24 +892,17 @@ int aes_ctr_encrypt(const u8 *key, size_t key_len, const u8 *nonce,
                     u8 *data, size_t data_len)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id = 0;
     psa_cipher_operation_t operation = PSA_CIPHER_OPERATION_INIT;
     int ret = -1;
     u8 *temp_buf = NULL;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CTR);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, key_len * 8);
-
-    status = psa_import_key(&attributes, key, key_len, &key_id);
+    status = psa_import_aes_key(key, key_len, PSA_ALG_CTR,
+                                PSA_KEY_USAGE_ENCRYPT, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         goto cleanup;
     }
-
-    psa_reset_key_attributes(&attributes);
 
     status = psa_cipher_encrypt_setup(&operation, key_id, PSA_ALG_CTR);
     if (status != PSA_SUCCESS) {
@@ -986,43 +977,43 @@ int aes_128_ctr_encrypt(const u8 *key, const u8 *nonce,
 #ifdef MBEDTLS_NIST_KW_C
 int aes_wrap(const u8 *kek, size_t kek_len, int n, const u8 *plain, u8 *cipher)
 {
-    mbedtls_nist_kw_context ctx;
-    size_t olen;
-    int ret = 0;
-    mbedtls_nist_kw_init(&ctx);
+    psa_key_id_t key_id = 0;
+    psa_status_t status;
+    size_t olen = 0;
 
-    ret = mbedtls_nist_kw_setkey(&ctx, MBEDTLS_CIPHER_ID_AES,
-                                 kek, kek_len * 8, 1);
-    if (ret != 0) {
-        return ret;
+    status = psa_import_aes_key(kek, kek_len, PSA_ALG_ECB_NO_PADDING,
+                                PSA_KEY_USAGE_ENCRYPT, &key_id);
+    if (status != PSA_SUCCESS) {
+        return -1;
     }
 
-    ret = mbedtls_nist_kw_wrap(&ctx, MBEDTLS_KW_MODE_KW, plain,
-                               n * 8, cipher, &olen, (n + 1) * 8);
+    status = mbedtls_nist_kw_wrap(key_id, MBEDTLS_KW_MODE_KW, plain,
+                                  (size_t) n * 8, cipher,
+                                  (size_t)(n + 1) * 8, &olen);
+    psa_destroy_key(key_id);
 
-    mbedtls_nist_kw_free(&ctx);
-    return ret;
+    return status == PSA_SUCCESS ? 0 : -1;
 }
 
 int aes_unwrap(const u8 *kek, size_t kek_len, int n, const u8 *cipher,
                u8 *plain)
 {
-    mbedtls_nist_kw_context ctx;
-    size_t olen;
-    int ret = 0;
-    mbedtls_nist_kw_init(&ctx);
+    psa_key_id_t key_id = 0;
+    psa_status_t status;
+    size_t olen = 0;
 
-    ret = mbedtls_nist_kw_setkey(&ctx, MBEDTLS_CIPHER_ID_AES,
-                                 kek, kek_len * 8, 0);
-    if (ret != 0) {
-        return ret;
+    status = psa_import_aes_key(kek, kek_len, PSA_ALG_ECB_NO_PADDING,
+                                PSA_KEY_USAGE_DECRYPT, &key_id);
+    if (status != PSA_SUCCESS) {
+        return -1;
     }
 
-    ret = mbedtls_nist_kw_unwrap(&ctx, MBEDTLS_KW_MODE_KW, cipher,
-                                 (n + 1) * 8, plain, &olen, (n * 8));
+    status = mbedtls_nist_kw_unwrap(key_id, MBEDTLS_KW_MODE_KW, cipher,
+                                    (size_t)(n + 1) * 8, plain,
+                                    (size_t) n * 8, &olen);
+    psa_destroy_key(key_id);
 
-    mbedtls_nist_kw_free(&ctx);
-    return ret;
+    return status == PSA_SUCCESS ? 0 : -1;
 }
 #endif
 
@@ -1059,26 +1050,60 @@ cleanup:
     return ret;
 }
 
+#if defined(CONFIG_TLS_INTERNAL_CLIENT) || (!defined(CONFIG_FAST_PSK) && !defined(CONFIG_FAST_PBKDF2))
+static int __maybe_unused pbkdf2_sha1_psa(const char *passphrase, const u8 *ssid, size_t ssid_len,
+                                          int iterations, u8 *buf, size_t buflen)
+{
+    psa_key_derivation_operation_t op = PSA_KEY_DERIVATION_OPERATION_INIT;
+    psa_status_t status;
+
+    status = psa_key_derivation_setup(&op, PSA_ALG_PBKDF2_HMAC(PSA_ALG_SHA_1));
+    if (status != PSA_SUCCESS) {
+        goto cleanup;
+    }
+
+    status = psa_key_derivation_input_integer(&op, PSA_KEY_DERIVATION_INPUT_COST, iterations);
+    if (status != PSA_SUCCESS) {
+        goto cleanup;
+    }
+
+    status = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_SALT, ssid, ssid_len);
+    if (status != PSA_SUCCESS) {
+        goto cleanup;
+    }
+
+    status = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_PASSWORD,
+                                            (const u8 *) passphrase, os_strlen(passphrase));
+    if (status != PSA_SUCCESS) {
+        goto cleanup;
+    }
+
+    status = psa_key_derivation_output_bytes(&op, buf, buflen);
+
+cleanup:
+    psa_key_derivation_abort(&op);
+    return status == PSA_SUCCESS ? 0 : -1;
+}
+#endif
+
 #if defined(CONFIG_MBEDTLS_SHA1_C) || defined(CONFIG_MBEDTLS_HARDWARE_SHA)
 int pbkdf2_sha1(const char *passphrase, const u8 *ssid, size_t ssid_len,
                 int iterations, u8 *buf, size_t buflen)
 {
-#ifdef CONFIG_FAST_PBKDF2
-    /* For ESP32: Using pbkdf2_hmac_sha1() because esp_fast_psk() utilizes hardware,
-     * but for ESP32, the SHA1 hardware implementation is slower than the software implementation.
-     */
-#if defined(CONFIG_IDF_TARGET_ESP32) || !defined(CONFIG_SOC_SHA_SUPPORTED)
-    fastpbkdf2_hmac_sha1((const u8 *) passphrase, os_strlen(passphrase),
-                         ssid, ssid_len, iterations, buf, buflen);
-    return 0;
-#else
-    return esp_fast_psk(passphrase, os_strlen(passphrase), ssid, ssid_len, iterations, buf, buflen);
+    if (ssid_len <= 32 && os_strlen(passphrase) <= 63 &&
+            iterations == 4096 && buflen == 32) {
+#if defined(CONFIG_FAST_PSK)
+        return esp_fast_psk(passphrase, os_strlen(passphrase), ssid, ssid_len, iterations, buf, buflen);
+#elif defined(CONFIG_FAST_PBKDF2)
+        fastpbkdf2_hmac_sha1((const u8 *) passphrase, os_strlen(passphrase),
+                             ssid, ssid_len, iterations, buf, buflen);
+        return 0;
 #endif
+    }
+#if defined(CONFIG_TLS_INTERNAL_CLIENT) || (!defined(CONFIG_FAST_PSK) && !defined(CONFIG_FAST_PBKDF2))
+    return pbkdf2_sha1_psa(passphrase, ssid, ssid_len, iterations, buf, buflen);
 #else
-    int ret = mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA1, (const u8 *) passphrase,
-                                            os_strlen(passphrase), ssid,
-                                            ssid_len, iterations, buflen, buf);
-    return ret == 0 ? 0 : -1;
+    return -1;
 #endif
 }
 #endif /* defined(CONFIG_MBEDTLS_SHA1_C) || defined(CONFIG_MBEDTLS_HARDWARE_SHA) */
@@ -1143,21 +1168,14 @@ int aes_ccm_ae(const u8 *key, size_t key_len, const u8 *nonce,
                const u8 *aad, size_t aad_len, u8 *crypt, u8 *auth)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_ENCRYPT);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CCM);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, key_len * 8);
-
-    status = psa_import_key(&attributes, key, key_len, &key_id);
+    status = psa_import_aes_key(key, key_len, PSA_ALG_CCM,
+                                PSA_KEY_USAGE_ENCRYPT, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         return -1;
     }
-
-    psa_reset_key_attributes(&attributes);
 
     psa_aead_operation_t operation = PSA_AEAD_OPERATION_INIT;
 
@@ -1225,19 +1243,13 @@ int aes_ccm_ad(const u8 *key, size_t key_len, const u8 *nonce,
                u8 *plain)
 {
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id;
     u8 *ciphertext_with_tag = NULL;
     size_t plaintext_length = 0;
     int ret = -1;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DECRYPT);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CCM);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, key_len * 8);
-
-    status = psa_import_key(&attributes, key, key_len, &key_id);
-    psa_reset_key_attributes(&attributes);
+    status = psa_import_aes_key(key, key_len, PSA_ALG_CCM,
+                                PSA_KEY_USAGE_DECRYPT, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         return -1;
@@ -1288,23 +1300,16 @@ int omac1_aes_vector(const u8 *key, size_t key_len, size_t num_elem,
     }
 
     psa_status_t status;
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t key_id = 0;
     psa_mac_operation_t operation = PSA_MAC_OPERATION_INIT;
     int ret = -1;
 
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_HASH);
-    psa_set_key_algorithm(&attributes, PSA_ALG_CMAC);
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attributes, key_len * 8);
-
-    status = psa_import_key(&attributes, key, key_len, &key_id);
+    status = psa_import_aes_key(key, key_len, PSA_ALG_CMAC,
+                                PSA_KEY_USAGE_SIGN_HASH, &key_id);
     if (status != PSA_SUCCESS) {
         wpa_printf(MSG_ERROR, "%s: psa_import_key failed", __func__);
         goto cleanup;
     }
-
-    psa_reset_key_attributes(&attributes);
 
     status = psa_mac_sign_setup(&operation, key_id, PSA_ALG_CMAC);
     if (status != PSA_SUCCESS) {

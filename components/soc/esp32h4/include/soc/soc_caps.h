@@ -54,8 +54,8 @@
 // #define SOC_SUPPORTS_SECURE_DL_MODE     1
 // #define SOC_ULP_SUPPORTED               0    // TODO: [ESP32H4] IDF-12396
 // #define SOC_LP_CORE_SUPPORTED           0
-#define SOC_EFUSE_KEY_PURPOSE_FIELD     1       // TODO: [ESP32H4] IDF-12268
-#define SOC_EFUSE_SUPPORTED             1       // TODO: [ESP32H4] IDF-12268
+#define SOC_EFUSE_KEY_PURPOSE_FIELD     1
+#define SOC_EFUSE_SUPPORTED             1
 // #define SOC_RTC_MEM_SUPPORTED           1    // TODO: [ESP32H4] IDF-12313
 #define SOC_I2S_SUPPORTED               1
 #define SOC_RMT_SUPPORTED               1
@@ -425,8 +425,9 @@
 #define SOC_EFUSE_SOFT_DIS_JTAG 0
 #define SOC_EFUSE_DIS_ICACHE 0
 #define SOC_EFUSE_BLOCK9_KEY_PURPOSE_QUIRK 1  // XTS-AES key purpose not supported for this block
-#define SOC_EFUSE_ECDSA_KEY 0 // TODO: [ESP32H4] IDF-12259
+#define SOC_EFUSE_ECDSA_KEY 1
 #define SOC_EFUSE_XTS_AES_KEY_128 1
+#define SOC_EFUSE_XTS_AES_KEY_256 1
 
 /*-------------------------- Secure Boot CAPS----------------------------*/
 #define SOC_SECURE_BOOT_V2_RSA              1
@@ -439,6 +440,7 @@
 #define SOC_FLASH_ENCRYPTED_XTS_AES_BLOCK_MAX   (64)
 #define SOC_FLASH_ENCRYPTION_XTS_AES        1
 #define SOC_FLASH_ENCRYPTION_XTS_AES_128    1
+#define SOC_FLASH_ENCRYPTION_XTS_AES_256    1
 
 /*-------------------------- APM CAPS ----------------------------------------*/
 #define SOC_APM_CTRL_FILTER_SUPPORTED   1 /*!< Support for APM control filter */
@@ -473,7 +475,6 @@
 
 /*-------------------------- EXTERNAL COEXISTENCE CAPS -------------------------------------*/
 #define SOC_EXTERNAL_COEX_ADVANCE              (1) /*!< HARDWARE ADVANCED EXTERNAL COEXISTENCE CAPS */
-#define SOC_EXTERNAL_COEX_LEADER_TX_LINE       (0) /*!< EXTERNAL COEXISTENCE TX LINE CAPS */
 
 /*--------------- PHY REGISTER AND MEMORY SIZE CAPS --------------------------*/
 #define SOC_PHY_DIG_REGS_MEM_SIZE       (21*4)
@@ -507,7 +508,6 @@
 
 #define SOC_PM_PAU_LINK_NUM                 (4)
 #define SOC_PM_PAU_REGDMA_LINK_CONFIGURABLE (1)
-#define SOC_PM_RETENTION_MODULE_NUM         (64)
 
 /*-------------------------- CLOCK SUBSYSTEM CAPS ----------------------------------------*/
 #define SOC_CLK_RC_FAST_SUPPORT_CALIBRATION       (1)
@@ -539,3 +539,7 @@
 
 /*-------------------------- USB CAPS ----------------------------------------*/
 #define SOC_USB_OTG_PERIPH_NUM          (1U)
+#define SOC_USB_FSLS_PHY_NUM            (1U)
+
+/*------------------------------------- DEBUG CAPS -------------------------------------*/
+#define SOC_DEBUG_HAVE_OCD_STUB_BINS    (1)

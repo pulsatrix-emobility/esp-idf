@@ -6,7 +6,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SPDX-FileContributor: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2025-2026 Espressif Systems (Shanghai) CO LTD
  */
 /*
  *  The AES block cipher was designed by Vincent Rijmen and Joan Daemen.
@@ -424,6 +424,9 @@ int esp_aes_crypt_cfb8(esp_aes_context *ctx,
     }
 #endif /* !SOC_AES_SUPPORT_DMA || CONFIG_MBEDTLS_AES_HW_SMALL_DATA_LEN_OPTIM */
 cleanup:
+    /* ov holds the CFB8 feedback register (key/IV-derived state). Scrub it
+     * before returning so it cannot be recovered from stack RAM. */
+    mbedtls_platform_zeroize( ov, sizeof( ov ) );
     esp_aes_release_hardware();
     return ret;
 }
@@ -455,6 +458,15 @@ int esp_aes_crypt_cfb128(esp_aes_context *ctx,
     }
 
     n = *iv_off;
+
+    /* iv[] is a fixed 16-byte buffer and n indexes it directly (before the modulo-16 update),
+     * so a caller-supplied *iv_off > 15 -- attacker-controlled via the TEE secure service --
+     * is an out-of-bounds read/write of iv[] in TEE context (CWE-787 / CWE-125). Bound it here,
+     * matching the guard already present in esp_aes_crypt_ofb(). */
+    if (n >= AES_BLOCK_BYTES) {
+        ESP_LOGE(TAG, "IV offset out of bounds");
+        return MBEDTLS_ERR_AES_BAD_INPUT_DATA;
+    }
 
 #if SOC_AES_SUPPORT_DMA
 #if CONFIG_MBEDTLS_AES_HW_SMALL_DATA_LEN_OPTIM
@@ -580,6 +592,10 @@ int esp_aes_crypt_ofb(esp_aes_context *ctx,
     }
 
     n = *iv_off;
+    if (n >= AES_BLOCK_BYTES) {
+        ESP_LOGE(TAG, "IV offset out of bounds");
+        return MBEDTLS_ERR_AES_BAD_INPUT_DATA;
+    }
 
 #if SOC_AES_SUPPORT_DMA
 #if CONFIG_MBEDTLS_AES_HW_SMALL_DATA_LEN_OPTIM
@@ -684,6 +700,10 @@ int esp_aes_crypt_ctr(esp_aes_context *ctx,
     }
 
     n = *nc_off;
+    if (n >= AES_BLOCK_BYTES) {
+        ESP_LOGE(TAG, "IV offset out of bounds");
+        return MBEDTLS_ERR_AES_BAD_INPUT_DATA;
+    }
 
 #if SOC_AES_SUPPORT_DMA
 #if CONFIG_MBEDTLS_AES_HW_SMALL_DATA_LEN_OPTIM
@@ -703,6 +723,7 @@ int esp_aes_crypt_ctr(esp_aes_context *ctx,
             ctx->key_in_hardware = aes_hal_setkey(ctx->key, ctx->key_bytes, ESP_AES_DECRYPT);
 
             aes_hal_mode_init(ESP_AES_BLOCK_MODE_CTR);
+            aes_hal_set_inc(ctx->ctr_inc32 ? ESP_AES_INC_32 : ESP_AES_INC_128);
             aes_hal_set_iv(nonce_counter);
 
             ret = esp_aes_process_dma(ctx, input, output, length, stream_block);
@@ -727,6 +748,7 @@ int esp_aes_crypt_ctr(esp_aes_context *ctx,
         ctx->key_in_hardware = aes_hal_setkey(ctx->key, ctx->key_bytes, ESP_AES_ENCRYPT);
 
         int c, i;
+        int inc_end = ctx->ctr_inc32 ? AES_BLOCK_BYTES - 4 : 0;
         while (length--) {
             if (n == 0) {
                 ret = esp_aes_block(ctx, nonce_counter, stream_block);
@@ -735,7 +757,7 @@ int esp_aes_crypt_ctr(esp_aes_context *ctx,
                     return ret;
                 }
 
-                for (i = 16; i > 0; i--) {
+                for (i = AES_BLOCK_BYTES; i > inc_end; i--) {
                     if (++nonce_counter[i - 1] != 0) {
                         break;
                     }

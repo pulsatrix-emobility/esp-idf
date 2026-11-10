@@ -85,7 +85,7 @@
 #define SOC_SPI_FLASH_SUPPORTED         1     // TODO: [ESP32C5] IDF-8715
 #define SOC_ECDSA_SUPPORTED             1
 #define SOC_RNG_SUPPORTED               1
-#define SOC_KEY_MANAGER_SUPPORTED       1
+#define SOC_KEY_MANAGER_SUPPORTED       0
 #define SOC_HUK_SUPPORTED               1
 #define SOC_MODEM_CLOCK_SUPPORTED       1
 #define SOC_LIGHT_SLEEP_SUPPORTED       1
@@ -184,6 +184,8 @@
 
 #define SOC_CPU_HAS_LOCKUP_RESET        1
 
+#define SOC_CPU_HAS_ZC_EXTENSIONS       1
+
 #define SOC_CPU_ZCMP_WORKAROUND         1
 #define SOC_CPU_ZCMP_PUSH_REVERSED      1
 #define SOC_CPU_ZCMP_POPRET_ISSUE       1
@@ -207,7 +209,6 @@
 #define SOC_GDMA_SUPPORT_ETM            1
 #define SOC_GDMA_SUPPORT_SLEEP_RETENTION    1
 #define SOC_GDMA_SUPPORT_WEIGHTED_ARBITRATION   1
-#define SOC_GDMA_EXT_MEM_ENC_ALIGNMENT   (16)
 
 /*-------------------------- GPIO CAPS ---------------------------------------*/
 // ESP32-C5 has 1 GPIO peripheral
@@ -392,6 +393,7 @@
 /*--------------------------- ECDSA CAPS ---------------------------------------*/
 #define SOC_ECDSA_SUPPORT_EXPORT_PUBKEY     (1)
 #define SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE   (1)
+#define SOC_ECDSA_USES_MPI                  (1)  /*!< ECDSA shares MPI's reset domain: v1.0 dropped ECDSA's use of RSA but kept the clkrst coupling, so the MPI lock is still required */
 #define SOC_ECDSA_SUPPORT_HW_DETERMINISTIC_LOOP (1)
 #define SOC_ECDSA_SUPPORT_CURVE_P384 (1)
 #define SOC_ECDSA_SUPPORT_CURVE_SPECIFIC_KEY_PURPOSES (1)  /*!< Support individual key purposes for different ECDSA curves (P192, P256, P384) */
@@ -564,7 +566,6 @@
 
 /*-------------------------- EXTERNAL COEXISTENCE CAPS -------------------------------------*/
 #define SOC_EXTERNAL_COEX_ADVANCE              (1) /*!< HARDWARE  EXTERNAL COEXISTENCE CAPS */
-#define SOC_EXTERNAL_COEX_LEADER_TX_LINE       (0) /*!< EXTERNAL COEXISTENCE TX LINE CAPS */
 
 /*--------------- PHY REGISTER AND MEMORY SIZE CAPS --------------------------*/
 // #define SOC_PHY_DIG_REGS_MEM_SIZE       (21*4)
@@ -592,6 +593,7 @@
 #define SOC_PM_SUPPORT_MAC_BB_PD        (1)
 #define SOC_PM_SUPPORT_RTC_PERIPH_PD    (1)
 
+#define SOC_PM_SUPPORT_REGDMA_TRIGGERED_PHY (1)
 #define SOC_PM_SUPPORT_PMU_MODEM_STATE  (1)
 /* macro redefine for pass esp_wifi headers md5sum check */
 #define MAC_SUPPORT_PMU_MODEM_STATE     SOC_PM_SUPPORT_PMU_MODEM_STATE
@@ -606,12 +608,12 @@
 
 #define SOC_PM_PAU_LINK_NUM                 (5)
 #define SOC_PM_PAU_REGDMA_LINK_CONFIGURABLE (1)
-#define SOC_PM_PAU_REGDMA_LINK_IDX_WIFIMAC  (4) // The range of values for the link index is [0, SOC_PM_PAU_LINK_NUM)
 #define SOC_PM_PAU_REGDMA_COMMON_PHY_LINK_ENTRY (1)
+/** Workaround: software-triggered modem PHY retention uses dedicated WiFi MAC REGDMA, not entry link_sel */
+#define SOC_PM_PAU_REGDMA_MODEM_WIFIMAC_WORKAROUND (1)
+#define SOC_PM_PAU_REGDMA_LINK_IDX_PHY      (4) // The range of values for the link index is [0, SOC_PM_PAU_LINK_NUM)
 
 #define SOC_PM_PMU_MIN_SLP_SLOW_CLK_CYCLE_FIXED    (1)
-
-#define SOC_PM_RETENTION_MODULE_NUM         (32)
 
 /*-------------------------- CLOCK SUBSYSTEM CAPS ----------------------------------------*/
 #define SOC_CLK_RC_FAST_SUPPORT_CALIBRATION       (1)
@@ -624,6 +626,8 @@
 #define SOC_CLK_LP_FAST_SUPPORT_XTAL_D2           (1)     /*!< Support XTAL_D2 clock as the LP_FAST clock source */
 
 #define SOC_RCC_IS_INDEPENDENT                    1       /*!< Reset and Clock Control is independent, thanks to the PCR registers */
+
+#define SOC_CLK_ROOT_CLK_SWITCH_PROTECT           1       /*!< Need to bypass root clock auto gating during 240M/160M PLL switch */
 
 #define SOC_CLK_ANA_I2C_MST_DEPENDS_ON_MODEM_APB  (1)     /*!< Analog I2C master clock depends on  CLK_160M_REF on clock tree */
 
@@ -665,7 +669,12 @@
 // #define SOC_PHY_COMBO_MODULE                  (1) /*!< Support Wi-Fi, BLE and 15.4*/
 #define SOC_PHY_CALIBRATION_CLOCK_IS_INDEPENDENT (1)
 
+/*------------------------------------- DEBUG CAPS -------------------------------------*/
+#define SOC_DEBUG_HAVE_OCD_STUB_BINS    (1)
+
 /*------------------------------------- ULP CAPS -------------------------------------*/
 #define SOC_LP_CORE_SINGLE_INTERRUPT_VECTOR         (1) /*!< LP Core interrupts all map to a single entry in vector table */
 #define SOC_LP_CORE_SUPPORT_ETM                     (1) /*!< LP Core supports ETM */
 #define SOC_LP_CORE_SUPPORT_STORE_LOAD_EXCEPTIONS   (1) /*!< LP Core will raise exceptions if accessing invalid addresses */
+#define SOC_LP_CORE_LP_UART_WAKEUP_KEEP_TRIGGERED   (1) /*!< LP UART wakeup source is kept triggered */
+#define SOC_LP_CORE_HW_AUTO_CLRWAKEUPCAUSE          (1) /*!< LP core requests sleep, PMU clears both HP and LP wakeup causes */

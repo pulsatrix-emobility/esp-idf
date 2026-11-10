@@ -27,10 +27,32 @@ except ImportError:
     import idf
 
 current_dir = os.path.dirname(os.path.realpath(__file__))
-idf_py_path = os.path.join(current_dir, '..', 'idf.py')
+idf_py_path = os.path.normpath(os.path.join(current_dir, '..', 'idf.py'))
 extension_path = os.path.join(current_dir, 'test_idf_extensions', 'test_ext')
-py_actions_path = os.path.join(current_dir, '..', 'idf_py_actions')
+py_actions_path = os.path.normpath(os.path.join(current_dir, '..', 'idf_py_actions'))
 link_path = os.path.join(py_actions_path, 'test_ext')
+
+
+# As idf.py uses rich-click, unite modification variables to ensure constant results on various CI terminals
+_idf_py_test_env_saved: dict[str, str | None] = {}
+
+
+def setUpModule() -> None:
+    for key in ('COLUMNS', 'LINES', 'NO_COLOR', 'FORCE_COLOR', 'PY_COLORS', 'TERM'):
+        _idf_py_test_env_saved[key] = os.environ.get(key)
+    os.environ['COLUMNS'] = '200'
+    os.environ['LINES'] = '40'
+    os.environ['NO_COLOR'] = '1'
+    for unset in ('FORCE_COLOR', 'PY_COLORS'):
+        os.environ.pop(unset, None)
+
+
+def tearDownModule() -> None:
+    for key, previous in _idf_py_test_env_saved.items():
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
 
 
 class TestWithoutExtensions(TestCase):
@@ -146,6 +168,34 @@ class TestDependencyManagement(TestWithoutExtensions):
             'WARNING: Command "clean" is found in the list of commands more than once.', capturedOutput.getvalue()
         )
 
+    def test_forbid_chaining(self):
+        for args in (['--dry-run', 'build', 'mcp-server'], ['--dry-run', 'mcp-server', 'build']):
+            with self.assertRaises(idf.FatalError) as ctx:
+                idf.init_cli()(args=args, standalone_mode=False)
+            self.assertIn('not allowed to be chained with other commands', str(ctx.exception))
+            self.assertIn('Please use it as a standalone idf.py command', str(ctx.exception))
+            self.assertIn('mcp-server', str(ctx.exception))
+
+
+class TestIdfVersionSeeding(TestWithoutExtensions):
+    def test_idf_version_seeded_when_unset(self):
+        from idf_py_actions.tools import idf_version_from_cmake
+
+        with mock.patch.dict(os.environ):
+            os.environ.pop('IDF_VERSION', None)
+            idf.init_cli()(args=['--dry-run', 'build'], standalone_mode=False)
+            self.assertIn('IDF_VERSION', os.environ)
+            expected = idf_version_from_cmake()
+            self.assertIsNotNone(expected)
+            expected_stripped = expected.lstrip('v')
+            self.assertEqual(os.environ['IDF_VERSION'], expected_stripped)
+            self.assertFalse(os.environ['IDF_VERSION'].startswith('v'))
+
+    def test_idf_version_not_overwritten_when_set(self):
+        with mock.patch.dict(os.environ, {'IDF_VERSION': '0.0.0-sentinel'}):
+            idf.init_cli()(args=['--dry-run', 'build'], standalone_mode=False)
+            self.assertEqual(os.environ['IDF_VERSION'], '0.0.0-sentinel')
+
 
 class TestVerboseFlag(TestWithoutExtensions):
     def test_verbose_messages(self):
@@ -256,6 +306,28 @@ class TestDeprecations(TestWithoutExtensions):
         self.assertIn('Warning: Option "test_3" is deprecated and will be removed in future versions.', output)
         self.assertNotIn('"test-0" is deprecated', output)
         self.assertNotIn('"test_0" is deprecated', output)
+
+
+class TestMachineReadableStdout(TestWithoutExtensions):
+    """Executing action / Done are omitted when a task owns stdout."""
+
+    def _cli(self) -> Any:
+        return idf.init_cli()
+
+    def test_uses_machine_readable_stdout_mcp_server(self):
+        from types import SimpleNamespace
+
+        task = SimpleNamespace(name='mcp-server', action_args={})
+        self.assertTrue(self._cli()._uses_machine_readable_stdout(task))
+
+    def test_uses_machine_readable_stdout_help_json(self):
+        from types import SimpleNamespace
+
+        cli = self._cli()
+        with_json = SimpleNamespace(name='help', action_args={'json_option': True})
+        without_json = SimpleNamespace(name='help', action_args={'json_option': False})
+        self.assertTrue(cli._uses_machine_readable_stdout(with_json))
+        self.assertFalse(cli._uses_machine_readable_stdout(without_json))
 
 
 class TestHelpOutput(TestWithoutExtensions):

@@ -6,12 +6,23 @@
 
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <esp_system.h>
 #include <esp_http_server.h>
 #include <esp_heap_caps.h>
+#include <net/if.h>
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+/* http_parser.h must precede esp_httpd_priv.h, which embeds a
+ * struct http_parser_url by value */
+#include <http_parser.h>
+#include "../../src/esp_httpd_priv.h"
 
 #include "unity.h"
 #include "test_utils.h"
+#include "mock_http_server_client.h"
 
 int pre_start_mem, post_stop_mem, post_stop_min_mem;
 bool basic_sanity = true;
@@ -33,6 +44,28 @@ httpd_uri_t handler_limit_uri (char* path)
 };
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
+static httpd_handle_t start_test_ws_server(uint16_t server_port, uint16_t ctrl_port)
+{
+    httpd_handle_t hd = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = server_port;
+    config.ctrl_port = ctrl_port;
+
+    httpd_uri_t ws_uri = {
+        .uri = "/ws",
+        .method = HTTP_GET,
+        .handler = null_func,
+        .user_ctx = NULL,
+        .is_websocket = true,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = NULL,
+    };
+
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_start(&hd, &config));
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_uri_handler(hd, &ws_uri));
+    return hd;
+}
+
 static httpd_uri_t handler_limit_ws_uri(char *path, const char *subprotocol)
 {
     httpd_uri_t uri = {
@@ -44,6 +77,71 @@ static httpd_uri_t handler_limit_ws_uri(char *path, const char *subprotocol)
         .supported_subprotocol = subprotocol,
     };
     return uri;
+}
+
+static int ws_recv_fail_handler_calls;
+
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+    size_t offset;
+} ws_scripted_recv_ctx_t;
+
+typedef struct {
+    uint8_t data[32];
+    size_t len;
+} ws_send_capture_ctx_t;
+
+static ws_scripted_recv_ctx_t ws_scripted_recv_ctx;
+static ws_send_capture_ctx_t ws_send_capture_ctx;
+
+static int ws_recv_fail_override(httpd_handle_t hd, int sockfd, char *buf, size_t buf_len, int flags)
+{
+    (void)hd;
+    (void)sockfd;
+    (void)buf;
+    (void)buf_len;
+    (void)flags;
+    return HTTPD_SOCK_ERR_FAIL;
+}
+
+static int ws_scripted_recv_override(httpd_handle_t hd, int sockfd, char *buf, size_t buf_len, int flags)
+{
+    (void)hd;
+    (void)sockfd;
+    (void)flags;
+
+    size_t remaining = ws_scripted_recv_ctx.len - ws_scripted_recv_ctx.offset;
+    if (remaining == 0) {
+        return HTTPD_SOCK_ERR_FAIL;
+    }
+
+    size_t to_copy = remaining < buf_len ? remaining : buf_len;
+    memcpy(buf, ws_scripted_recv_ctx.data + ws_scripted_recv_ctx.offset, to_copy);
+    ws_scripted_recv_ctx.offset += to_copy;
+    return (int)to_copy;
+}
+
+static int ws_scripted_send_override(httpd_handle_t hd, int sockfd, const char *buf, size_t buf_len, int flags)
+{
+    (void)hd;
+    (void)sockfd;
+    (void)flags;
+
+    if (ws_send_capture_ctx.len + buf_len > sizeof(ws_send_capture_ctx.data)) {
+        return HTTPD_SOCK_ERR_FAIL;
+    }
+
+    memcpy(ws_send_capture_ctx.data + ws_send_capture_ctx.len, buf, buf_len);
+    ws_send_capture_ctx.len += buf_len;
+    return (int)buf_len;
+}
+
+static esp_err_t ws_counting_handler(httpd_req_t *req)
+{
+    (void)req;
+    ws_recv_fail_handler_calls++;
+    return ESP_OK;
 }
 #endif /* CONFIG_HTTPD_WS_SUPPORT */
 
@@ -288,6 +386,911 @@ TEST_CASE("Max Allowed Sockets Test", "[HTTP SERVER]")
      * should fail */
     config.max_open_sockets += 1;
     TEST_ASSERT(httpd_start(&hd, &config) != ESP_OK);
+}
+
+TEST_CASE("httpd_resp_set_hdr rejects CRLF in header field and value", "[HTTP SERVER][security]")
+{
+    httpd_req_t fake_req = {0};
+
+    /* \r\n in value */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_hdr(&fake_req, "X-Field", "val\r\nX-Injected: pwned"));
+    /* bare \n in value */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_hdr(&fake_req, "X-Field", "val\nX-Injected: pwned"));
+    /* \r\n in field name */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_hdr(&fake_req, "X-Field\r\nX-Injected: pwned", "val"));
+}
+
+TEST_CASE("httpd_resp_set_status rejects CRLF in status string", "[HTTP SERVER][security]")
+{
+    httpd_req_t fake_req = {0};
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_status(&fake_req, "200 OK\r\nX-Injected: pwned"));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_status(&fake_req, "200 OK\nX-Injected: pwned"));
+}
+
+TEST_CASE("httpd_resp_set_type rejects CRLF in content type", "[HTTP SERVER][security]")
+{
+    httpd_req_t fake_req = {0};
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_type(&fake_req, "text/html\r\nX-Injected: pwned"));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_resp_set_type(&fake_req, "text/html\nX-Injected: pwned"));
+}
+
+/* ---- httpd_queue_work backpressure ---- */
+
+static SemaphoreHandle_t s_qw_gate;
+static volatile int s_qw_work_runs;
+
+static void qw_blocking_work(void *arg)
+{
+    /* Hold the httpd thread inside this work fn so the ctrl-socket mbox
+     * stops draining. Auto-release after 2 s as a safety net in case the
+     * test asserts mid-way and never reaches the explicit give. */
+    xSemaphoreTake((SemaphoreHandle_t)arg, pdMS_TO_TICKS(2000));
+}
+
+static void qw_counting_work(void *arg)
+{
+    (void)arg;
+    s_qw_work_runs++;
+}
+
+TEST_CASE("httpd_queue_work fast-fails on ctrl mbox saturation", "[HTTP SERVER]")
+{
+    test_case_uses_tcpip();
+
+    httpd_handle_t hd = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_start(&hd, &config));
+
+    s_qw_gate = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL(s_qw_gate);
+    s_qw_work_runs = 0;
+
+    /* Park the httpd thread in a blocked work item so the mbox can fill. */
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_queue_work(hd, qw_blocking_work, s_qw_gate));
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* Spam queue_work past the mbox cap; first ones succeed, rest must
+     * return ESP_FAIL synchronously (default non-blocking behavior). */
+    int ok_count = 0;
+    int fail_count = 0;
+    for (int i = 0; i < CONFIG_LWIP_UDP_RECVMBOX_SIZE * 2 + 4; i++) {
+        esp_err_t err = httpd_queue_work(hd, qw_counting_work, NULL);
+        if (err == ESP_OK) {
+            ok_count++;
+        } else {
+            TEST_ASSERT_EQUAL(ESP_FAIL, err);
+            fail_count++;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN(0, ok_count);
+    TEST_ASSERT_LESS_OR_EQUAL(CONFIG_LWIP_UDP_RECVMBOX_SIZE, ok_count);
+    TEST_ASSERT_GREATER_THAN(0, fail_count);
+
+    /* Release the parked work; every accepted item must now actually run. */
+    xSemaphoreGive(s_qw_gate);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    TEST_ASSERT_EQUAL(ok_count, s_qw_work_runs);
+
+    vSemaphoreDelete(s_qw_gate);
+    s_qw_gate = NULL;
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+/* ---- Transfer-Encoding rejection (RFC 9112 section 6.1) ---- */
+
+/* The server implements no transfer codings, so any request carrying a
+ * Transfer-Encoding header must be answered with 501. Without the parser
+ * check, a chunked body is misread as an empty body and its chunk framing
+ * is then parsed as a separate pipelined request — a request-smuggling
+ * primitive when the server sits behind a proxy. */
+static httpd_handle_t start_plain_test_server(uint16_t server_port, uint16_t ctrl_port)
+{
+    httpd_handle_t hd = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = server_port;
+    config.ctrl_port = ctrl_port;
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_start(&hd, &config));
+    return hd;
+}
+
+static esp_err_t te_ok_handler(httpd_req_t *req)
+{
+    return httpd_resp_sendstr(req, "OK");
+}
+
+/* Assert the captured wire data holds exactly one HTTP response and that the
+ * server closed the session afterwards. This is what proves the bytes after
+ * the rejected framing were NOT parsed and answered as a further request. */
+static void assert_single_response_then_close(const mock_server_response_t *resp)
+{
+    TEST_ASSERT_TRUE_MESSAGE(resp->len > 0,
+                             "no response received before session close");
+    TEST_ASSERT_TRUE_MESSAGE(resp->server_closed,
+                             "server must close the session after 501");
+    TEST_ASSERT_NULL_MESSAGE(strstr(resp->data + 1, "HTTP/1."),
+                             "trailing bytes were answered as a second request");
+}
+
+TEST_CASE("Chunked request is rejected with 501", "[HTTP SERVER][security]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8098, ESP_HTTPD_DEF_CTRL_PORT + 17);
+    /* Register real handlers: without the parser-level reject, "POST /any"
+     * would succeed with an empty body (keep-alive stays up) and the chunk
+     * framing plus the pipelined GET would be parsed as further requests,
+     * producing a second response on the same connection. */
+    httpd_uri_t post_any = {
+        .uri = "/any", .method = HTTP_POST, .handler = te_ok_handler,
+    };
+    httpd_uri_t get_smuggled = {
+        .uri = "/smuggled", .method = HTTP_GET, .handler = te_ok_handler,
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_uri_handler(hd, &post_any));
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_uri_handler(hd, &get_smuggled));
+    mock_server_request_t req = {
+        .data = "POST /any HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+                "5\r\nhello\r\n0\r\n\r\n"
+                "GET /smuggled HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8098, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    assert_single_response_then_close(resp);
+    mock_server_assert_status(resp, 501);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+static esp_err_t err_501_keepalive_handler(httpd_req_t *req, httpd_err_code_t error)
+{
+    httpd_resp_send_err(req, error, NULL);
+    /* Try to keep the session open. The server must ignore this for 501:
+     * parsing aborted mid-request, so the stream has no safe continuation. */
+    return ESP_OK;
+}
+
+TEST_CASE("Custom 501 handler cannot keep the session open", "[HTTP SERVER][security]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8100, ESP_HTTPD_DEF_CTRL_PORT + 19);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_err_handler(hd, HTTPD_501_METHOD_NOT_IMPLEMENTED,
+                                                         err_501_keepalive_handler));
+    mock_server_request_t req = {
+        .data = "POST /any HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+                "5\r\nhello\r\n0\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8100, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    assert_single_response_then_close(resp);
+    mock_server_assert_status(resp, 501);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+TEST_CASE("Unknown Transfer-Encoding is rejected with 501", "[HTTP SERVER][security]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8099, ESP_HTTPD_DEF_CTRL_PORT + 18);
+    /* "gzip" does not set the parser's chunked flag; presence of the header
+     * alone must trigger the 501 so the body cannot be silently skipped. */
+    mock_server_request_t req = {
+        .data = "POST /any HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Transfer-Encoding: gzip\r\n"
+                "Content-Length: 5\r\n"
+                "\r\n"
+                "hello",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8099, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    assert_single_response_then_close(resp);
+    mock_server_assert_status(resp, 501);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+/* ---- Unrecognized request method (RFC 9110 section 15.6.2) ---- */
+
+/* http_parser stops on a method token it does not know, before the URL
+ * callback ever runs. The server must map that parser error to 501, not to
+ * the generic 400 used for malformed syntax, and must close the session:
+ * parsing aborted mid-request, so the stream has no safe continuation. */
+TEST_CASE("Unknown HTTP method is rejected with 501", "[HTTP SERVER]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8101, ESP_HTTPD_DEF_CTRL_PORT + 20);
+    httpd_uri_t get_any = {
+        .uri = "/any", .method = HTTP_GET, .handler = te_ok_handler,
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_uri_handler(hd, &get_any));
+    /* "FOO" is a syntactically valid token that no server implements. The
+     * pipelined GET behind it must never be answered. */
+    mock_server_request_t req = {
+        .data = "FOO /any HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "\r\n"
+                "GET /any HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8101, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    assert_single_response_then_close(resp);
+    mock_server_assert_status(resp, 501);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+/* Guard: only the unknown-method parser error maps to 501. Any other
+ * request-line syntax error must still be answered with 400. */
+TEST_CASE("Malformed request line is rejected with 400", "[HTTP SERVER]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8102, ESP_HTTPD_DEF_CTRL_PORT + 21);
+    mock_server_request_t req = {
+        .data = "GET /any HTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8102, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    mock_server_assert_status(resp, 400);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+/* ---- Control characters in header values (RFC 9110 section 5.5) ---- */
+
+/* A field value may hold visible characters, SP, HTAB and obs-text only;
+ * http_parser rejects other CTLs, DEL and NUL in strict mode. For general
+ * header values it used to miss most of them: the first byte was consumed
+ * unchecked and, after the second byte, a memchr() fast path skipped to
+ * CR/LF. Whether a CTL or NUL was caught therefore depended on its position
+ * and on where the request happened to be split between recv() calls. */
+#define HDR_REQ(v) "GET /any HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nX-Test: " v "\r\n\r\n"
+#define HDR_CASE(v, valid) { HDR_REQ(v), sizeof(HDR_REQ(v)) - 1, valid }
+static const struct {
+    const char *data;
+    size_t len;
+    bool valid;
+} s_hdr_ctl_cases[] = {
+    HDR_CASE("abc", true),
+    HDR_CASE("a\tb c", true),
+    HDR_CASE("\x80\xff", true),
+    HDR_CASE("\x15", false),
+    HDR_CASE("a\x15", false),
+    HDR_CASE("ab\x15", false),
+    HDR_CASE("abc\x1b" "def", false),
+    HDR_CASE("\x00" "abc", false),
+    HDR_CASE("abc\x00" "def", false),
+    HDR_CASE("abc\x7f", false),
+};
+#undef HDR_CASE
+#undef HDR_REQ
+
+/* Feed the request to the parser in chunks that break at every offset in
+ * turn, then one byte at a time, so every byte gets its turn as both the
+ * first and a later byte of a buffer. Returns true if the parser accepted the
+ * whole request under every split. */
+static bool parse_split_everywhere(const char *data, size_t len, size_t *bad_split)
+{
+    http_parser_settings settings = { 0 };
+    http_parser parser;
+    for (size_t split = 0; split <= len; split++) {
+        size_t step = split == len ? 1 : len; /* last pass: byte by byte */
+        http_parser_init(&parser, HTTP_REQUEST);
+        size_t off = 0;
+        if (split > 0 && split < len) {
+            if (http_parser_execute(&parser, &settings, data, split) != split) {
+                *bad_split = split;
+                return false;
+            }
+            off = split;
+        }
+        for (; off < len; off += step) {
+            size_t n = len - off < step ? len - off : step;
+            if (http_parser_execute(&parser, &settings, data + off, n) != n) {
+                *bad_split = split;
+                return false;
+            }
+        }
+        if (HTTP_PARSER_ERRNO(&parser) != HPE_OK) {
+            *bad_split = split;
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST_CASE("http_parser rejects control characters in header values at any buffer split", "[HTTP SERVER][security]")
+{
+    for (size_t i = 0; i < sizeof(s_hdr_ctl_cases) / sizeof(s_hdr_ctl_cases[0]); i++) {
+        size_t bad_split = 0;
+        bool accepted = parse_split_everywhere(s_hdr_ctl_cases[i].data,
+                                               s_hdr_ctl_cases[i].len, &bad_split);
+        char msg[64];
+        if (accepted) {
+            snprintf(msg, sizeof(msg), "case %u: accepted under every split", (unsigned)i);
+        } else {
+            snprintf(msg, sizeof(msg), "case %u: rejected at split %u", (unsigned)i, (unsigned)bad_split);
+        }
+        /* parse_split_everywhere() stops at the first rejection, and split 0
+         * is the whole buffer, so an invalid value must be rejected there:
+         * a later split means the whole-buffer parse let it through. */
+        if (s_hdr_ctl_cases[i].valid) {
+            TEST_ASSERT_TRUE_MESSAGE(accepted, msg);
+        } else {
+            TEST_ASSERT_FALSE_MESSAGE(accepted, msg);
+            TEST_ASSERT_EQUAL_MESSAGE(0, bad_split, msg);
+        }
+    }
+}
+
+TEST_CASE("Control characters in header values are rejected with 400", "[HTTP SERVER][security]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_plain_test_server(8103, ESP_HTTPD_DEF_CTRL_PORT + 22);
+    httpd_uri_t get_any = {
+        .uri = "/any", .method = HTTP_GET, .handler = te_ok_handler,
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_register_uri_handler(hd, &get_any));
+
+    /* End to end through the server, sent in one write and trickled one byte
+     * per write (TCP may still coalesce the latter; the parser-level test
+     * above covers buffer splits deterministically). */
+    for (size_t i = 0; i < sizeof(s_hdr_ctl_cases) / sizeof(s_hdr_ctl_cases[0]); i++) {
+        for (int trickle = 0; trickle < 2; trickle++) {
+            mock_server_request_t req = {
+                .data = s_hdr_ctl_cases[i].data,
+                .len = s_hdr_ctl_cases[i].len,
+                .max_bytes_per_write = trickle ? 1 : -1,
+            };
+            mock_server_response_t *resp = mock_server_send_request(8103, &req);
+            TEST_ASSERT_NOT_NULL(resp);
+            printf("case %u (%s): status %d", (unsigned)i,
+                     trickle ? "trickled" : "single write", resp->status_code);
+            mock_server_assert_status(resp, s_hdr_ctl_cases[i].valid ? 200 : 400);
+            mock_server_response_free(resp);
+        }
+    }
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+#ifdef CONFIG_HTTPD_WS_SUPPORT
+TEST_CASE("WS recv failure marks close without dispatching handler", "[HTTP SERVER][websocket]")
+{
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    struct httpd_data hd = {0};
+    struct sock_db session = {0};
+
+    hd.config = config;
+    hd.hd_req_aux.resp_hdrs = calloc(config.max_resp_headers, sizeof(*hd.hd_req_aux.resp_hdrs));
+    TEST_ASSERT_NOT_NULL(hd.hd_req_aux.resp_hdrs);
+
+    session.fd = 123;
+    session.handle = (httpd_handle_t) &hd;
+    session.recv_fn = ws_recv_fail_override;
+    session.ws_handshake_done = true;
+    session.ws_handler = ws_counting_handler;
+    session.ws_control_frames = false;
+    session.ws_close = false;
+
+    ws_recv_fail_handler_calls = 0;
+
+    esp_err_t ret = httpd_req_new(&hd, &session);
+
+    TEST_ASSERT_EQUAL(ESP_OK, ret);
+    TEST_ASSERT_EQUAL(0, ws_recv_fail_handler_calls);
+    TEST_ASSERT_TRUE(session.ws_close);
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, hd.hd_req_aux.ws_type);
+
+    free(hd.hd_req_aux.resp_hdrs);
+}
+
+/* Regression test: enabling CONFIG_HTTPD_WS_SUPPORT must not reject HTTP/1.0
+ * traffic on non-WS endpoints. The HTTP/1.1 requirement only applies once
+ * an "Upgrade: websocket" header confirms the request is a WS handshake. */
+TEST_CASE("Non-WS HTTP/1.0 request is not rejected by WS version check", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8097, ESP_HTTPD_DEF_CTRL_PORT + 16);
+    mock_server_request_t req = {
+        .data = "GET /non-ws HTTP/1.0\r\n"
+                "Host: localhost\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8097, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    /* No handler is registered for /non-ws, so the server returns 404.
+     * The crucial assertion is that it is NOT 400 from the WS version check —
+     * i.e., HTTP/1.0 was accepted at the parser level. */
+    mock_server_assert_status(resp, 404);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+TEST_CASE("WS handshake missing Sec-WebSocket-Version returns 400", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8094, ESP_HTTPD_DEF_CTRL_PORT + 13);
+    mock_server_request_t req = {
+        .data = "GET /ws HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8094, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    mock_server_assert_status(resp, 400);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+TEST_CASE("WS handshake unsupported version returns 426 with Sec-WebSocket-Version header", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8093, ESP_HTTPD_DEF_CTRL_PORT + 12);
+    mock_server_request_t req = {
+        .data = "GET /ws HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Version: 12\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8093, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    mock_server_assert_status(resp, 426);
+    TEST_ASSERT_NOT_NULL(strstr(resp->data, "Sec-WebSocket-Version: 13"));
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+#if CONFIG_HTTPD_WS_STRICTER_RFC6455
+TEST_CASE("WS HTTP/1.0 upgrade request returns 400", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8091, ESP_HTTPD_DEF_CTRL_PORT + 10);
+    mock_server_request_t req = {
+        .data = "GET /ws HTTP/1.0\r\n"
+                "Host: localhost\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8091, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+
+    mock_server_assert_status(resp, 400);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+TEST_CASE("WS handshake missing Host returns 400", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8090, ESP_HTTPD_DEF_CTRL_PORT + 9);
+    mock_server_request_t req = {
+        .data = "GET /ws HTTP/1.1\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8090, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    mock_server_assert_status(resp, 400);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+TEST_CASE("WS handshake invalid Sec-WebSocket-Key returns 400", "[HTTP SERVER][websocket]")
+{
+    test_case_uses_tcpip();
+    httpd_handle_t hd = start_test_ws_server(8092, ESP_HTTPD_DEF_CTRL_PORT + 11);
+    mock_server_request_t req = {
+        .data = "GET /ws HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: AQID\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n",
+    };
+    mock_server_response_t *resp = mock_server_send_request(8092, &req);
+    TEST_ASSERT_NOT_NULL(resp);
+    mock_server_assert_status(resp, 400);
+    mock_server_response_free(resp);
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_stop(hd));
+}
+
+/* Common fake-session wiring for the strict recv-path tests: a single-socket
+ * server whose scripted recv feeds `frame` and whose send is captured. */
+static void ws_setup_recv_fixture(struct httpd_data *hd, httpd_req_t *req,
+                                  struct httpd_req_aux *aux, struct sock_db *session,
+                                  const uint8_t *frame, size_t frame_len)
+{
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    ws_scripted_recv_ctx = (ws_scripted_recv_ctx_t){ .data = frame, .len = frame_len };
+    memset(&ws_send_capture_ctx, 0, sizeof(ws_send_capture_ctx));
+
+    hd->config = config;
+    hd->config.max_open_sockets = 1;
+    hd->hd_sd = session;
+    req->handle = hd;
+    req->aux = aux;
+    aux->sd = session;
+    session->fd = 123;
+    session->handle = (httpd_handle_t)hd;
+    session->recv_fn = ws_scripted_recv_override;
+    session->send_fn = ws_scripted_send_override;
+    session->ws_handshake_done = true;
+}
+
+/* Asserts the session was marked closing and a 1002 (protocol-error) CLOSE
+ * frame was emitted on the wire. */
+static void ws_assert_close_1002_sent(const struct sock_db *session)
+{
+    static const uint8_t expected_reply[] = { 0x88, 0x02, 0x03, 0xEA };
+
+    TEST_ASSERT_TRUE(session->ws_close);
+    TEST_ASSERT_EQUAL(sizeof(expected_reply), ws_send_capture_ctx.len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_reply, ws_send_capture_ctx.data, sizeof(expected_reply));
+}
+
+TEST_CASE("WS recv RSV bit set sends CLOSE 1002 and marks close", "[HTTP SERVER][websocket]")
+{
+    static const uint8_t ws_frame[] = { 0xC1 }; /* RSV1=1, FIN=1, opcode TEXT */
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_get_frame_type(&req));
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv reserved non-control opcode sends CLOSE 1002", "[HTTP SERVER][websocket]")
+{
+    static const uint8_t ws_frame[] = { 0x83 }; /* FIN=1, opcode=0x3 (reserved) */
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_get_frame_type(&req));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv reserved control opcode sends CLOSE 1002", "[HTTP SERVER][websocket]")
+{
+    static const uint8_t ws_frame[] = { 0x8B }; /* FIN=1, opcode=0xB (reserved) */
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_get_frame_type(&req));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv fragmented control frame sends CLOSE 1002", "[HTTP SERVER][websocket]")
+{
+    static const uint8_t ws_frame[] = { 0x09 }; /* FIN=0, opcode=PING */
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_get_frame_type(&req));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv unmasked frame sends CLOSE 1002 and marks close", "[HTTP SERVER][websocket]")
+{
+    /* Length byte 0x02: MASK=0, payload len=2. recv_frame reads this as its
+     * first byte (the opcode byte is taken from aux), so it exercises the
+     * unmasked-client-frame rejection rather than the mask-key path. */
+    static const uint8_t ws_frame[] = { 0x02 };
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+    httpd_ws_frame_t frame = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+    aux.ws_type = HTTPD_WS_TYPE_BINARY;
+    aux.ws_final = true;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, httpd_ws_recv_frame(&req, &frame, 0));
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv control frame with payload > 125 sends CLOSE 1002", "[HTTP SERVER][websocket]")
+{
+    /* PING (0x89), MASK=1 (0x80), length=126 (0x7E) — invalid extended length for control */
+    static const uint8_t ws_frame[] = { 0x89, 0xFE };
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+    session.ws_control_frames = false;
+
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, httpd_ws_get_frame_type(&req));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv rejects non-minimal 16-bit payload length encoding", "[HTTP SERVER][websocket]")
+{
+    /* 0xFE = MASK=1 len=126; 0x00 0x7D = 125, which must use 7-bit form */
+    static const uint8_t ws_frame[] = { 0xFE, 0x00, 0x7D };
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+    httpd_ws_frame_t frame = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+    aux.ws_type = HTTPD_WS_TYPE_TEXT;
+    aux.ws_final = true;
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_recv_frame(&req, &frame, 0));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS recv rejects non-minimal 64-bit payload length encoding", "[HTTP SERVER][websocket]")
+{
+    /* 0xFF = MASK=1 len=127; value 65535 must use 16-bit form */
+    static const uint8_t ws_frame[] = { 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF };
+    struct httpd_data hd = {0};
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    struct sock_db session = {0};
+    httpd_ws_frame_t frame = {0};
+
+    ws_setup_recv_fixture(&hd, &req, &aux, &session, ws_frame, sizeof(ws_frame));
+    aux.ws_type = HTTPD_WS_TYPE_TEXT;
+    aux.ws_final = true;
+
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_ws_recv_frame(&req, &frame, 0));
+    TEST_ASSERT_EQUAL(HTTPD_WS_TYPE_CLOSE, aux.ws_type);
+    ws_assert_close_1002_sent(&session);
+}
+
+TEST_CASE("WS send refuses non-CLOSE frame once session is closing", "[HTTP SERVER][websocket]")
+{
+    /* RFC 6455 §5.5.1: after a CLOSE is sent/received, only a CLOSE may follow. */
+    static const uint8_t payload[] = { 0x41, 0x42 };
+    static const uint8_t expected_close[] = { 0x88, 0x00 }; /* CLOSE, zero-length */
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    struct httpd_data hd = {0};
+    struct sock_db session = {0};
+    httpd_ws_frame_t data_frame = {
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)payload,
+        .len = sizeof(payload),
+    };
+    httpd_ws_frame_t close_frame = {
+        .type = HTTPD_WS_TYPE_CLOSE,
+        .payload = NULL,
+        .len = 0,
+    };
+
+    memset(&ws_send_capture_ctx, 0, sizeof(ws_send_capture_ctx));
+
+    hd.config = config;
+    hd.config.max_open_sockets = 1;
+    hd.hd_sd = &session;
+    session.fd = 123;
+    session.handle = (httpd_handle_t)&hd;
+    session.send_fn = ws_scripted_send_override;
+    session.ws_close = true; /* a CLOSE has already been sent/received */
+
+    /* A data frame must be refused and nothing may go on the wire. */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, httpd_ws_send_frame_async(&hd, session.fd, &data_frame));
+    TEST_ASSERT_EQUAL(0, ws_send_capture_ctx.len);
+
+    /* The CLOSE frame itself is still permitted. */
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_ws_send_frame_async(&hd, session.fd, &close_frame));
+    TEST_ASSERT_EQUAL(sizeof(expected_close), ws_send_capture_ctx.len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_close, ws_send_capture_ctx.data, sizeof(expected_close));
+}
+#endif /* CONFIG_HTTPD_WS_STRICTER_RFC6455 */
+
+TEST_CASE("WS send uses 16-bit length encoding for exactly 65535-byte payload", "[HTTP SERVER][websocket]")
+{
+    static const uint8_t expected_header[] = { 0x82, 0x7E, 0xFF, 0xFF };
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    struct httpd_data hd = {0};
+    struct sock_db session = {0};
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_BINARY,
+        .payload = NULL,
+        .len = UINT16_MAX,
+    };
+
+    memset(&ws_send_capture_ctx, 0, sizeof(ws_send_capture_ctx));
+
+    hd.config = config;
+    hd.config.max_open_sockets = 1;
+    hd.hd_sd = &session;
+    session.fd = 123;
+    session.handle = (httpd_handle_t)&hd;
+    session.send_fn = ws_scripted_send_override;
+
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_ws_send_frame_async(&hd, session.fd, &frame));
+    TEST_ASSERT_EQUAL(sizeof(expected_header), ws_send_capture_ctx.len);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_header, ws_send_capture_ctx.data, sizeof(expected_header));
+}
+#endif /* CONFIG_HTTPD_WS_SUPPORT */
+
+/********* URL query / header pointer-accessor tests *********
+ * These exercise httpd_req_get_url_query_str_ptr() and
+ * httpd_req_get_hdr_value_str_ptr() against hand-built requests that mirror
+ * the parser's output: the query is parsed with http_parser_parse_url() (the
+ * exact mechanism the server uses), and the header scratch buffer reproduces
+ * the parser layout ("Field: value" with the CRLF terminators replaced by
+ * null bytes). The new pointer APIs are cross-checked against the existing
+ * copy/length variants so any divergence is caught.
+ *
+ * Note: these assume CONFIG_HTTPD_VALIDATE_REQ is disabled (the default), so
+ * httpd_valid_req() accepts the stack request used here. */
+
+/* Parse a query-carrying URI into a stack request, like verify_url() does */
+static void build_query_req(httpd_req_t *req, struct httpd_req_aux *aux, const char *uri)
+{
+    memset(req, 0, sizeof(*req));
+    memset(aux, 0, sizeof(*aux));
+    req->aux = aux;
+    strlcpy((char *)req->uri, uri, sizeof(req->uri));
+    http_parser_url_init(&aux->url_parse_res);
+    TEST_ASSERT_EQUAL(0, http_parser_parse_url(req->uri, strlen(req->uri), 0,
+                                               &aux->url_parse_res));
+}
+
+TEST_CASE("httpd_req_get_url_query_str_ptr returns query without copy", "[HTTP SERVER]")
+{
+    httpd_req_t req;
+    struct httpd_req_aux aux;
+    const char *expected = "foo=bar&baz=qux";
+    build_query_req(&req, &aux, "/path?foo=bar&baz=qux");
+
+    const char *q = NULL;
+    size_t qlen = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_req_get_url_query_str_ptr(&req, &q, &qlen));
+    TEST_ASSERT_NOT_NULL(q);
+    TEST_ASSERT_EQUAL(strlen(expected), qlen);
+    TEST_ASSERT_EQUAL(0, memcmp(q, expected, qlen));
+
+    /* Must point into the request URI buffer, i.e. no copy was made */
+    TEST_ASSERT_TRUE(q >= req.uri && q < req.uri + sizeof(req.uri));
+
+    /* Cross-check against the length and copy variants */
+    TEST_ASSERT_EQUAL(qlen, httpd_req_get_url_query_len(&req));
+    char buf[64];
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_req_get_url_query_str(&req, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL(0, strncmp(buf, q, qlen));
+}
+
+TEST_CASE("httpd_req_get_url_query_str_ptr handles empty and missing query", "[HTTP SERVER]")
+{
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    req.aux = &aux;
+    const char *q = NULL;
+    size_t qlen = 0;
+
+    /* Empty URI -> ESP_FAIL */
+    TEST_ASSERT_EQUAL(ESP_FAIL, httpd_req_get_url_query_str_ptr(&req, &q, &qlen));
+
+    /* URI without a query -> ESP_ERR_NOT_FOUND */
+    build_query_req(&req, &aux, "/path/only");
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, httpd_req_get_url_query_str_ptr(&req, &q, &qlen));
+}
+
+TEST_CASE("httpd_req_get_url_query_str_ptr validates NULL args", "[HTTP SERVER][security]")
+{
+    httpd_req_t req;
+    struct httpd_req_aux aux;
+    build_query_req(&req, &aux, "/p?x=1");
+
+    const char *q = NULL;
+    size_t qlen = 0;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, httpd_req_get_url_query_str_ptr(NULL, &q, &qlen));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, httpd_req_get_url_query_str_ptr(&req, NULL, &qlen));
+    /* Regression: a query is present, so a NULL buf_len used to be written to */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, httpd_req_get_url_query_str_ptr(&req, &q, NULL));
+}
+
+TEST_CASE("httpd_req_get_hdr_value_str_ptr returns value without copy", "[HTTP SERVER]")
+{
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    /* Parser layout: "Field: value" entries, CRLF terminators replaced by nulls */
+    static char scratch[] = "Host: example.com\0\0X-Custom: hello world";
+    aux.scratch = scratch;
+    aux.req_hdrs_count = 2;
+    req.aux = &aux;
+
+    const char *val = NULL;
+    size_t vlen = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_req_get_hdr_value_str_ptr(&req, "X-Custom", &val, &vlen));
+    TEST_ASSERT_EQUAL(strlen("hello world"), vlen);
+    TEST_ASSERT_EQUAL(0, strcmp(val, "hello world"));
+
+    /* Must point into the scratch buffer, i.e. no copy was made */
+    TEST_ASSERT_TRUE(val >= scratch && val < scratch + sizeof(scratch));
+
+    /* Field match is case-insensitive, like the copy variant */
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_req_get_hdr_value_str_ptr(&req, "host", &val, &vlen));
+    TEST_ASSERT_EQUAL(0, strcmp(val, "example.com"));
+
+    /* Cross-check the new pointer API against the length and copy variants */
+    TEST_ASSERT_EQUAL(strlen("hello world"), httpd_req_get_hdr_value_len(&req, "X-Custom"));
+    char buf[32];
+    TEST_ASSERT_EQUAL(ESP_OK, httpd_req_get_hdr_value_str(&req, "X-Custom", buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL(0, strcmp(buf, "hello world"));
+
+    /* Missing field -> ESP_ERR_NOT_FOUND */
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      httpd_req_get_hdr_value_str_ptr(&req, "Nonexistent", &val, &vlen));
+}
+
+TEST_CASE("httpd_req_get_hdr_value_str_ptr validates NULL args", "[HTTP SERVER][security]")
+{
+    httpd_req_t req = {0};
+    struct httpd_req_aux aux = {0};
+    static char scratch[] = "X-Custom: hello world";
+    aux.scratch = scratch;
+    aux.req_hdrs_count = 1;
+    req.aux = &aux;
+
+    const char *val = NULL;
+    size_t vlen = 0;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_req_get_hdr_value_str_ptr(NULL, "X-Custom", &val, &vlen));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_req_get_hdr_value_str_ptr(&req, NULL, &val, &vlen));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_req_get_hdr_value_str_ptr(&req, "X-Custom", NULL, &vlen));
+    /* Regression-style guard: a value is present, so a NULL val_len must be
+     * rejected rather than written to */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      httpd_req_get_hdr_value_str_ptr(&req, "X-Custom", &val, NULL));
 }
 
 void app_main(void)

@@ -360,6 +360,7 @@
 
 /*-------------------------- USB CAPS ----------------------------------------*/
 #define SOC_USB_OTG_PERIPH_NUM          (1U)
+#define SOC_USB_FSLS_PHY_NUM            (1U)
 
 /*--------------------------- SHA CAPS ---------------------------------------*/
 /* Max amount of bytes in a single DMA operation is 4095,
@@ -490,7 +491,6 @@
 #define SOC_COEX_HW_PTI                 (1)
 
 /*-------------------------- EXTERNAL COEXISTENCE CAPS -------------------------------------*/
-#define SOC_EXTERNAL_COEX_ADVANCE              (0) /*!< HARDWARE ADVANCED EXTERNAL COEXISTENCE CAPS */
 #define SOC_EXTERNAL_COEX_LEADER_TX_LINE       (1) /*!< EXTERNAL COEXISTENCE TX LINE CAPS */
 
 /*-------------------------- SDMMC CAPS -----------------------------------------*/

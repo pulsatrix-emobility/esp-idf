@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,7 +9,7 @@
 #include <assert.h>
 #include "esp_efuse_table.h"
 
-// md5_digest_table a89a21bde56c3936f31af16ba1de1fe3
+// md5_digest_table 9f3a487e680d0c4219890b2df1abdca8
 // This file was generated from the file esp_efuse_table.csv. DO NOT CHANGE THIS FILE MANUALLY.
 // If you want to change some fields, you need to change esp_efuse_table.csv file
 // then run `efuse_common_table` or `efuse_custom_table` command it will generate this file.
@@ -391,6 +391,10 @@ static const esp_efuse_desc_t WR_DIS_ADC1_CH5_ATTEN0_INITCODE_DIFF[] = {
     {EFUSE_BLK0, 21, 1}, 	 // [] wr_dis of ADC1_CH5_ATTEN0_INITCODE_DIFF,
 };
 
+static const esp_efuse_desc_t WR_DIS_PVT_DBIAS[] = {
+    {EFUSE_BLK0, 21, 1}, 	 // [] wr_dis of PVT_DBIAS,
+};
+
 static const esp_efuse_desc_t WR_DIS_BLOCK_USR_DATA[] = {
     {EFUSE_BLK0, 22, 1}, 	 // [WR_DIS.USER_DATA] wr_dis of BLOCK_USR_DATA,
 };
@@ -702,7 +706,8 @@ static const esp_efuse_desc_t MAC[] = {
 };
 
 static const esp_efuse_desc_t MAC_EXT[] = {
-    {EFUSE_BLK1, 48, 16}, 	 // [] Represents the extended bits of MAC address,
+    {EFUSE_BLK1, 56, 8}, 	 // [] Stores the extended bits of MAC address,
+    {EFUSE_BLK1, 48, 8}, 	 // [] Stores the extended bits of MAC address,
 };
 
 static const esp_efuse_desc_t WAFER_VERSION_MINOR[] = {
@@ -867,6 +872,10 @@ static const esp_efuse_desc_t ADC1_CH4_ATTEN0_INITCODE_DIFF[] = {
 
 static const esp_efuse_desc_t ADC1_CH5_ATTEN0_INITCODE_DIFF[] = {
     {EFUSE_BLK2, 245, 4}, 	 // [] Gap between ADC1 CH5 and average initcode,
+};
+
+static const esp_efuse_desc_t PVT_DBIAS[] = {
+    {EFUSE_BLK2, 249, 5}, 	 // [] Average initcode of ADC1 atten0,
 };
 
 static const esp_efuse_desc_t USER_DATA[] = {
@@ -1379,6 +1388,11 @@ const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_ADC1_CH5_ATTEN0_INITCODE_DIFF[] = {
     NULL
 };
 
+const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_PVT_DBIAS[] = {
+    &WR_DIS_PVT_DBIAS[0],    		// [] wr_dis of PVT_DBIAS
+    NULL
+};
+
 const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_BLOCK_USR_DATA[] = {
     &WR_DIS_BLOCK_USR_DATA[0],    		// [WR_DIS.USER_DATA] wr_dis of BLOCK_USR_DATA
     NULL
@@ -1766,7 +1780,8 @@ const esp_efuse_desc_t* ESP_EFUSE_MAC[] = {
 };
 
 const esp_efuse_desc_t* ESP_EFUSE_MAC_EXT[] = {
-    &MAC_EXT[0],    		// [] Represents the extended bits of MAC address
+    &MAC_EXT[0],    		// [] Stores the extended bits of MAC address
+    &MAC_EXT[1],    		// [] Stores the extended bits of MAC address
     NULL
 };
 
@@ -1972,6 +1987,11 @@ const esp_efuse_desc_t* ESP_EFUSE_ADC1_CH4_ATTEN0_INITCODE_DIFF[] = {
 
 const esp_efuse_desc_t* ESP_EFUSE_ADC1_CH5_ATTEN0_INITCODE_DIFF[] = {
     &ADC1_CH5_ATTEN0_INITCODE_DIFF[0],    		// [] Gap between ADC1 CH5 and average initcode
+    NULL
+};
+
+const esp_efuse_desc_t* ESP_EFUSE_PVT_DBIAS[] = {
+    &PVT_DBIAS[0],    		// [] Average initcode of ADC1 atten0
     NULL
 };
 

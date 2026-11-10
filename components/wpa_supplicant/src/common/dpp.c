@@ -44,6 +44,35 @@ struct dpp_global {
 
 extern struct dpp_curve_params dpp_curves[];
 
+#ifdef CONFIG_TESTING_OPTIONS
+static u64 dpp_time_us(void)
+{
+	struct os_reltime now;
+
+	if (os_get_reltime(&now) < 0)
+		return 0;
+
+	return ((u64) now.sec * 1000000) + now.usec;
+}
+
+static void dpp_auth_req_set_timing(struct dpp_authentication *auth,
+				    u64 start_us, u64 parse_done_us)
+{
+	u64 end_us;
+
+	if (!auth || !start_us || !parse_done_us || parse_done_us < start_us)
+		return;
+
+	end_us = dpp_time_us();
+	if (!end_us || end_us < parse_done_us)
+		return;
+
+	auth->auth_req_parse_us = parse_done_us - start_us;
+	auth->auth_resp_form_us = end_us - parse_done_us;
+	auth->auth_req_total_us = end_us - start_us;
+}
+#endif /* CONFIG_TESTING_OPTIONS */
+
 #define TRANSACTION_ID_ATTR_SET_LEN 5
 #define CONNECTOR_ATTR_SET_LEN 4
 
@@ -1081,7 +1110,7 @@ struct dpp_authentication * dpp_auth_init(void *msg_ctx,
 {
 	struct dpp_authentication *auth;
 	size_t nonce_len;
-	size_t secret_len;
+	size_t secret_len = 0;
 	struct wpabuf *pi = NULL;
 	const u8 *r_pubkey_hash, *i_pubkey_hash;
 #ifdef CONFIG_TESTING_OPTIONS
@@ -1439,7 +1468,7 @@ static void dpp_auth_success(struct dpp_authentication *auth)
 static int dpp_auth_build_resp_ok(struct dpp_authentication *auth)
 {
 	size_t nonce_len;
-	size_t secret_len;
+	size_t secret_len = 0;
 	struct wpabuf *msg, *pr = NULL;
 	u8 r_auth[4 + DPP_MAX_HASH_LEN];
 	u8 wrapped_r_auth[4 + DPP_MAX_HASH_LEN + AES_BLOCK_SIZE], *w_r_auth;
@@ -1504,6 +1533,7 @@ static int dpp_auth_build_resp_ok(struct dpp_authentication *auth)
 	if (dpp_ecdh(auth->own_protocol_key, auth->peer_protocol_key,
 		     auth->Nx, &secret_len) < 0)
 		goto fail;
+	auth->secret_len = secret_len;
 
 	wpa_hexdump_key(MSG_DEBUG, "DPP: ECDH shared secret (N.x)",
 			auth->Nx, auth->secret_len);
@@ -1691,7 +1721,7 @@ dpp_auth_req_rx(void *msg_ctx, u8 dpp_allowed_roles, int qr_mutual,
 		size_t attr_len)
 {
 	struct crypto_ec_key *pi = NULL;
-	size_t secret_len;
+	size_t secret_len = 0;
 	const u8 *addr[2];
 	size_t len[2];
 	u8 *unwrapped = NULL;
@@ -1701,12 +1731,18 @@ dpp_auth_req_rx(void *msg_ctx, u8 dpp_allowed_roles, int qr_mutual,
 	const u8 *i_nonce;
 	const u8 *i_capab;
 	const u8 *i_bootstrap;
+	const u8 *channel;
 	u16 wrapped_data_len;
 	u16 i_proto_len;
 	u16 i_nonce_len;
 	u16 i_capab_len;
 	u16 i_bootstrap_len;
+	u16 channel_len;
 	struct dpp_authentication *auth = NULL;
+#ifdef CONFIG_TESTING_OPTIONS
+	u64 start_us = dpp_time_us();
+	u64 parse_done_us = 0;
+#endif /* CONFIG_TESTING_OPTIONS */
 
 #ifdef CONFIG_TESTING_OPTIONS
 	if (dpp_test == DPP_TEST_STOP_AT_AUTH_REQ) {
@@ -1738,37 +1774,30 @@ dpp_auth_req_rx(void *msg_ctx, u8 dpp_allowed_roles, int qr_mutual,
 
 	auth->peer_version = 1; /* default to the first version */
 
-#if 0
 	channel = dpp_get_attr(attr_start, attr_len, DPP_ATTR_CHANNEL,
 			       &channel_len);
 	if (channel) {
-		//int neg_freq;
-
 		if (channel_len < 2) {
 			dpp_auth_fail(auth, "Too short Channel attribute");
 			goto fail;
 		}
 
-		neg_freq = ieee80211_chan_to_freq(NULL, channel[0], channel[1]);
 		wpa_printf(MSG_DEBUG,
-			   "DPP: Initiator requested different channel for negotiation: op_class=%u channel=%u --> freq=%d",
-			   channel[0], channel[1], neg_freq);
-		if (neg_freq < 0) {
+			   "DPP: Initiator requested different channel for negotiation: op_class=%u channel=%u",
+			   channel[0], channel[1]);
+		if (!channel[0] || !channel[1]) {
 			dpp_auth_fail(auth,
 				      "Unsupported Channel attribute value");
 			goto fail;
 		}
 
-		if (auth->curr_freq != (unsigned int) neg_freq) {
+		if (auth->curr_chan != channel[1]) {
 			wpa_printf(MSG_DEBUG,
-				   "DPP: Changing negotiation channel from %u MHz to %u MHz",
-				   freq, neg_freq);
-			auth->curr_freq = neg_freq;
+				   "DPP: Changing negotiation channel from %u to %u",
+				   auth->curr_chan, channel[1]);
 		}
-		/* rename it to chan */
-		auth->curr_chan = *channel;
+		auth->curr_chan = channel[1];
 	}
-#endif
 
 	i_proto = dpp_get_attr(attr_start, attr_len, DPP_ATTR_I_PROTOCOL_KEY,
 			       &i_proto_len);
@@ -1892,9 +1921,15 @@ dpp_auth_req_rx(void *msg_ctx, u8 dpp_allowed_roles, int qr_mutual,
 
 		wpa_printf(MSG_DEBUG,
 			   "DPP: Mutual authentication required with QR Codes, but peer info is not yet available - request more time");
+#ifdef CONFIG_TESTING_OPTIONS
+		parse_done_us = dpp_time_us();
+#endif /* CONFIG_TESTING_OPTIONS */
 		if (dpp_auth_build_resp_status(auth,
 					       DPP_STATUS_RESPONSE_PENDING) < 0)
 			goto fail;
+#ifdef CONFIG_TESTING_OPTIONS
+		dpp_auth_req_set_timing(auth, start_us, parse_done_us);
+#endif /* CONFIG_TESTING_OPTIONS */
 		i_bootstrap = dpp_get_attr(attr_start, attr_len,
 					   DPP_ATTR_I_BOOTSTRAP_KEY_HASH,
 					   &i_bootstrap_len);
@@ -1912,8 +1947,14 @@ dpp_auth_req_rx(void *msg_ctx, u8 dpp_allowed_roles, int qr_mutual,
 			"%s", hex);
 		return auth;
 	}
+#ifdef CONFIG_TESTING_OPTIONS
+	parse_done_us = dpp_time_us();
+#endif /* CONFIG_TESTING_OPTIONS */
 	if (dpp_auth_build_resp_ok(auth) < 0)
 		goto fail;
+#ifdef CONFIG_TESTING_OPTIONS
+	dpp_auth_req_set_timing(auth, start_us, parse_done_us);
+#endif /* CONFIG_TESTING_OPTIONS */
 
 	return auth;
 
@@ -1926,8 +1967,14 @@ not_compatible:
 		auth->configurator = 0;
 	auth->peer_protocol_key = pi;
 	pi = NULL;
+#ifdef CONFIG_TESTING_OPTIONS
+	parse_done_us = dpp_time_us();
+#endif /* CONFIG_TESTING_OPTIONS */
 	if (dpp_auth_build_resp_status(auth, DPP_STATUS_NOT_COMPATIBLE) < 0)
 		goto fail;
+#ifdef CONFIG_TESTING_OPTIONS
+	dpp_auth_req_set_timing(auth, start_us, parse_done_us);
+#endif /* CONFIG_TESTING_OPTIONS */
 
 	auth->remove_on_tx_status = 1;
 	return auth;
@@ -2236,7 +2283,7 @@ dpp_auth_resp_rx(struct dpp_authentication *auth, const u8 *hdr,
 		 const u8 *attr_start, size_t attr_len)
 {
 	struct crypto_ec_key *pr;
-	size_t secret_len;
+	size_t secret_len = 0;
 	const u8 *addr[2];
 	size_t len[2];
 	u8 *unwrapped = NULL, *unwrapped2 = NULL;
@@ -2371,6 +2418,7 @@ dpp_auth_resp_rx(struct dpp_authentication *auth, const u8 *hdr,
 		dpp_auth_fail(auth, "Failed to derive ECDH shared secret");
 		goto fail;
 	}
+	auth->secret_len = secret_len;
 	crypto_ec_key_deinit(auth->peer_protocol_key);
 	auth->peer_protocol_key = pr;
 	pr = NULL;
@@ -2637,6 +2685,12 @@ int dpp_auth_conf_rx(struct dpp_authentication *auth, const u8 *hdr,
 
 	if (auth->initiator || !auth->own_bi) {
 		dpp_auth_fail(auth, "Unexpected Authentication Confirm");
+		return -1;
+	}
+
+	if (!auth->waiting_auth_conf) {
+		wpa_printf(MSG_DEBUG,
+			   "DPP: Not waiting for Auth Confirm - drop");
 		return -1;
 	}
 
@@ -3371,7 +3425,7 @@ skip_groups:
 	if (!hash) {
 		goto fail;
 	}
-	if (dpp_get_config_obj_hash(signed1, signed1_len, signed2, signed1_len, hash, curve->hash_len) < 0)
+	if (dpp_get_config_obj_hash(signed1, signed1_len, signed2, signed2_len, hash, curve->hash_len) < 0)
 		goto fail;
 
 	r = crypto_bignum_init();
@@ -3874,7 +3928,7 @@ static struct crypto_ec_key * dpp_parse_jwk(struct json_token *jwk,
 	const struct dpp_curve_params *curve;
 	struct wpabuf *x = NULL, *y = NULL;
 	unsigned char *a = NULL;
-	struct crypto_ec_group *group;
+	struct crypto_ec_group *group = NULL;
 	struct crypto_ec_key *pkey = NULL;
 	size_t len;
 
@@ -3937,14 +3991,15 @@ static struct crypto_ec_key * dpp_parse_jwk(struct json_token *jwk,
 
 	len = wpabuf_len(x) + wpabuf_len(y);
 	a = os_zalloc(len);
+	if (!a)
+		goto fail;
 	os_memcpy(a, wpabuf_head(x), wpabuf_len(x));
 	os_memcpy(a + wpabuf_len(x), wpabuf_head(y), wpabuf_len(y));
 	pkey = crypto_ec_key_set_pub(group, a, len);
-
-	crypto_ec_deinit((struct crypto_ec *)group);
 	*key_curve = curve;
 
 fail:
+	crypto_ec_deinit((struct crypto_ec *)group);
 	wpabuf_free(x);
 	wpabuf_free(y);
 	os_free(a);
@@ -4800,7 +4855,7 @@ dpp_peer_intro(struct dpp_introduction *intro, const char *own_connector,
 	struct wpabuf *own_key_pub = NULL;
 	const struct dpp_curve_params *curve, *own_curve;
 	struct dpp_signed_connector_info info;
-	size_t Nx_len;
+	size_t Nx_len = 0;
 	u8 Nx[DPP_MAX_SHARED_SECRET_LEN];
 
 	os_memset(intro, 0, sizeof(*intro));

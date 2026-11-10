@@ -24,9 +24,7 @@
 #include "common/bt_target.h"
 #include "osi/pkt_queue.h"
 #include "stack/bt_types.h"
-#if ((BT_CONTROLLER_INCLUDED == TRUE) && SOC_ESP_NIMBLE_CONTROLLER)
-#include "os/os_mbuf.h"
-#endif
+
 typedef enum {
     DATA_TYPE_COMMAND = 1,
     DATA_TYPE_ACL     = 2,
@@ -37,6 +35,10 @@ typedef enum {
 
 typedef void (*packet_ready_cb)(BT_HDR *packet);
 typedef void (*adv_rpt_ready_cb)(pkt_linked_item_t *linked_pkt);
+#if (C2H_FLOW_CONTROL_INCLUDED == TRUE)
+typedef void (*acl_c2h_credit_cb)(uint16_t handle, uint16_t num);
+typedef void (*acl_c2h_credit_flush_cb)(void);
+#endif
 
 typedef struct {
     // Called when the HAL detects inbound data.
@@ -44,6 +46,13 @@ typedef struct {
     // Executes in the context of the thread supplied to |init|.
     packet_ready_cb packet_ready;
     adv_rpt_ready_cb adv_rpt_ready;
+#if (C2H_FLOW_CONTROL_INCLUDED == TRUE)
+    // HCI-thread coalesce for drop / fragmenter continue (no mutex / no post).
+    acl_c2h_credit_cb c2h_credit;
+    // HCI RX batch end: flush coalesced Host_Number_Of_Completed_Packets.
+    // On command-buffer failure credits are edge-deferred to BTU.
+    acl_c2h_credit_flush_cb c2h_credit_flush;
+#endif
 
     /*
     // Called when the HAL detects inbound astronauts named Dave.
@@ -87,11 +96,6 @@ typedef struct hci_hal_t {
 
 // Gets the correct hal implementation, as compiled for.
 const hci_hal_t *hci_hal_h4_get_interface(void);
-#if ((BT_CONTROLLER_INCLUDED == TRUE) && SOC_ESP_NIMBLE_CONTROLLER)
-int ble_hs_hci_rx_evt(uint8_t *hci_ev, void *arg);
-
-int ble_hs_rx_data(struct os_mbuf *om, void *arg);
-#endif
 
 
 #endif /* _HCI_HAL_H */

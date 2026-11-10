@@ -283,7 +283,7 @@ To use the MCP server with an AI assistant, configure your agent or IDE to start
 
   eim run "idf.py mcp-server"
 
-2. Using ``idf.py`` directly: Run the MCP server with ``idf.py mcp-server`` from a shell where the ESP-IDF environment is already activated. The command must be executed from a valid ESP-IDF project directory, or use ``idf.py -C <project_dir> mcp-server`` to specify the project.
+2. Using ``idf.py`` directly: Run the MCP server with ``idf.py mcp-server`` from a shell where the ESP-IDF environment is already activated. The server can be started from any directory. Use ``idf.py -C <project_dir> mcp-server`` or set the ``IDF_MCP_WORKSPACE_FOLDER`` environment variable to configure a default project. If no project is configured at startup, pass project directory explicitly in each tool call.
 
 .. code-block:: bash
 
@@ -293,21 +293,38 @@ To use the MCP server with an AI assistant, configure your agent or IDE to start
 
     The MCP server requires the ``mcp`` feature to be installed. Install it using the EIM installer. See `EIM documentation > CLI Configuration - Global features <https://docs.espressif.com/projects/idf-im-ui/en/latest/cli_configuration.html#global-features-all-versions>`_ for how to install specific features.
 
+.. note::
+
+    ``mcp-server`` uses stdout for the MCP JSON-RPC transport. ``idf.py`` does not print its usual informational messages (such as ``Executing action:``) when this command is used. To keep stdout from being polluted, this command cannot be combined with other ``idf.py`` commands.
+
 Available Tools and Resources
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The MCP server provides the following commands you can use:
+The MCP server provides the following tools:
 
 - ``set target``: Set the ESP-IDF target (esp32, esp32s3, esp32c6, etc.)
 - ``build project``: Build the ESP-IDF project with the current target
-- ``flash project``: Flash the built project to a connected device. Specify it by port name.
+- ``flash project``: Flash the built project to a connected device. Specify it by port name
 - ``clean project``: Clean build artifacts
+- ``create project``: Create a new ESP-IDF project from the sample template. Can be used before any project exists
+- ``monitor device``: Run a scripted serial monitor session against a flashed device and wait for expected output. See :ref:`mcp-monitor-device`
+
+The project tools accept an optional ``project_dir`` argument. When omitted, the tool operates on the directory configured at startup (``-C`` flag or ``IDF_MCP_WORKSPACE_FOLDER``). You can instruct the AI model to use a specific project directory explicitly, for example when working with multiple projects or when no default project was configured at startup. The ``create project`` and ``monitor device`` tools are the exception: the former takes the parent ``path`` for the new project, and the latter talks to a device rather than to a project directory.
 
 The MCP server also provides these resources:
 
 - ``project://config``: Get current project configuration
 - ``project://status``: Get current project build status and artifacts
 - ``project://devices``: Get list of connected devices
+
+.. _mcp-monitor-device:
+
+Monitoring a Device
+^^^^^^^^^^^^^^^^^^^
+
+The ``monitor device`` tool lets an AI assistant observe what a flashed device prints. Ask in ordinary language, for example "flash it and check that the device prints ``Minimum free heap size`` within 30 seconds". The assistant waits for that output and then tells you whether it appeared.
+
+The full serial log is kept in a file. Ask the assistant to search that log if you want more detail than the short status it reports.
 
 Adding ESP-IDF MCP Server to IDEs and AI agents
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -466,6 +483,16 @@ Extending ``idf.py``
 
 - **From components participating in the build**: Place a file named ``idf_ext.py`` in the project root or in a component's root directory that is registered in the project's ``CMakeLists.txt``. Component extensions are discovered after the project is configured - run ``idf.py build`` or ``idf.py reconfigure`` to make newly added commands available.
 - **From Python entry points**: Any installed Python package may contribute extensions by defining an entry point in the ``idf_extension`` group. Package installation is sufficient, no project build is required.
+
+For security reasons, component extensions are loaded from trusted sources only:
+
+- ESP-IDF built-in components (under ``IDF_PATH/components``).
+- Project components (the project's own ``components/`` directory).
+- User-defined components from directories listed in ``EXTRA_COMPONENT_DIRS`` in the project's top-level ``CMakeLists.txt``.
+- Espressif components from the ESP Component Registry (``https://components.espressif.com/``). Only the ``espressif/`` namespace is trusted, not all registry components.
+- IDF-managed components downloaded to the ``IDF_TOOLS_PATH/root_managed_components/`` directory. Only the ``espressif/`` namespace is trusted.
+
+Extensions from other sources (e.g., components resolved via ``git``, local ``path``, or ``override_path``) are skipped with a warning. To load extensions from all components, set ``IDF_EXTENSION_ALLOW_UNTRUSTED=1``.
 
 .. important::
 

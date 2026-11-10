@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -62,12 +62,6 @@
 #include <tinycrypt/ecc.h>
 #include <tinycrypt/ecc_dh.h>
 #include <string.h>
-
-#if default_RNG_defined
-static uECC_RNG_Function g_rng_function = &default_CSPRNG;
-#else
-static uECC_RNG_Function g_rng_function = 0;
-#endif
 
 int uECC_make_key_with_d(uint8_t *public_key, uint8_t *private_key,
 			 unsigned int *d, uECC_Curve curve)
@@ -171,13 +165,17 @@ int uECC_shared_secret(const uint8_t *public_key, const uint8_t *private_key,
 			       public_key + num_bytes,
 			       num_bytes);
 
-	/* Regularize the bitcount for the private key so that attackers cannot use a
-	 * side channel attack to learn the number of leading zeros. */
+	/*
+	 * Use the software ladder for ECDH.  Its regularized scalar is unsuitable
+	 * for the ECC peripheral, and EccPoint_mult() can otherwise silently fall
+	 * back to the software ladder with an unregularized scalar.
+	 */
 	carry = regularize_k(_private, _private, tmp, curve);
 
 	/* If an RNG function was specified, try to get a random initial Z value to
 	 * improve protection against side-channel attacks. */
-	if (g_rng_function) {
+	uECC_RNG_Function rng_function = uECC_get_rng();
+	if (rng_function) {
 		if (!uECC_generate_random_int(p2[carry], curve->p, num_words)) {
 			r = 0;
 			goto clear_and_out;
@@ -195,6 +193,8 @@ clear_and_out:
 	/* erasing temporary buffer used to store secret: */
 	memset(p2, 0, sizeof(p2));
 	__asm__ __volatile__("" :: "g"(p2) : "memory");
+	memset(_public, 0, sizeof(_public));
+	__asm__ __volatile__("" :: "g"(_public) : "memory");
 	memset(tmp, 0, sizeof(tmp));
 	__asm__ __volatile__("" :: "g"(tmp) : "memory");
 	memset(_private, 0, sizeof(_private));

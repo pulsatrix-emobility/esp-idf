@@ -64,6 +64,8 @@ enum {
     BTC_MEDIA_SBC_ENC_UPDATE,
     BTC_MEDIA_FLUSH_AA_TX,
     BTC_MEDIA_AUDIO_FEEDING_INIT,
+    BTC_MEDIA_AUDIO_STATS_RESET,
+    BTC_MEDIA_AUDIO_STATS_STOP,
 };
 
 enum {
@@ -230,6 +232,22 @@ bool btc_a2dp_source_is_task_shutting_down(void)
     return btc_a2dp_source_state == BTC_A2DP_SOURCE_STATE_SHUTTING_DOWN;
 }
 
+static void btc_a2dp_source_handle_audio_stats_reset(void *param)
+{
+    if (param == NULL) {
+        return;
+    }
+    btc_a2dp_audio_stats_reset(*(esp_a2d_conn_hdl_t *)param);
+}
+
+static void btc_a2dp_source_handle_audio_stats_stop(void *param)
+{
+    if (param == NULL) {
+        return;
+    }
+    btc_a2dp_audio_stats_stop(*(esp_a2d_conn_hdl_t *)param);
+}
+
 static bool btc_a2dp_source_ctrl(uint32_t sig, void *param)
 {
     switch (sig) {
@@ -257,6 +275,12 @@ static bool btc_a2dp_source_ctrl(uint32_t sig, void *param)
     case BTC_MEDIA_FLUSH_AA_TX:
         btc_a2dp_source_aa_tx_flush();
         break;
+    case BTC_MEDIA_AUDIO_STATS_RESET:
+        btc_a2dp_source_handle_audio_stats_reset(param);
+        break;
+    case BTC_MEDIA_AUDIO_STATS_STOP:
+        btc_a2dp_source_handle_audio_stats_stop(param);
+        break;
     default:
         APPL_TRACE_WARNING("media task unhandled evt: 0x%x\n", sig);
     }
@@ -266,6 +290,26 @@ static bool btc_a2dp_source_ctrl(uint32_t sig, void *param)
     }
 
     return true;
+}
+
+static void btc_a2dp_source_audio_stats_post(uint32_t sig, esp_a2d_conn_hdl_t conn_hdl)
+{
+    esp_a2d_conn_hdl_t *conn = (esp_a2d_conn_hdl_t *)osi_malloc(sizeof(esp_a2d_conn_hdl_t));
+    if (conn == NULL) {
+        return;
+    }
+    *conn = conn_hdl;
+    btc_a2dp_source_ctrl(sig, conn);
+}
+
+void btc_a2dp_source_audio_stats_reset(esp_a2d_conn_hdl_t conn_hdl)
+{
+    btc_a2dp_source_audio_stats_post(BTC_MEDIA_AUDIO_STATS_RESET, conn_hdl);
+}
+
+void btc_a2dp_source_audio_stats_stop(esp_a2d_conn_hdl_t conn_hdl)
+{
+    btc_a2dp_source_audio_stats_post(BTC_MEDIA_AUDIO_STATS_STOP, conn_hdl);
 }
 
 bool btc_a2dp_source_startup(void)
@@ -371,10 +415,12 @@ void btc_a2dp_source_on_stopped(tBTA_AV_SUSPEND *p_av)
 
 void btc_a2dp_source_on_suspended(tBTA_AV_SUSPEND *p_av)
 {
-    /* check for status failures */
-    if (p_av->status != BTA_AV_SUCCESS) {
-        if (p_av->initiator == TRUE) {
-            btc_a2dp_control_command_ack(ESP_A2D_MEDIA_CTRL_ACK_FAILURE);
+    if (p_av != NULL) {
+        /* check for status failures */
+        if (p_av->status != BTA_AV_SUCCESS) {
+            if (p_av->initiator == TRUE) {
+                btc_a2dp_control_command_ack(ESP_A2D_MEDIA_CTRL_ACK_FAILURE);
+            }
         }
     }
 
@@ -404,6 +450,11 @@ static void log_tstamps_us(char *comment)
 {
     static UINT64 prev_us = 0;
     UINT64 now_us = time_now_us();
+#if A2D_DYNAMIC_MEMORY == TRUE
+    if (a2dp_source_local_param_ptr == NULL) {
+        return;
+    }
+#endif
     APPL_TRACE_DEBUG("[%s] ts %08llu, diff : %08llu, queue sz %d", comment, now_us, now_us - prev_us,
                      fixed_queue_length(a2dp_source_local_param.btc_aa_src_cb.TxAaQ));
     prev_us = now_us;
@@ -699,15 +750,24 @@ static void btc_a2dp_source_encoder_init(void)
     /* lookup table to convert freq */
     UINT16 freq_block_tbl[5] = { SBC_sf48000, SBC_sf44100, SBC_sf32000, 0, SBC_sf16000 };
 
+    UINT8 block_idx, mode_idx, freq_idx;
+
     APPL_TRACE_DEBUG("%s", __FUNCTION__);
 
     /* Retrieve the current SBC configuration (default if currently not used) */
     bta_av_co_audio_get_sbc_config(&sbc_config, &minmtu);
     msg.NumOfSubBands = (sbc_config.num_subbands == A2D_SBC_IE_SUBBAND_4) ? 4 : 8;
-    msg.NumOfBlocks = codec_block_tbl[sbc_config.block_len >> 5];
+
+    block_idx = sbc_config.block_len >> 5;
+    msg.NumOfBlocks = (block_idx < 5) ? codec_block_tbl[block_idx] : 16;
+
     msg.AllocationMethod = (sbc_config.alloc_mthd == A2D_SBC_IE_ALLOC_MD_L) ? SBC_LOUDNESS : SBC_SNR;
-    msg.ChannelMode = codec_mode_tbl[sbc_config.ch_mode >> 1];
-    msg.SamplingFreq = freq_block_tbl[sbc_config.samp_freq >> 5];
+
+    mode_idx = sbc_config.ch_mode >> 1;
+    msg.ChannelMode = (mode_idx < 5) ? codec_mode_tbl[mode_idx] : SBC_JOINT_STEREO;
+
+    freq_idx = sbc_config.samp_freq >> 5;
+    msg.SamplingFreq = (freq_idx < 5) ? freq_block_tbl[freq_idx] : SBC_sf44100;
     msg.MtuSize = minmtu;
 
     APPL_TRACE_EVENT("msg.ChannelMode %x", msg.ChannelMode);
@@ -1140,6 +1200,10 @@ static UINT8 btc_get_num_aa_frame(void)
                                      a2dp_source_local_param.btc_aa_src_cb.media_feeding.cfg.pcm.num_channel *
                                      a2dp_source_local_param.btc_aa_src_cb.media_feeding.cfg.pcm.bit_per_sample / 8;
 
+        if (pcm_bytes_per_frame == 0) {
+            break;
+        }
+
         UINT32 us_this_tick = BTC_MEDIA_TIME_TICK_MS * 1000;
         UINT64 now_us = time_now_us();
         if (a2dp_source_local_param.last_frame_us != 0) {
@@ -1334,9 +1398,9 @@ BOOLEAN btc_media_aa_read_feeding(void)
         a2dp_source_local_param.btc_aa_src_cb.media_feeding_state.pcm.aa_feed_residue -= bytes_needed;
 
         if (a2dp_source_local_param.btc_aa_src_cb.media_feeding_state.pcm.aa_feed_residue != 0) {
-            memcpy((UINT8 *)up_sampled_buffer,
-                   (UINT8 *)up_sampled_buffer + bytes_needed,
-                   a2dp_source_local_param.btc_aa_src_cb.media_feeding_state.pcm.aa_feed_residue);
+            memmove((UINT8 *)up_sampled_buffer,
+                    (UINT8 *)up_sampled_buffer + bytes_needed,
+                    a2dp_source_local_param.btc_aa_src_cb.media_feeding_state.pcm.aa_feed_residue);
         }
         return TRUE;
     }
@@ -1427,7 +1491,9 @@ static void btc_media_aa_prep_sbc_2_send(UINT8 nb_frame)
             }
 
             /* Enqueue the encoded SBC frame in AA Tx Queue */
-            fixed_queue_enqueue(a2dp_source_local_param.btc_aa_src_cb.TxAaQ, p_buf, FIXED_QUEUE_MAX_TIMEOUT);
+            if (fixed_queue_enqueue(a2dp_source_local_param.btc_aa_src_cb.TxAaQ, p_buf, FIXED_QUEUE_MAX_TIMEOUT)) {
+                btc_a2dp_audio_stats_on_handled(btc_a2d_conn_handle_get());
+            }
         } else {
             osi_free(p_buf);
         }
@@ -1455,8 +1521,18 @@ static void btc_a2dp_source_prep_2_send(UINT8 nb_frame)
                            fixed_queue_length(a2dp_source_local_param.btc_aa_src_cb.TxAaQ), MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ - nb_frame);
     }
 
+    uint32_t dropped = 0;
     while (fixed_queue_length(a2dp_source_local_param.btc_aa_src_cb.TxAaQ) > (MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ - nb_frame)) {
-        osi_free(fixed_queue_dequeue(a2dp_source_local_param.btc_aa_src_cb.TxAaQ, 0));
+        void *p_drop = fixed_queue_dequeue(a2dp_source_local_param.btc_aa_src_cb.TxAaQ, 0);
+        if (p_drop != NULL) {
+            dropped++;
+            osi_free(p_drop);
+        } else {
+            break;
+        }
+    }
+    if (dropped > 0) {
+        btc_a2dp_audio_stats_on_lost(btc_a2d_conn_handle_get(), dropped);
     }
 
     // Transcode frame
@@ -1507,6 +1583,11 @@ static void btc_a2dp_source_handle_timer(UNUSED_ATTR void *context)
     if (btc_a2dp_source_state != BTC_A2DP_SOURCE_STATE_ON || g_a2dp_source_ongoing_deinit){
         return;
     }
+#if A2D_DYNAMIC_MEMORY == TRUE
+    if (a2dp_source_local_param_ptr == NULL) {
+        return;
+    }
+#endif
 
     if (a2dp_source_local_param.btc_aa_src_cb.is_tx_timer == TRUE) {
         btc_a2dp_source_send_aa_frame();

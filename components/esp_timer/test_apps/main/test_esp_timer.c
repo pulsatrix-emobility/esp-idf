@@ -1,11 +1,12 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "sdkconfig.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 #include <time.h>
 #include <sys/time.h>
@@ -504,24 +505,57 @@ TEST_CASE("Can dump esp_timer stats", "[esp_timer]")
        overflow the internal string buffer if the
        length calculation is not correct.
     */
-    const int NUM_TIMERS = 200;
-    esp_timer_handle_t timers[NUM_TIMERS];
+    enum {
+        INACTIVE_TIMER_COUNT = 64,
+        NUM_TIMERS = 256,
+    };
+    /* Keep the first alarm within the range supported by older targets while
+     * retaining enough digits to exceed TIMER_INFO_LINE_LEN. */
+    const uint64_t long_period = 1000000000000ULL;
+    /* Keep large test buffers off the Unity task stack on smaller targets. */
+    static esp_timer_handle_t inactive_timers[INACTIVE_TIMER_COUNT];
+    static char inactive_names[INACTIVE_TIMER_COUNT][30];
+    static esp_timer_handle_t timers[NUM_TIMERS];
 
-    for (int i = 0; i < NUM_TIMERS; ++i) {
-        char name[30];
-        snprintf(name, sizeof(name), "test_timer_number_%d", i);
-        esp_timer_create_args_t timer_args = {
+    for (size_t i = 0; i < INACTIVE_TIMER_COUNT; ++i) {
+        snprintf(inactive_names[i], sizeof(inactive_names[i]), "test_timer_number_%zu", i);
+        const esp_timer_create_args_t timer_args = {
             .callback = &empty_cb,
             .arg = NULL,
-            .name = name
+            .name = inactive_names[i],
         };
-        TEST_ESP_OK(esp_timer_create(&timer_args, &timers[i]));
+        TEST_ESP_OK(esp_timer_create(&timer_args, &inactive_timers[i]));
     }
 
-    esp_timer_dump(stdout);
+    for (size_t i = 0; i < NUM_TIMERS; ++i) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = &empty_cb,
+            .name = "dump_long_line_timer",
+        };
+        TEST_ESP_OK(esp_timer_create(&timer_args, &timers[i]));
+        TEST_ESP_OK(esp_timer_start_periodic(timers[i], long_period));
+    }
 
-    for (int i = 0; i < NUM_TIMERS; ++i) {
+    static char dump_buf[4096];
+    memset(dump_buf, 0, sizeof(dump_buf));
+    FILE* stream = fmemopen(dump_buf, sizeof(dump_buf) - 1, "w+");
+    TEST_ASSERT_NOT_NULL(stream);
+    TEST_ESP_OK(esp_timer_dump(stream));
+    fflush(stream);
+    fclose(stream);
+    TEST_ASSERT_NOT_NULL(strstr(dump_buf, "Timer stats:"));
+    TEST_ASSERT_NOT_NULL(strstr(dump_buf, "1000000000000"));
+#if !CONFIG_IDF_TARGET_LINUX
+    TEST_ASSERT_TRUE(heap_caps_check_integrity_all(true));
+#endif
+
+    for (size_t i = 0; i < NUM_TIMERS; ++i) {
+        TEST_ESP_OK(esp_timer_stop(timers[i]));
         TEST_ESP_OK(esp_timer_delete(timers[i]));
+    }
+
+    for (size_t i = 0; i < INACTIVE_TIMER_COUNT; ++i) {
+        TEST_ESP_OK(esp_timer_delete(inactive_timers[i]));
     }
 }
 
@@ -885,11 +919,17 @@ TEST_CASE("Test a latency between a call of callback and real event", "[esp_time
         }
         int diff = callback_time - expected_time;
         esp_rom_printf(DRAM_STR("%d us\n"), diff);
+
 #ifndef CONFIG_IDF_ENV_FPGA
         if (i != 0) {
+#if CONFIG_IDF_TARGET_ESP32H4
+            // H4 runs this test at 96 MHz, and multicore task dispatch adds extra latency.
+            const int max_latency_us = 60;
+#else
+            const int max_latency_us = 50;
+#endif
             // skip the first measurement
-            // if CPU_FREQ = 240MHz. 14 - 16us
-            TEST_ASSERT_LESS_OR_EQUAL(50, diff);
+            TEST_ASSERT_LESS_OR_EQUAL(max_latency_us, diff);
         }
 #endif // not CONFIG_IDF_ENV_FPGA
     }
@@ -983,6 +1023,62 @@ TEST_CASE("one-shot esp_timer can be restarted", "[esp_timer]")
     TEST_ESP_OK(esp_timer_delete(timer1));
     vTaskDelay(3); // wait for the esp_timer task to delete all timers
 }
+
+#if CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD && !CONFIG_IDF_TARGET_LINUX
+IRAM_ATTR static void restart_expiry_race_timer_cb(void* arg)
+{
+    ++(*(volatile uint32_t*)arg);
+}
+
+TEST_CASE("one-shot timer expiry racing with restart", "[esp_timer]")
+{
+    volatile uint32_t callback_count = 0;
+    size_t restart_wins_count = 0;
+    size_t expiry_wins_count = 0;
+    esp_timer_handle_t timer;
+
+    const esp_timer_create_args_t create_args = {
+        .callback = restart_expiry_race_timer_cb,
+        .arg = (void*) &callback_count,
+        .dispatch_method = ESP_TIMER_ISR,
+        .name = "restart_expiry_race",
+    };
+    TEST_ESP_OK(esp_timer_create(&create_args, &timer));
+
+    const size_t iterations = 1000;
+    for (size_t i = 0; i < iterations; ++i) {
+        uint32_t previous_callback_count = callback_count;
+        TEST_ESP_OK(esp_timer_start_once(timer, 100));
+
+        uint64_t expiry;
+        TEST_ESP_OK(esp_timer_get_expiry_time(timer, &expiry));
+
+        while (esp_timer_get_time() + 1 < expiry) { };
+
+        /* The esp_timer_restart() and timer ISR race for the timer-list lock.
+         * - If restart() gets the lock first, it reschedules the armed timer and the old
+         * callback must not run, leaving callback_count unchanged.
+         * - If the ISR gets it first, it removes the expired one-shot timer.
+         * Restart then sees it unarmed and fails; the ISR subsequently invokes
+         * the callback, incrementing callback_count. */
+        esp_err_t result = esp_timer_restart(timer, SEC);
+        if (result == ESP_OK) {
+            ++restart_wins_count;
+            esp_rom_delay_us(50);
+            TEST_ASSERT_EQUAL_UINT32(previous_callback_count, callback_count);
+            TEST_ESP_OK(esp_timer_stop(timer));
+        } else {
+            ++expiry_wins_count;
+            TEST_ESP_ERR(ESP_ERR_INVALID_STATE, result);
+            esp_rom_delay_us(200);
+            TEST_ASSERT_NOT_EQUAL(previous_callback_count, callback_count);
+        }
+    }
+
+    printf("restart_wins_count=%zu, expiry_wins_count=%zu\n", restart_wins_count, expiry_wins_count);
+    TEST_ESP_OK(esp_timer_delete(timer));
+}
+#endif
 
 #ifdef CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD
 static int64_t old_time[2];
@@ -1332,3 +1428,146 @@ TEST_CASE("Test ISR dispatch callbacks are not blocked even if TASK callbacks ta
 }
 
 #endif // CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD
+
+typedef struct {
+    SemaphoreHandle_t callback_started;
+    SemaphoreHandle_t stop_called_from_cb;
+    SemaphoreHandle_t callback_can_finish;
+    SemaphoreHandle_t callback_finished;
+    volatile int callback_count;
+    esp_timer_handle_t timer;
+} test_stop_blocking_state_t;
+
+static void test_stop_blocking_callback(void* arg)
+{
+    test_stop_blocking_state_t* state = (test_stop_blocking_state_t*) arg;
+    state->callback_count++;
+
+    // Notify that callback has started
+    xSemaphoreGive(state->callback_started);
+
+    // Wait for permission to finish (simulating long-running callback)
+    xSemaphoreTake(state->callback_can_finish, portMAX_DELAY);
+
+    // Notify that callback has finished
+    xSemaphoreGive(state->callback_finished);
+}
+
+TEST_CASE("esp_timer_stop_blocking waits for callback completion", "[esp_timer]")
+{
+    test_stop_blocking_state_t state = {
+        .callback_started = xSemaphoreCreateBinary(),
+        .stop_called_from_cb = NULL,
+        .callback_can_finish = xSemaphoreCreateBinary(),
+        .callback_finished = xSemaphoreCreateBinary(),
+        .callback_count = 0,
+        .timer = NULL,
+    };
+
+    esp_timer_create_args_t timer_args = {
+        .callback = test_stop_blocking_callback,
+        .arg = &state,
+        .name = "test_blocking",
+    };
+
+    esp_timer_handle_t timer;
+    TEST_ESP_OK(esp_timer_create(&timer_args, &timer));
+
+    // Start a one-shot timer
+    TEST_ESP_OK(esp_timer_start_once(timer, 1000));
+
+    // Wait for callback to start
+    TEST_ASSERT_TRUE(xSemaphoreTake(state.callback_started, pdMS_TO_TICKS(100)));
+
+    // At this point, callback is running
+    TEST_ASSERT_TRUE(esp_timer_is_active(timer));
+
+    // Try to stop with blocking - this should wait for callback
+    TEST_ESP_ERR(ESP_ERR_TIMEOUT, esp_timer_stop_blocking(timer, pdMS_TO_TICKS(100)));
+
+    // Now allow callback to finish
+    xSemaphoreGive(state.callback_can_finish);
+
+    // Wait for callback to complete
+    TEST_ASSERT_TRUE(xSemaphoreTake(state.callback_finished, pdMS_TO_TICKS(100)));
+
+    // Timer should no longer be active
+    TEST_ASSERT_FALSE(esp_timer_is_active(timer));
+
+    // Callback should have run exactly once
+    TEST_ASSERT_EQUAL(1, state.callback_count);
+
+    // Clean up
+    TEST_ESP_OK(esp_timer_delete(timer));
+    vSemaphoreDelete(state.callback_started);
+    vSemaphoreDelete(state.callback_can_finish);
+    vSemaphoreDelete(state.callback_finished);
+}
+
+static void test_stop_blocking_callback_stop_inside(void* arg)
+{
+    test_stop_blocking_state_t* state = (test_stop_blocking_state_t*) arg;
+    state->callback_count++;
+
+    // Notify that callback has started (we are now in esp_timer task context for TASK dispatch)
+    xSemaphoreGive(state->callback_started);
+
+    // Call stop_blocking from the timer's own callback:
+    // This must NOT block (otherwise we deadlock waiting for ourselves).
+    TEST_ESP_OK(esp_timer_stop_blocking(state->timer, portMAX_DELAY));
+
+    // Signal to the test that stop_blocking has returned from inside callback
+    xSemaphoreGive(state->stop_called_from_cb);
+
+    // Keep callback running until the test allows us to finish
+    xSemaphoreTake(state->callback_can_finish, portMAX_DELAY);
+
+    xSemaphoreGive(state->callback_finished);
+}
+
+TEST_CASE("esp_timer_stop_blocking from timer callback and does not block", "[esp_timer]")
+{
+    test_stop_blocking_state_t state = {
+        .callback_started     = xSemaphoreCreateBinary(),
+        .stop_called_from_cb  = xSemaphoreCreateBinary(),
+        .callback_can_finish  = xSemaphoreCreateBinary(),
+        .callback_finished    = xSemaphoreCreateBinary(),
+        .timer               = NULL,
+        .callback_count       = 0,
+    };
+
+    esp_timer_create_args_t timer_args = {
+        .callback = test_stop_blocking_callback_stop_inside,
+        .arg      = &state,
+        .name     = "stop_from_cb",
+    };
+
+    esp_timer_handle_t timer;
+    TEST_ESP_OK(esp_timer_create(&timer_args, &timer));
+    state.timer = timer;
+
+    TEST_ESP_OK(esp_timer_start_once(timer, 1000));
+
+    // Wait until callback starts
+    TEST_ASSERT_TRUE(xSemaphoreTake(state.callback_started, portMAX_DELAY));
+
+    // Ensure stop_blocking has returned from inside the callback (i.e., it did not block)
+    TEST_ASSERT_TRUE(xSemaphoreTake(state.stop_called_from_cb, pdMS_TO_TICKS(200)));
+
+    // While callback is still running, timer should still be considered active
+    TEST_ASSERT_TRUE(esp_timer_is_active(timer));
+
+    // Now let callback finish
+    xSemaphoreGive(state.callback_can_finish);
+    TEST_ASSERT_TRUE(xSemaphoreTake(state.callback_finished, pdMS_TO_TICKS(1000)));
+
+    // After callback finishes, timer should be inactive (one-shot already disarmed)
+    TEST_ASSERT_FALSE(esp_timer_is_active(timer));
+    TEST_ASSERT_EQUAL(1, state.callback_count);
+
+    TEST_ESP_OK(esp_timer_delete(timer));
+    vSemaphoreDelete(state.callback_started);
+    vSemaphoreDelete(state.stop_called_from_cb);
+    vSemaphoreDelete(state.callback_can_finish);
+    vSemaphoreDelete(state.callback_finished);
+}

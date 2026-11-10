@@ -249,7 +249,7 @@ int  wpa_eapol_key_send(struct wpa_sm *sm, const u8 *kck, size_t kck_len,
                    MAC2STR(dest));
         }
 #else
-        return ret;
+        goto out;
 #endif
     }
     if (key_mic &&
@@ -263,8 +263,13 @@ int  wpa_eapol_key_send(struct wpa_sm *sm, const u8 *kck, size_t kck_len,
     wpa_hexdump_key(MSG_DEBUG, "WPA: KCK", kck, kck_len);
     wpa_hexdump(MSG_DEBUG, "WPA: Derived Key MIC", key_mic, wpa_mic_len(sm->key_mgmt, sm->pmk_len));
     wpa_hexdump(MSG_MSGDUMP, "WPA: TX EAPOL-Key", msg, msg_len);
-    return wpa_sm_ether_send(sm, dest, proto, msg, msg_len);
+    ret = wpa_sm_ether_send(sm, dest, proto, msg, msg_len);
 out:
+#ifdef ESP_SUPPLICANT
+    wpa_sm_free_eapol(msg);
+#else
+    os_free(msg);
+#endif
     return ret;
 }
 
@@ -338,7 +343,6 @@ static void wpa_sm_key_request(struct wpa_sm *sm, int error, int pairwise)
            error, pairwise, sm->ptk_set, (unsigned long) rlen);
     wpa_eapol_key_send(sm, sm->ptk.kck, sm->ptk.kck_len, ver, wpa_sm_get_auth_addr(sm),
                        ETH_P_EAPOL, rbuf, rlen, key_mic);
-    wpa_sm_free_eapol(rbuf);
 }
 
 static void wpa_sm_pmksa_free_cb(struct rsn_pmksa_cache_entry *entry,
@@ -400,8 +404,8 @@ static int wpa_supplicant_get_pmk(struct wpa_sm *sm,
          * not have enough time to get the association information
          * event before receiving this 1/4 message, so try to find a
          * matching PMKSA cache entry here. */
-        sm->cur_pmksa = pmksa_cache_get(sm->pmksa, src_addr, pmkid,
-                NULL);
+        sm->cur_pmksa = pmksa_cache_get(sm->pmksa, src_addr, sm->own_addr,
+                pmkid, sm->network_ctx, sm->key_mgmt);
         if (sm->cur_pmksa) {
             wpa_printf(MSG_DEBUG,
                     "RSN: found matching PMKID from PMKSA cache");
@@ -470,7 +474,8 @@ static int wpa_supplicant_get_pmk(struct wpa_sm *sm,
                                      sm->network_ctx, sm->key_mgmt);
             }
             if (!sm->cur_pmksa && pmkid &&
-                pmksa_cache_get(sm->pmksa, src_addr, pmkid, NULL))
+                pmksa_cache_get(sm->pmksa, src_addr, sm->own_addr, pmkid,
+                                sm->network_ctx, sm->key_mgmt))
             {
                 wpa_printf( MSG_DEBUG,
                     "RSN: the new PMK matches with the "
@@ -680,11 +685,8 @@ int   wpa_supplicant_send_2_of_4(struct wpa_sm *sm, const unsigned char *dst,
 
     wpa_printf(MSG_DEBUG, "WPA Send EAPOL-Key 2/4");
 
-    wpa_eapol_key_send(sm, ptk->kck, ptk->kck_len, ver, dst, ETH_P_EAPOL,
+    return wpa_eapol_key_send(sm, ptk->kck, ptk->kck_len, ver, dst, ETH_P_EAPOL,
                rbuf, rlen, key_mic);
-    wpa_sm_free_eapol(rbuf);
-
-    return 0;
 }
 
 static int wpa_derive_ptk(struct wpa_sm *sm, const unsigned char *src_addr,
@@ -715,9 +717,11 @@ void wpa_supplicant_process_1_of_4(struct wpa_sm *sm,
 #ifdef CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT
     if (is_wpa2_enterprise_connection()) {
         wpa2_ent_eap_state_t state = eap_client_get_eap_state();
-        if (state == WPA2_ENT_EAP_STATE_IN_PROGRESS) {
-            wpa_printf(MSG_INFO, "EAP Success has not been processed yet."
-               " Drop EAPOL message.");
+
+        if (state == WPA2_ENT_EAP_STATE_IN_PROGRESS || sm->pmk_len == 0) {
+            wpa_printf(MSG_INFO,
+                   "Drop EAPOL M1: EAP state=%d, pmk_len=%u.",
+                   state, (unsigned int) sm->pmk_len);
             return;
         }
     }
@@ -773,7 +777,15 @@ void wpa_supplicant_process_1_of_4(struct wpa_sm *sm,
     /* Calculate PTK which will be stored as a temporary PTK until it has
      * been verified when processing message 3/4. */
     ptk = &sm->tptk;
-    wpa_derive_ptk(sm, src_addr, key, ptk);
+    os_memset(ptk, 0, sizeof(*ptk));
+    if (wpa_derive_ptk(sm, src_addr, key, ptk) < 0) {
+        wpa_printf(MSG_WARNING,
+               "WPA: Failed to derive PTK - drop message 1/4");
+        sm->tptk_set = 0;
+        sm->ptk_set = 0;
+        sm->key_install = false;
+        goto failed;
+    }
     /* Supplicant: swap tx/rx Mic keys */
     sm->tptk_set = 1;
     sm->ptk_set = 0;
@@ -908,7 +920,8 @@ void   wpa_supplicant_key_neg_complete(struct wpa_sm *sm,
             sm, addr, MLME_SETPROTECTION_PROTECT_TYPE_RX_TX,
             MLME_SETPROTECTION_KEY_TYPE_PAIRWISE);
 
-        if (wpa_key_mgmt_wpa_psk(sm->key_mgmt) || sm->key_mgmt == WPA_KEY_MGMT_OWE || sm->key_mgmt == WPA_KEY_MGMT_DPP)
+        if (wpa_key_mgmt_wpa_psk(sm->key_mgmt) || sm->key_mgmt == WPA_KEY_MGMT_OWE ||
+            wpa_key_mgmt_dpp(sm->key_mgmt))
             eapol_sm_notify_eap_success(TRUE);
         /*
          * Start preauthentication after a short wait to avoid a
@@ -1343,11 +1356,8 @@ static int wpa_supplicant_send_4_of_4(struct wpa_sm *sm, const unsigned char *ds
         WPA_PUT_BE16(reply->key_data_length, 0);
 
     wpa_printf(MSG_DEBUG, "WPA Send EAPOL-Key 4/4");
-    wpa_eapol_key_send(sm, ptk->kck, ptk->kck_len, ver, dst, ETH_P_EAPOL,
+    return wpa_eapol_key_send(sm, ptk->kck, ptk->kck_len, ver, dst, ETH_P_EAPOL,
                rbuf, rlen, key_mic);
-    wpa_sm_free_eapol(rbuf);
-
-    return 0;
 }
 
 static void wpa_sm_set_seq(struct wpa_sm *sm, struct wpa_eapol_key *key, u8 isptk)
@@ -1859,11 +1869,8 @@ static int wpa_supplicant_send_2_of_2(struct wpa_sm *sm,
 
     wpa_printf(MSG_DEBUG, "WPA Send 2/2 Group key");
 
-    wpa_eapol_key_send(sm, sm->ptk.kck, sm->ptk.kck_len, ver, sm->bssid, ETH_P_EAPOL,
+    return wpa_eapol_key_send(sm, sm->ptk.kck, sm->ptk.kck_len, ver, sm->bssid, ETH_P_EAPOL,
                rbuf, rlen, key_mic);
-    wpa_sm_free_eapol(rbuf);
-
-    return 0;
 }
 
 static void wpa_supplicant_process_1_of_2(struct wpa_sm *sm,
@@ -2393,7 +2400,7 @@ void wpa_sm_set_pmk_from_pmksa(struct wpa_sm *sm)
         sm->pmk_len = sm->cur_pmksa->pmk_len;
         os_memcpy(sm->pmk, sm->cur_pmksa->pmk, sm->pmk_len);
     } else {
-        sm->pmk_len = PMK_LEN_MAX;
+        sm->pmk_len = 0;
         os_memset(sm->pmk, 0, PMK_LEN_MAX);
     }
 }
@@ -2638,7 +2645,7 @@ int wpa_set_bss(uint8_t *macddr, uint8_t *bssid, uint8_t pairwise_cipher, uint8_
 {
     int res = 0;
     struct wpa_sm *sm = &gWpaSm;
-    bool use_pmk_cache = !esp_wifi_skip_supp_pmkcaching();
+    bool use_pmk_cache = esp_wifi_use_supp_pmk_cache();
     uint8_t assoc_ie[128] = {0};
     uint16_t assoc_ie_len = sizeof(assoc_ie);
     bool reassoc_same_ess = false;
@@ -2655,6 +2662,10 @@ int wpa_set_bss(uint8_t *macddr, uint8_t *bssid, uint8_t pairwise_cipher, uint8_
         (os_memcmp(sm->bssid, bssid, ETH_ALEN) == 0) &&
         (os_memcmp(sm->ssid, ssid, ssid_len) != 0)) {
         use_pmk_cache = false;
+    }
+
+    if (wpa_key_mgmt_dpp(sm->key_mgmt)) {
+        use_pmk_cache = true;
     }
 
     if (os_memcmp(sm->ssid, ssid, ssid_len) == 0) {
@@ -2677,7 +2688,8 @@ int wpa_set_bss(uint8_t *macddr, uint8_t *bssid, uint8_t pairwise_cipher, uint8_
 
     struct rsn_pmksa_cache_entry *pmksa = NULL;
     if (use_pmk_cache) {
-        pmksa = pmksa_cache_get(sm->pmksa, (const u8 *)bssid, NULL, NULL);
+        pmksa = pmksa_cache_get(sm->pmksa, (const u8 *)bssid, sm->own_addr,
+                NULL, NULL, 0);
         if (pmksa && (pmksa->akmp != sm->key_mgmt)) {
             use_pmk_cache = false;
         }
@@ -2693,6 +2705,7 @@ int wpa_set_bss(uint8_t *macddr, uint8_t *bssid, uint8_t pairwise_cipher, uint8_
         if (pmksa) {
             pmksa_cache_flush(sm->pmksa, NULL, pmksa->pmk, pmksa->pmk_len);
         }
+        wpa_sm_drop_sa(sm);
     }
 
 #ifdef CONFIG_IEEE80211W
@@ -2743,7 +2756,8 @@ int wpa_set_bss(uint8_t *macddr, uint8_t *bssid, uint8_t pairwise_cipher, uint8_
         ie = wpa_bss_get_ie(bss, WLAN_EID_MOBILITY_DOMAIN);
         if (ie && ie[1] >= MOBILITY_DOMAIN_ID_LEN)
                 md = ie + 2;
-        if (os_memcmp(md, sm->mobility_domain, MOBILITY_DOMAIN_ID_LEN) != 0) {
+        if (md == NULL ||
+            os_memcmp(md, sm->mobility_domain, MOBILITY_DOMAIN_ID_LEN) != 0) {
             /* Reset Auth IE here */
             esp_wifi_unset_appie_internal(WIFI_APPIE_RAM_STA_AUTH);
             esp_wifi_unset_appie_internal(WIFI_APPIE_ASSOC_REQ);
@@ -2863,14 +2877,14 @@ void wpa_set_passphrase(char * passphrase, u8 *ssid, size_t ssid_len)
     if (sm->key_mgmt == WPA_KEY_MGMT_SAE ||
         sm->key_mgmt == WPA_KEY_MGMT_OWE ||
         sm->key_mgmt == WPA_KEY_MGMT_SAE_EXT_KEY ||
-        sm->key_mgmt == WPA_KEY_MGMT_DPP ||
+        wpa_key_mgmt_dpp(sm->key_mgmt) ||
         sm->key_mgmt == WPA_KEY_MGMT_FT_SAE)
         return;
 
     /* This is really SLOW, so just re cacl while reset param */
     if (esp_wifi_sta_get_reset_nvs_pmk_internal() != 0) {
         // check it's psk
-        if (strlen((char *)esp_wifi_sta_get_prof_password_internal()) == 64) {
+        if (os_strlen((char *)esp_wifi_sta_get_prof_password_internal()) == 64) {
             if (hexstr2bin((char *)esp_wifi_sta_get_prof_password_internal(),
                            esp_wifi_sta_get_ap_info_prof_pmk_internal(), PMK_LEN) != 0)
                 return;
@@ -3258,6 +3272,7 @@ void wpa_sm_drop_sa(struct wpa_sm *sm)
     sm->ptk_set = 0;
     sm->tptk_set = 0;
     sm->pmk_len = 0;
+    os_memset(sm->pmk, 0, sizeof(sm->pmk));
     os_memset(&sm->ptk, 0, sizeof(sm->ptk));
     os_memset(&sm->tptk, 0, sizeof(sm->tptk));
     os_memset(&sm->gtk, 0, sizeof(sm->gtk));
@@ -3321,6 +3336,7 @@ struct wpabuf *owe_build_assoc_req(struct wpa_sm *sm, u16 group)
 fail:
     wpabuf_free(pub);
     crypto_ecdh_deinit(sm->owe_ecdh);
+    sm->owe_ecdh = NULL;
     return NULL;
 }
 
@@ -3434,6 +3450,7 @@ int owe_process_assoc_resp(const u8 *rsn_ie, size_t rsn_len, const uint8_t *dh_i
 
     wpabuf_put_buf(hkey, pub); /* C */
     wpabuf_free(pub);
+    pub = NULL;
 
     wpabuf_put_data(hkey, dh_ie + 2, dh_len - 2); /* A */
     wpabuf_put_le16(hkey, sm->owe_group); /* group */
@@ -3446,7 +3463,9 @@ int owe_process_assoc_resp(const u8 *rsn_ie, size_t rsn_len, const uint8_t *dh_i
     hash_len = SHA256_MAC_LEN;
 
     wpabuf_free(hkey);
+    hkey = NULL;
     wpabuf_clear_free(sh_secret);
+    sh_secret = NULL;
 
     wpa_hexdump_key(MSG_DEBUG, "OWE: prk", prk, hash_len);
 

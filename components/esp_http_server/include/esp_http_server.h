@@ -23,7 +23,9 @@ extern "C" {
 
 #define ESP_HTTPD_DEF_CTRL_PORT         (32768)    /*!< HTTP Server control socket port*/
 
+#if CONFIG_HTTPD_ENABLE_EVENTS || __DOXYGEN_
 ESP_EVENT_DECLARE_BASE(ESP_HTTP_SERVER_EVENT);
+#endif // CONFIG_HTTPD_ENABLE_EVENTS || __DOXYGEN_
 
 /**
  * @brief   HTTP Server events id
@@ -372,7 +374,7 @@ esp_err_t httpd_stop(httpd_handle_t handle);
  */
 typedef struct httpd_req {
     httpd_handle_t  handle;                     /*!< Handle to server instance */
-    int             method;                     /*!< The type of HTTP request, -1 if unsupported method, HTTP_ANY for wildcard method to support every method */
+    int             method;                     /*!< The type of HTTP request (enum http_method); a request with an unrecognized method is rejected with 501 before any URI handler runs */
     const char      uri[CONFIG_HTTPD_MAX_URI_LEN + 1]; /*!< The URI of this request (1 byte extra for null termination) */
     size_t          content_len;                /*!< Length of the request body */
     void           *aux;                        /*!< Internally used members */
@@ -580,10 +582,11 @@ typedef enum {
      */
     HTTPD_500_INTERNAL_SERVER_ERROR = 0,
 
-    /* For methods not supported by http_parser. Presently
-     * http_parser halts parsing when such methods are
-     * encountered and so the server responds with 400 Bad
-     * Request error instead.
+    /* For request methods that http_parser does not recognize,
+     * and for requests carrying a Transfer-Encoding header (no
+     * transfer coding is implemented). Parsing aborted mid-request
+     * in both cases, so the server closes the session after the
+     * response regardless of what a custom error handler returns.
      */
     HTTPD_501_METHOD_NOT_IMPLEMENTED,
 
@@ -591,8 +594,8 @@ typedef enum {
     HTTPD_505_VERSION_NOT_SUPPORTED,
 
     /* Returned when http_parser halts parsing due to incorrect
-     * syntax of request, unsupported method in request URI or
-     * due to chunked encoding / upgrade field present in headers
+     * syntax of request or due to an upgrade field present in
+     * headers that the server does not handle
      */
     HTTPD_400_BAD_REQUEST,
 
@@ -657,8 +660,10 @@ typedef enum {
  *    guaranteed as the HTTP request may be partially received/parsed.
  *  - The function must return ESP_OK if underlying socket needs to
  *    be kept open. Any other value will ensure that the socket is
- *    closed. The return value is ignored when error is of type
- *    `HTTPD_500_INTERNAL_SERVER_ERROR` and the socket closed anyway.
+ *    closed. The return value is ignored, and the socket is closed
+ *    anyway, when the error is `HTTPD_500_INTERNAL_SERVER_ERROR` or
+ *    `HTTPD_501_METHOD_NOT_IMPLEMENTED` (for 501 the request is only
+ *    partially parsed, so the session cannot continue safely).
  *
  * @param[in] req    HTTP request for which the error needs to be handled
  * @param[in] error  Error type
@@ -974,6 +979,33 @@ size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field);
 esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *val, size_t val_size);
 
 /**
+ * @brief   Similar to httpd_req_get_hdr_value_str() but avoids the string copy
+ *
+ * @note
+ *  - This API is meant to be used with std::string_view or similar
+ *  - The returned pointer references the header value kept in the request's
+ *    internal scratch buffer. It is NULL-terminated; val_len is provided for
+ *    convenience (e.g. constructing a std::string_view without a strlen()).
+ *  - This API is supposed to be called only from the context of
+ *    a URI handler where httpd_req_t* request pointer is valid.
+ *  - The returned pointer must only be used within the URI handler and not
+ *    after, since it will lead to use after free errors. In particular, once
+ *    httpd_resp_send() is called all request headers are purged.
+ *
+ * @param[in]  r        The request being responded to
+ * @param[in]  field    The field to be searched in the header
+ * @param[out] val      Pointer to a pointer that will be updated to the value string
+ * @param[out] val_len  Pointer to a length that will be updated with the value length
+ *
+ * @return
+ *  - ESP_OK : Field found; *val points to the value string and *val_len holds its length
+ *  - ESP_ERR_NOT_FOUND          : Key not found
+ *  - ESP_ERR_INVALID_ARG        : Null arguments
+ *  - ESP_ERR_HTTPD_INVALID_REQ  : Invalid HTTP request pointer
+ */
+esp_err_t httpd_req_get_hdr_value_str_ptr(httpd_req_t *r, const char *field, const char **val, size_t *val_len);
+
+/**
  * @brief   Get Query string length from the request URL
  *
  * @note    This API is supposed to be called only from the context of
@@ -1018,6 +1050,36 @@ size_t httpd_req_get_url_query_len(httpd_req_t *r);
  *  - ESP_ERR_HTTPD_RESULT_TRUNC : Query string truncated
  */
 esp_err_t httpd_req_get_url_query_str(httpd_req_t *r, char *buf, size_t buf_len);
+
+/**
+ * @brief   Similar to httpd_req_get_url_query_str() but avoids the string copy
+ *
+ * @note
+ *  - This API is meant to be used with std::string_view or similar
+ *  - Presently, the user can fetch the full URL query string, but decoding
+ *    will have to be performed by the user. Request headers can be read using
+ *    httpd_req_get_hdr_value_str() to know the 'Content-Type' (eg. Content-Type:
+ *    application/x-www-form-urlencoded) and then the appropriate decoding
+ *    algorithm needs to be applied.
+ *  - This API is supposed to be called only from the context of
+ *    a URI handler where httpd_req_t* request pointer is valid
+ *  - The byte range between buf and buf_len should only be used within
+ *    the URI handler and not after since it will lead to use after free
+ *    errors
+ *
+ * @param[in]  r         The request being responded to
+ * @param[out] buf       Pointer to a pointer that should be updated to the beginning of
+ *                       the query string within the request URL
+ * @param[out] buf_len   Pointer to a length that will be updated with the query length
+ *
+ * @return
+ *  - ESP_OK : Query found; *buf points to the query string and *buf_len holds its length
+ *  - ESP_FAIL                   : uri is empty
+ *  - ESP_ERR_NOT_FOUND          : Query not found
+ *  - ESP_ERR_INVALID_ARG        : Null arguments
+ *  - ESP_ERR_HTTPD_INVALID_REQ  : Invalid HTTP request pointer
+ */
+esp_err_t httpd_req_get_url_query_str_ptr(httpd_req_t *r, const char **buf, size_t *buf_len);
 
 /**
  * @brief   Helper function to get a URL query tag from a query
@@ -1695,12 +1757,12 @@ esp_err_t httpd_queue_work(httpd_handle_t handle, httpd_work_fn_t work, void *ar
  * @note Please refer to RFC6455 Section 5.4 for more details
  */
 typedef enum {
-    HTTPD_WS_TYPE_CONTINUE   = 0x0,
-    HTTPD_WS_TYPE_TEXT       = 0x1,
-    HTTPD_WS_TYPE_BINARY     = 0x2,
-    HTTPD_WS_TYPE_CLOSE      = 0x8,
-    HTTPD_WS_TYPE_PING       = 0x9,
-    HTTPD_WS_TYPE_PONG       = 0xA
+    HTTPD_WS_TYPE_CONTINUE        = 0x0,
+    HTTPD_WS_TYPE_TEXT            = 0x1,
+    HTTPD_WS_TYPE_BINARY          = 0x2,
+    HTTPD_WS_TYPE_CLOSE           = 0x8,
+    HTTPD_WS_TYPE_PING            = 0x9,
+    HTTPD_WS_TYPE_PONG            = 0xA,
 } httpd_ws_type_t;
 
 /**

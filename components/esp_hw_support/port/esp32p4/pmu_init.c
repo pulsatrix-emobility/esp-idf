@@ -18,6 +18,9 @@
 #include "pmu_param.h"
 #include "esp_private/esp_pmu.h"
 #include "soc/regi2c_dig_reg.h"
+#include "soc/regi2c_mpll.h"
+#include "soc/regi2c_bias.h"
+#include "hal/regi2c_ctrl_ll.h"
 #include "soc/lp_system_reg.h"
 #include "regi2c_ctrl.h"
 #include "esp_rom_sys.h"
@@ -87,8 +90,7 @@ void pmu_hp_system_init(pmu_context_t *ctx, pmu_hp_mode_t mode, pmu_hp_system_pa
     pmu_ll_hp_set_dcm_mode                    (ctx->hal->dev, mode, anlg->bias.dcm_mode);
     pmu_ll_hp_set_dcm_vset                    (ctx->hal->dev, mode, anlg->bias.dcm_vset);
     pmu_ll_hp_set_dbg_atten                   (ctx->hal->dev, mode, anlg->bias.dbg_atten);
-    pmu_ll_hp_set_current_power_off           (ctx->hal->dev, mode, anlg->bias.pd_cur);
-    pmu_ll_hp_set_bias_sleep_enable           (ctx->hal->dev, mode, anlg->bias.bias_sleep);
+    pmu_ll_hp_set_pd_cur_bias_sleep(ctx->hal->dev, mode, anlg->bias.pd_cur, anlg->bias.bias_sleep);
     pmu_ll_hp_set_regulator_sleep_memory_xpd  (ctx->hal->dev, mode, anlg->regulator0.slp_mem_xpd);
     pmu_ll_hp_set_regulator_sleep_logic_xpd   (ctx->hal->dev, mode, anlg->regulator0.slp_logic_xpd);
     if (ESP_CHIP_REV_ABOVE(efuse_hal_chip_revision(), 100) && (mode == PMU_MODE_HP_SLEEP)) {
@@ -116,12 +118,13 @@ void pmu_lp_system_init(pmu_context_t *ctx, pmu_lp_mode_t mode, pmu_lp_system_pa
     pmu_ll_lp_set_clk_power(ctx->hal->dev, mode, power->clk_power.val);
     pmu_ll_lp_set_xtal_xpd (ctx->hal->dev, PMU_MODE_LP_SLEEP, power->xtal.xpd_xtal);
 
-    /* Default configuration of lp-system analog sub-system in active and
-     * sleep modes */
-    pmu_ll_lp_set_bias_xpd             (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.xpd_bias);
-    pmu_ll_lp_set_dbg_atten            (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.dbg_atten);
-    pmu_ll_lp_set_current_power_off    (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.pd_cur);
-    pmu_ll_lp_set_bias_sleep_enable    (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.bias_sleep);
+    /* LP bias registers exist only for LP_SLEEP; do not clobber them while
+     * programming LP_ACTIVE (ACTIVE analog defaults leave .bias zeroed). */
+    if (mode == PMU_MODE_LP_SLEEP) {
+        pmu_ll_lp_set_bias_xpd             (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.xpd_bias);
+        pmu_ll_lp_set_dbg_atten            (ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.dbg_atten);
+        pmu_ll_lp_set_pd_cur_bias_sleep(ctx->hal->dev, PMU_MODE_LP_SLEEP, anlg->bias.pd_cur, anlg->bias.bias_sleep);
+    }
     pmu_ll_lp_set_regulator_slp_xpd    (ctx->hal->dev, mode, anlg->regulator0.slp_xpd);
     pmu_ll_lp_set_regulator_sleep_dbias(ctx->hal->dev, mode, anlg->regulator0.slp_dbias);
     pmu_ll_lp_set_regulator_driver_bar (ctx->hal->dev, mode, anlg->regulator1.drv_b);
@@ -211,5 +214,11 @@ void pmu_init(void)
     pvt_func_enable(true);
     // For PVT func taking effect, need delay.
     esp_rom_delay_us(1000);
+#endif
+#if !CONFIG_ESP32P4_SELECTS_REV_LESS_V3
+    REG_SET_BIT(PMU_RF_PWC_REG, PMU_MSPI_PHY_XPD);
+    REGI2C_WRITE_MASK(I2C_BIAS, I2C_BIAS_DREG_1P1, 12);
+    REGI2C_WRITE_MASK(I2C_BIAS, I2C_BIAS_DREG_1P1_PVT, 12);
+    REGI2C_WRITE_MASK(I2C_MPLL, I2C_MPLL_IR_CAL_EXT_CAP, 3);
 #endif
 }

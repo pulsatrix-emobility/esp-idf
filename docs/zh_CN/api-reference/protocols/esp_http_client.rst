@@ -35,13 +35,18 @@ HTTP 基本请求
 为 TLS 使用安全元件 (ATECC608)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-安全元件 (ATECC608) 也可用于 HTTP 客户端连接中的底层 TLS 连接。详细内容请参考 :doc:`ESP-TLS 文档 </api-reference/protocols/esp_tls>` 中的 **ESP-TLS 中的 ATECC608A（安全元件）支持** 小节。如需支持安全元素，必须首先在 menuconfig 中通过 :ref:`CONFIG_ESP_TLS_USE_SECURE_ELEMENT` 对其进行启用，此后，可配置 HTTP 客户端使用安全元素，如下所示：
+安全元件 (ATECC608) 可通过 PSA Crypto 不透明驱动接口用于 HTTP 客户端连接中的底层 TLS 连接。有关设置 PSA 密钥的详细内容，请参考 :doc:`ESP-TLS 文档 </api-reference/protocols/esp_tls>` 中的 **ESP-TLS 中的 ATECC608A（安全元件）** 小节。然后通过 :cpp:type:`esp_http_client_config_t` 中的 ``client_key`` 字段配置 HTTP 客户端使用安全元件：
 
 .. code-block:: c
 
+    esp_key_config_t key_config = {
+        .source = ESP_KEY_SOURCE_PSA,
+        .psa.key_id = psa_key_id,  /* 通过 psa_import_key() 获取 */
+    };
+
     esp_http_client_config_t cfg = {
-        /* other configurations options */
-        .use_secure_element = true,
+        /* 其他配置选项 */
+        .client_key = &key_config,
     };
 
 .. only:: SOC_ECDSA_SUPPORTED
@@ -198,6 +203,8 @@ ESP HTTP 客户端支持事件处理，发生相关事件时会触发相应的�
 
 通过 :cpp:member:`esp_http_client_config_t::event_handler` 设置回调函数即可启用事件处理功能。
 
+也可以在客户端初始化后使用 :cpp:func:`esp_http_client_set_event_handler` 函数设置回调函数。
+
 ESP HTTP 客户端诊断信息
 --------------------------
 
@@ -217,6 +224,8 @@ ESP HTTP 客户端诊断信息
     - HTTP_EVENT_REDIRECT           :   ``esp_http_client_redirect_event_data_t``
 
 在无法接收到 :cpp:enumerator:`HTTP_EVENT_DISCONNECTED <esp_http_client_event_id_t::HTTP_EVENT_DISCONNECTED>` 之前，与事件数据一起接收到的 :cpp:type:`esp_http_client_handle_t` 将始终有效。这个句柄主要是为了区分不同的客户端连接，无法用于其他目的，因为它可能会随着客户端连接状态的变化而改变。
+
+对于 :cpp:enumerator:`HTTP_EVENT_ERROR <esp_http_client_event_id_t::HTTP_EVENT_ERROR>`，回调处理程序可以从 :cpp:member:`esp_http_client_event_t::error` 中获取失败原因，即失败调用返回的 ``esp_err_t``；该值始终属于处理程序当前接收的事件。事件循环的事件数据仍然是客户端句柄。传输层自身记录的失败信息（包含 TLS 详细信息）仍然可以通过 :cpp:func:`esp_http_client_get_and_clear_last_tls_error` 获取。
 
 TLS 协议版本
 --------------------

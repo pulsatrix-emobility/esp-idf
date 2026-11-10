@@ -63,7 +63,7 @@ ESP x509 证书包 API 提供了一种简便的方法，帮助你安装自定义
 
 常用证书包是通过筛选出市场份额超过 1% 的授权机构来决定的，筛选数据来自 w3tech 的 `SSL Survey <https://w3techs.com/technologies/overview/ssl_certificate>`_。
 
-根据这些授权机构，从 Mozilla 提供的 `列表 <https://ccadb-public.secure.force.com/mozilla/IncludedCACertificateReportPEMCSV>`_ 的 ``cmn_crt_authorities.csv`` 中筛选证书名称。
+根据这些授权机构，从 Mozilla 提供的 `Included CA Certificate List <https://ccadb.my.salesforce-sites.com/mozilla/IncludedRootCertificateReportCSVFormat>`_ 中筛选 ``cmn_crt_authorities.csv`` 所需的证书名称。
 
 
 更新证书包
@@ -91,7 +91,7 @@ ESP x509 证书包 API 提供了一种简便的方法，帮助你安装自定义
 
 .. note::
 
-    启用交叉签名证书支持功能后，运行时的堆内存使用量将增加约 700 字节，但由于证书包体积减小，flash 占用会降低。
+    启用交叉签名证书支持功能后，TLS 握手期间的运行时堆内存峰值将增加约 1 KB。该内存为临时分配（证书验证期间构建的候选 CA 证书），握手完成后即被释放，其具体大小与支持的最大 RSA 密钥长度相关。此外，由于证书包体积减小，flash 占用也会降低。
 
 关键点：
 

@@ -158,12 +158,10 @@ UINT8           conn_addr_type;         /* local device address type for this co
 BD_ADDR         active_remote_addr;     /* remote address used on this connection */
 UINT8           active_remote_addr_type;         /* local device address type for this connection */
 BD_FEATURES     peer_le_features;       /* Peer LE Used features mask for the device */
-tBTM_SET_PKT_DATA_LENGTH_CBACK *p_set_pkt_data_cback;
 tBTM_LE_SET_PKT_DATA_LENGTH_PARAMS data_length_params;
 BOOLEAN   data_len_updating;
 // data len update cmd cache
 BOOLEAN   data_len_waiting;
-tBTM_SET_PKT_DATA_LENGTH_CBACK *p_set_data_len_cback_waiting;
 UINT16 tx_len_waiting;
 #endif
 tBTM_PM_MCB     *p_pm_mode_db;          /* Pointer to PM mode control block per ACL link */
@@ -241,7 +239,7 @@ tBTM_CMPL_CB        *p_write_iscan_tx_pwr_lvl_cmpl_cb;    /* Callback function t
 #endif // (CLASSIC_BT_INCLUDED == TRUE)
 
 #if BLE_INCLUDED == TRUE
-tBTM_CMPL_CB        *p_ble_ch_map_cmpl_cb; /* Callback function to be called when */
+BOOLEAN        is_ch_map_cb;
 #endif // #if BLE_INCLUDED == TRUE
 /* read channel map function completes */
 #if (CLASSIC_BT_INCLUDED == TRUE)
@@ -292,18 +290,9 @@ DEV_CLASS            dev_class;         /* Local device class                   
 #if BLE_INCLUDED == TRUE
 
 TIMER_LIST_ENT       ble_channels_timer;
-tBTM_CMPL_CB        *p_ble_channels_cmpl_cb; /* Callback function to be called  When
-                                                ble set host channels is completed   */
 
-tBTM_SET_RPA_TIMEOUT_CMPL_CBACK  *p_ble_set_rpa_timeout_cmpl_cb; /* Callback function to be called  When
-                                                ble set rpa timeout is completed   */
-
-tBTM_ADD_DEV_TO_RESOLVING_LIST_CMPL_CBACK *p_add_dev_to_resolving_list_cmpl_cb;
-
-tBTM_SET_PRIVACY_MODE_CMPL_CBACK *p_set_privacy_mode_cmpl_cb;
-
-tBTM_CMPL_CB        *p_le_test_cmd_cmpl_cb;   /* Callback function to be called when
-                                                  LE test mode command has been sent successfully */
+tBTM_DTM_CMD_CMPL_CBACK *p_le_test_cmd_cmpl_cb; /* Callback function to be called when
+                                                   LE test mode command has been sent successfully */
 
 BD_ADDR                 read_tx_pwr_addr;   /* read TX power target address     */
 
@@ -634,6 +623,12 @@ typedef struct {
     tBLE_ADDR_TYPE      current_addr_type; /* current adv addr type*/
     BD_ADDR             current_addr;      /* current adv addr*/
     bool                current_addr_valid; /* current addr info is valid or not*/
+#endif
+#if (BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE && BLE_PERIPH_PSEUDO_ADDR_BOND == TRUE)
+    BOOLEAN             is_pseudo_bond;     /* record is keyed by a Host pseudo
+                                             * (dual local-identity bond); never
+                                             * consolidate it onto the peer
+                                             * Identity or its LTK is lost */
 #endif
 } tBTM_SEC_BLE;
 
@@ -1053,14 +1048,6 @@ typedef struct {
 #endif
 } tBTM_CB;
 
-typedef struct{
-  //connection parameters update callback
-  tBTM_UPDATE_CONN_PARAM_CBACK *update_conn_param_cb;
-  // setting packet data length callback
-  tBTM_SET_PKT_DATA_LENGTH_CBACK *set_pkt_data_length_cb;
-}tBTM_CallbackFunc;
-
-extern tBTM_CallbackFunc conn_callback_func;
 /* security action for L2CAP COC channels */
 #define BTM_SEC_OK                1
 #define BTM_SEC_ENCRYPT           2    /* encrypt the link with current key */
@@ -1116,7 +1103,7 @@ void         btm_inq_rmt_name_failed(void);
 /* Inquiry related functions */
 void         btm_clr_inq_db (BD_ADDR p_bda);
 void         btm_inq_db_init (void);
-void         btm_process_inq_results (UINT8 *p, UINT8 inq_res_mode);
+void         btm_process_inq_results (UINT8 *p, UINT16 evt_len, UINT8 inq_res_mode);
 void         btm_process_inq_complete (UINT8 status, UINT8 mode);
 void         btm_process_cancel_complete(UINT8 status, UINT8 mode);
 void         btm_event_filter_complete (UINT8 *p);
@@ -1128,8 +1115,8 @@ BOOLEAN      btm_inq_find_bdaddr (BD_ADDR p_bda);
 BOOLEAN btm_lookup_eir(BD_ADDR_PTR p_rem_addr);
 
 #if (CLASSIC_BT_INCLUDED == TRUE)
-void btm_read_iscan_tx_power_complete (UINT8 *p);
-void btm_write_inq_tx_power_complete (UINT8 *p);
+void btm_read_iscan_tx_power_complete (UINT8 *p, UINT16 evt_len);
+void btm_write_inq_tx_power_complete (UINT8 *p, UINT16 evt_len);
 #endif // #if (CLASSIC_BT_INCLUDED == TRUE)
 
 /* Internal functions provided by btm_bredr_pwr_ctrl.c
@@ -1166,12 +1153,12 @@ tBTM_STATUS  btm_set_packet_types (tACL_CONN *p, UINT16 pkt_types);
 void         btm_process_clk_off_comp_evt (UINT16 hci_handle, UINT16 clock_offset);
 void         btm_acl_role_changed (UINT8 hci_status, BD_ADDR bd_addr, UINT8 new_role);
 void         btm_acl_encrypt_change (UINT16 handle, UINT8 status, UINT8 encr_enable);
-UINT16       btm_get_acl_disc_reason_code (void);
+UINT8        btm_get_acl_disc_reason_code (void);
 tBTM_STATUS  btm_remove_acl (BD_ADDR bd_addr, tBT_TRANSPORT transport);
 void         btm_read_remote_features_complete (UINT8 *p);
 void         btm_read_remote_ext_features_complete (UINT8 *p);
 void         btm_read_remote_ext_features_failed (UINT8 status, UINT16 handle);
-void         btm_read_remote_version_complete (UINT8 *p);
+void         btm_read_remote_version_complete (UINT8 *p, UINT16 evt_len);
 void         btm_establish_continue (tACL_CONN *p_acl_cb);
 
 // btla-specific ++
@@ -1192,7 +1179,7 @@ void btm_pm_proc_ssr_evt (UINT8 *p, UINT16 evt_len);
 void btm_sco_chk_pend_unpark (UINT8 hci_status, UINT16 hci_handle);
 #if (BTM_SCO_HCI_INCLUDED == TRUE )
 void btm_sco_process_num_bufs (UINT16 num_lm_sco_bufs);
-void btm_sco_process_num_completed_pkts (UINT8 *p);
+void btm_sco_process_num_completed_pkts (UINT8 *p, UINT8 evt_len);
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 #else
 #define btm_sco_chk_pend_unpark(hci_status, hci_handle)
@@ -1219,6 +1206,19 @@ void btm_read_remote_trans_pwr_level_cmpl(UINT8 status);
 #if (BLE_FEAT_CONN_SUBRATING == TRUE)
 void btm_subrate_req_cmd_status(UINT8 status);
 #endif // #if (BLE_FEAT_CONN_SUBRATING == TRUE)
+
+#if (BLE_FEAT_FRAME_SPACE_UPDATE == TRUE)
+void btm_frame_space_update_cmd_status(UINT8 status, UINT16 conn_handle);
+#endif // #if (BLE_FEAT_FRAME_SPACE_UPDATE == TRUE)
+
+#if (BLE_FEAT_LL_EXT_FEAT == TRUE)
+void btm_read_all_remote_feat_cmd_status(UINT8 status);
+#endif // #if (BLE_FEAT_LL_EXT_FEAT == TRUE)
+
+#if (BLE_FEAT_SHORTER_CONN_INTERVALS == TRUE)
+void btm_conn_rate_req_cmd_status(UINT8 status, UINT16 conn_handle);
+void btm_ble_read_min_supp_conn_interval_cmd_status(UINT8 status);
+#endif // #if (BLE_FEAT_SHORTER_CONN_INTERVALS == TRUE)
 
 #if (BT_BLE_FEAT_CHANNEL_SOUNDING == TRUE)
 void btm_ble_cs_read_local_supp_caps_cmpl_evt(UINT8 *p);
@@ -1288,6 +1288,7 @@ void btm_page_to_setup_timeout (void *p_tle);
 BOOLEAN btm_dev_support_switch (BD_ADDR bd_addr);
 
 tBTM_SEC_DEV_REC  *btm_sec_alloc_dev (BD_ADDR bd_addr);
+tBTM_SEC_DEV_REC  *btm_sec_alloc_dev_ex (BD_ADDR bd_addr, tBTM_SEC_DEV_REC *exclude_rec);
 void              btm_sec_free_dev (tBTM_SEC_DEV_REC *p_dev_rec, tBT_TRANSPORT transport);
 tBTM_SEC_DEV_REC  *btm_find_dev (BD_ADDR bd_addr);
 tBTM_SEC_DEV_REC  *btm_find_or_alloc_dev (BD_ADDR bd_addr);
@@ -1325,8 +1326,8 @@ void  btm_io_capabilities_req (UINT8 *p);
 void  btm_io_capabilities_rsp (UINT8 *p);
 #if (CLASSIC_BT_INCLUDED == TRUE)
 void  btm_proc_sp_req_evt (tBTM_SP_EVT event, UINT8 *p);
-void  btm_keypress_notif_evt (UINT8 *p);
-void  btm_simple_pair_complete (UINT8 *p);
+void  btm_keypress_notif_evt (UINT8 *p, UINT16 evt_len);
+void  btm_simple_pair_complete (UINT8 *p, UINT16 evt_len);
 #endif /* (CLASSIC_BT_INCLUDED == TRUE) */
 void  btm_sec_link_key_notification (UINT8 *p_bda, UINT8 *p_link_key, UINT8 key_type);
 void  btm_sec_link_key_request (UINT8 *p_bda);
@@ -1337,7 +1338,6 @@ void btm_sec_set_peer_sec_caps (tACL_CONN *p_acl_cb, tBTM_SEC_DEV_REC *p_dev_rec
 
 #if BLE_INCLUDED == TRUE
 void  btm_sec_clear_ble_keys (tBTM_SEC_DEV_REC  *p_dev_rec);
-BOOLEAN btm_sec_find_bonded_dev (UINT8 start_idx, UINT16 *p_found_handle, tBTM_SEC_DEV_REC **p_rec);
 BOOLEAN btm_sec_is_a_bonded_dev (BD_ADDR bda);
 void btm_consolidate_dev(tBTM_SEC_DEV_REC *p_target_rec);
 BOOLEAN btm_sec_is_le_capable_dev (BD_ADDR bda);
@@ -1365,10 +1365,6 @@ UINT8 btm_sec_clr_service_by_psm (UINT16 psm);
 void  btm_sec_clr_temp_auth_service (BD_ADDR bda);
 
 void btm_ble_lock_init(void);
-
-void btm_ble_sem_init(void);
-
-void btm_ble_sem_free(void);
 
 void btm_ble_lock_free(void);
 
